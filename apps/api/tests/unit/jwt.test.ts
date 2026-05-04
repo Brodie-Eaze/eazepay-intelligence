@@ -4,7 +4,7 @@ import { __resetEnvForTests } from '../../src/config/env.js';
 
 beforeAll(() => {
   process.env.PII_ENCRYPTION_KEY = Buffer.alloc(32, 1).toString('base64');
-  process.env.PII_HASH_SECRET = 'pepper';
+  process.env.PII_HASH_SECRET = 'unit-test-pepper-min-16-chars';
   process.env.JWT_ACCESS_SECRET = 'a'.repeat(32);
   process.env.JWT_REFRESH_SECRET = 'b'.repeat(32);
   process.env.BUZZPAY_WEBHOOK_SECRET = 'c'.repeat(32);
