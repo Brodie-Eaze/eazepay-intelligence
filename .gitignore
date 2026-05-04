@@ -1,0 +1,48 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+build/
+.next/
+.turbo/
+*.tsbuildinfo
+
+# Test artefacts
+coverage/
+playwright-report/
+test-results/
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
+
+# Local env (never commit)
+.env
+.env.local
+.env.*.local
+.env.production
+.env.staging
+
+# Local data
+prisma/*.db
+prisma/*.db-journal
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Background task logs (Claude/dev environment)
+/tmp/claude-*
+
+# Generated artifacts
+apps/api/openapi.json
+packages/shared-types/src/api.ts

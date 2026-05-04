@@ -1,0 +1,37 @@
+services:
+  postgres:
+    image: timescale/timescaledb:2.16.1-pg16
+    container_name: eazepay_intel_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: eazepay
+      POSTGRES_PASSWORD: eazepay
+      POSTGRES_DB: eazepay_intel
+    ports:
+      - "5432:5432"
+    volumes:
+      - eazepay_pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U eazepay -d eazepay_intel"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: eazepay_intel_redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "6379:6379"
+    volumes:
+      - eazepay_redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  eazepay_pg_data:
+  eazepay_redis_data:
