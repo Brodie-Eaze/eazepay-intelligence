@@ -1,0 +1,366 @@
+// EazePay Intelligence — data model
+// PostgreSQL 16 + TimescaleDB. UUID v7 PKs. PII columns are AES-256-GCM ciphertext (Bytes)
+// + deterministic HMAC hash (Bytes) for lookup. See SECURITY.md for the encryption design.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── Enums ──────────────────────────────────────────────────────────────────
+
+enum PartnerStatus {
+  ACTIVE
+  INACTIVE
+  CHURNED
+}
+
+enum PartnerTier {
+  BRONZE
+  SILVER
+  GOLD
+}
+
+enum ApplicationStatus {
+  PENDING
+  SUBMITTED
+  IN_REVIEW
+  APPROVED
+  DECLINED
+  FUNDED
+}
+
+enum LenderTier {
+  PRIME
+  NEAR_PRIME
+  SUBPRIME
+  CARD_LINKED
+}
+
+enum LenderDecisionOutcome {
+  APPROVED
+  DECLINED
+  PENDING
+}
+
+enum FundingStatus {
+  PENDING
+  FUNDED
+  FAILED
+}
+
+enum UserRole {
+  ADMIN
+  OPERATOR
+  INVESTOR
+  VIEWER
+}
+
+enum AggregationPeriod {
+  DAILY
+  MONTHLY
+  YEARLY
+}
+
+enum RevenueStream {
+  BUZZPAY
+  PIXIE
+  MICAMP
+}
+
+enum RevenueEventType {
+  ACCRUAL
+  FUNDING
+  CLAWBACK
+  REVERSAL
+  PIXIE_MARGIN
+  PROCESSING_FEE
+  ADJUSTMENT
+}
+
+enum WebhookSource {
+  BUZZPAY
+  PIXIE
+  MICAMP
+}
+
+enum WebhookProcessingStatus {
+  RECEIVED
+  PROCESSED
+  FAILED
+  REPLAYED
+}
+
+// ─── Partner ────────────────────────────────────────────────────────────────
+
+model Partner {
+  id                  String        @id @db.Uuid
+  externalId          String        @unique @map("external_id")
+  name                String
+  industry            String
+  onboardingDate      DateTime      @map("onboarding_date") @db.Timestamptz(6)
+  status              PartnerStatus @default(ACTIVE)
+  tier                PartnerTier   @default(BRONZE)
+  contractValue       Decimal       @default(0) @map("contract_value") @db.Decimal(14, 2)
+  buzzpayRevSharePct  Decimal       @default(0) @map("buzzpay_rev_share_pct") @db.Decimal(5, 4)
+  pixieDataPullCost   Decimal       @default(1.00) @map("pixie_data_pull_cost") @db.Decimal(8, 4)
+  pixieChargeRate     Decimal       @default(3.00) @map("pixie_charge_rate") @db.Decimal(8, 4)
+  pixieMargin         Decimal       @default(2.00) @map("pixie_margin") @db.Decimal(8, 4)
+  metadata            Json          @default("{}")
+  deletedAt           DateTime?     @map("deleted_at") @db.Timestamptz(6)
+  createdAt           DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt           DateTime      @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  applications        Application[]
+  pixieMetrics        PixieMetric[]
+  lenderDecisions     LenderDecision[]
+  revenueEvents       RevenueEvent[]
+
+  @@index([status, createdAt(sort: Desc)])
+  @@index([tier])
+  @@index([onboardingDate])
+  @@map("partners")
+}
+
+// ─── Application ────────────────────────────────────────────────────────────
+
+model Application {
+  id                          String              @id @db.Uuid
+  partnerId                   String              @map("partner_id") @db.Uuid
+  externalApplicationId       String              @unique @map("external_application_id")
+
+  // PII — ciphertext (Bytes, AES-256-GCM) + deterministic HMAC hash for lookup.
+  consumerNameCiphertext      Bytes               @map("consumer_name_ciphertext")
+  consumerEmailCiphertext     Bytes               @map("consumer_email_ciphertext")
+  consumerEmailHash           Bytes               @map("consumer_email_hash")
+  consumerPhoneCiphertext     Bytes               @map("consumer_phone_ciphertext")
+  consumerPhoneHash           Bytes               @map("consumer_phone_hash")
+
+  // Financial enrichment from Pixie pre-qual.
+  creditScore                 Int?                @map("credit_score")
+  availableCredit             Decimal?            @map("available_credit") @db.Decimal(14, 2)
+  notedAnnualIncome           Decimal?            @map("noted_annual_income") @db.Decimal(14, 2)
+  bankStatementsProvided      Boolean             @default(false) @map("bank_statements_provided")
+
+  merchantPreapproval         Boolean             @default(false) @map("merchant_preapproval")
+  merchantPreapprovalAmount   Decimal?            @map("merchant_preapproval_amount") @db.Decimal(14, 2)
+  consumerPreapproval         Boolean             @default(false) @map("consumer_preapproval")
+  consumerPreapprovalAmount   Decimal?            @map("consumer_preapproval_amount") @db.Decimal(14, 2)
+
+  fundingEstimate             Decimal?            @map("funding_estimate") @db.Decimal(14, 2)
+  propensityScore             Decimal?            @map("propensity_score") @db.Decimal(5, 4)
+  openLinesOfCredit           Int?                @map("open_lines_of_credit")
+
+  status                      ApplicationStatus   @default(PENDING)
+  submittedAt                 DateTime?           @map("submitted_at") @db.Timestamptz(6)
+  createdAt                   DateTime            @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt                   DateTime            @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  partner                     Partner             @relation(fields: [partnerId], references: [id])
+  lenderDecisions             LenderDecision[]
+
+  @@index([partnerId, createdAt(sort: Desc)])
+  @@index([status, createdAt(sort: Desc)])
+  @@index([consumerEmailHash])
+  @@index([consumerPhoneHash])
+  @@map("applications")
+}
+
+// ─── LenderDecision ─────────────────────────────────────────────────────────
+
+model LenderDecision {
+  id                   String                 @id @db.Uuid
+  applicationId        String                 @map("application_id") @db.Uuid
+  partnerId            String                 @map("partner_id") @db.Uuid
+  lenderName           String                 @map("lender_name")
+  lenderTier           LenderTier             @map("lender_tier")
+  decision             LenderDecisionOutcome
+  decisionTimestamp    DateTime               @map("decision_timestamp") @db.Timestamptz(6)
+  approvalAmount       Decimal?               @map("approval_amount") @db.Decimal(14, 2)
+  apr                  Decimal?               @db.Decimal(7, 4)
+  term                 Int?
+  monthlyPayment       Decimal?               @map("monthly_payment") @db.Decimal(14, 2)
+  originationFee       Decimal?               @map("origination_fee") @db.Decimal(14, 2)
+  fundingStatus        FundingStatus          @default(PENDING) @map("funding_status")
+  fundingTimestamp     DateTime?              @map("funding_timestamp") @db.Timestamptz(6)
+  fundingAmount        Decimal?               @map("funding_amount") @db.Decimal(14, 2)
+  createdAt            DateTime               @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt            DateTime               @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  application          Application            @relation(fields: [applicationId], references: [id])
+  partner              Partner                @relation(fields: [partnerId], references: [id])
+  revenueEvents        RevenueEvent[]
+
+  @@index([partnerId, createdAt(sort: Desc)])
+  @@index([applicationId])
+  @@index([lenderName, decision])
+  @@index([fundingStatus, fundingTimestamp])
+  @@map("lender_decisions")
+}
+
+// ─── RevenueEvent (append-only ledger, Timescale hypertable) ────────────────
+// Every dollar shown on a dashboard projects from this ledger. Inserted by
+// webhook workers; never updated, never deleted (REVOKE enforced at role level).
+// Clawbacks/reversals arrive as new negative-amount rows.
+
+model RevenueEvent {
+  id                 String              @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  partnerId          String              @map("partner_id") @db.Uuid
+  lenderDecisionId   String?             @map("lender_decision_id") @db.Uuid
+  pixieMetricPeriod  DateTime?           @map("pixie_metric_period") @db.Timestamptz(6)
+  source             WebhookSource
+  stream             RevenueStream
+  eventType          RevenueEventType    @map("event_type")
+  amount             Decimal             @db.Decimal(14, 2)
+  currency           String              @default("AUD") @db.Char(3)
+  effectiveAt        DateTime            @map("effective_at") @db.Timestamptz(6)
+  recordedAt         DateTime            @default(now()) @map("recorded_at") @db.Timestamptz(6)
+  idempotencyKey     String              @unique @map("idempotency_key")
+  metadata           Json                @default("{}")
+  createdAt          DateTime            @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  partner            Partner             @relation(fields: [partnerId], references: [id])
+  lenderDecision     LenderDecision?     @relation(fields: [lenderDecisionId], references: [id])
+
+  @@id([effectiveAt, partnerId, idempotencyKey])
+  @@index([partnerId, effectiveAt(sort: Desc)])
+  @@index([stream, effectiveAt(sort: Desc)])
+  @@index([eventType, effectiveAt(sort: Desc)])
+  @@index([lenderDecisionId])
+  @@map("revenue_events")
+}
+
+// ─── WebhookEvent (audit + replay protection) ───────────────────────────────
+// Every inbound webhook lands here first — durable record before queueing.
+// `idempotencyKey` is unique; replays return the original processing result.
+
+model WebhookEvent {
+  id              String                  @id @db.Uuid
+  source          WebhookSource
+  eventType       String                  @map("event_type")
+  idempotencyKey  String                  @map("idempotency_key")
+  signatureValid  Boolean                 @map("signature_valid")
+  status          WebhookProcessingStatus @default(RECEIVED)
+  payload         Json
+  processingError String?                 @map("processing_error")
+  receivedAt      DateTime                @default(now()) @map("received_at") @db.Timestamptz(6)
+  processedAt     DateTime?               @map("processed_at") @db.Timestamptz(6)
+
+  @@unique([source, idempotencyKey])
+  @@index([source, status, receivedAt(sort: Desc)])
+  @@index([receivedAt(sort: Desc)])
+  @@map("webhook_events")
+}
+
+// ─── PixieMetric (Timescale hypertable) ─────────────────────────────────────
+
+model PixieMetric {
+  id                    String             @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  partnerId             String             @map("partner_id") @db.Uuid
+  period                AggregationPeriod
+  periodStart           DateTime           @map("period_start") @db.Timestamptz(6)
+  periodEnd             DateTime           @map("period_end") @db.Timestamptz(6)
+  dataPullsThisPeriod   Int                @map("data_pulls_this_period")
+  dataPullsCumulative   Int                @map("data_pulls_cumulative")
+  costPerPull           Decimal            @map("cost_per_pull") @db.Decimal(8, 4)
+  chargePerPull         Decimal            @map("charge_per_pull") @db.Decimal(8, 4)
+  profitPerPull         Decimal            @map("profit_per_pull") @db.Decimal(8, 4)
+  totalRevenue          Decimal            @map("total_revenue") @db.Decimal(14, 2)
+  volumeThreshold       Int                @map("volume_threshold")
+  volumeAchieved        Int                @map("volume_achieved")
+  discountApplied       Decimal            @default(0) @map("discount_applied") @db.Decimal(14, 2)
+  createdAt             DateTime           @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  partner               Partner            @relation(fields: [partnerId], references: [id])
+
+  @@id([periodStart, partnerId, period])
+  @@index([partnerId, periodStart(sort: Desc)])
+  @@map("pixie_metrics")
+}
+
+// ─── RevenueAggregation (Timescale hypertable) ──────────────────────────────
+
+model RevenueAggregation {
+  id                    String             @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  period                AggregationPeriod
+  periodStart           DateTime           @map("period_start") @db.Timestamptz(6)
+  periodEnd             DateTime           @map("period_end") @db.Timestamptz(6)
+  totalApplications     Int                @map("total_applications")
+  approvedApplications  Int                @map("approved_applications")
+  fundedApplications    Int                @map("funded_applications")
+  buzzpayRevshareTotal  Decimal            @map("buzzpay_revshare_total") @db.Decimal(14, 2)
+  processingFeesTotal   Decimal            @map("processing_fees_total") @db.Decimal(14, 2)
+  pixieMarginTotal      Decimal            @map("pixie_margin_total") @db.Decimal(14, 2)
+  pixieDataPullsTotal   Int                @map("pixie_data_pulls_total")
+  activePartnerCount    Int                @map("active_partner_count")
+  newPartnerCount       Int                @map("new_partner_count")
+  totalRevenue          Decimal            @map("total_revenue") @db.Decimal(14, 2)
+  approvalRate          Decimal            @map("approval_rate") @db.Decimal(5, 4)
+  fundingRate           Decimal            @map("funding_rate") @db.Decimal(5, 4)
+  avgDealSize           Decimal            @map("avg_deal_size") @db.Decimal(14, 2)
+  createdAt             DateTime           @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@id([periodStart, period])
+  @@index([period, periodStart(sort: Desc)])
+  @@map("revenue_aggregations")
+}
+
+// ─── User / Auth ────────────────────────────────────────────────────────────
+
+model User {
+  id            String     @id @db.Uuid
+  email         String     @unique
+  passwordHash  String     @map("password_hash")
+  role          UserRole   @default(VIEWER)
+  mfaEnabled    Boolean    @default(false) @map("mfa_enabled")
+  mfaSecret     String?    @map("mfa_secret")
+  lastLoginAt   DateTime?  @map("last_login_at") @db.Timestamptz(6)
+  deletedAt     DateTime?  @map("deleted_at") @db.Timestamptz(6)
+  createdAt     DateTime   @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt     DateTime   @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  refreshTokens RefreshToken[]
+  auditLogs     AuditLog[]
+
+  @@map("users")
+}
+
+model RefreshToken {
+  id          String    @id @db.Uuid
+  userId      String    @map("user_id") @db.Uuid
+  familyId    String    @map("family_id") @db.Uuid
+  tokenHash   String    @unique @map("token_hash")
+  expiresAt   DateTime  @map("expires_at") @db.Timestamptz(6)
+  revokedAt   DateTime? @map("revoked_at") @db.Timestamptz(6)
+  replacedBy  String?   @map("replaced_by") @db.Uuid
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  user        User      @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+  @@index([familyId])
+  @@map("refresh_tokens")
+}
+
+model AuditLog {
+  id           String   @id @db.Uuid
+  userId       String?  @map("user_id") @db.Uuid
+  action       String
+  resourceType String   @map("resource_type")
+  resourceId   String?  @map("resource_id")
+  metadata     Json     @default("{}")
+  ipAddress    String?  @map("ip_address")
+  userAgent    String?  @map("user_agent")
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  user         User?    @relation(fields: [userId], references: [id])
+
+  @@index([userId, createdAt(sort: Desc)])
+  @@index([resourceType, resourceId])
+  @@index([action, createdAt(sort: Desc)])
+  @@map("audit_logs")
+}
