@@ -1,0 +1,4 @@
+# Pre-commit: format staged files + verify TypeScript across the monorepo.
+# Tests run in CI on every PR (kept out of pre-commit to stay <10s locally).
+pnpm exec lint-staged
+pnpm typecheck

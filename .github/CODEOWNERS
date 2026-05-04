@@ -1,0 +1,20 @@
+# Ownership map. Anything matching a path requires the listed owner's review.
+# Update as the team grows.
+
+# Default — anyone with write access
+*                               @Brodie-Eaze
+
+# Security-critical paths require founder + (eventually) a security reviewer
+apps/api/src/shared/utils/encryption.ts                @Brodie-Eaze
+apps/api/src/shared/middleware/webhook-signature.middleware.ts @Brodie-Eaze
+apps/api/src/shared/middleware/csrf.middleware.ts      @Brodie-Eaze
+apps/api/src/shared/middleware/auth.middleware.ts      @Brodie-Eaze
+apps/api/src/domains/auth/                             @Brodie-Eaze
+apps/api/prisma/schema.prisma                          @Brodie-Eaze
+apps/api/prisma/init-timescale.sql                     @Brodie-Eaze
+
+# Compliance docs require founder review
+SECURITY.md                                            @Brodie-Eaze
+PRIVACY.md                                             @Brodie-Eaze
+DATA_CLASSIFICATION.md                                 @Brodie-Eaze
+SOC2_CONTROLS.md                                       @Brodie-Eaze

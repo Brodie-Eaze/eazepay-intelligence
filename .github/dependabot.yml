@@ -1,0 +1,33 @@
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: '09:00'
+      timezone: Australia/Sydney
+    open-pull-requests-limit: 10
+    commit-message:
+      prefix: chore(deps)
+    groups:
+      type-defs:
+        patterns: ['@types/*']
+      eslint:
+        patterns: ['eslint*', '@typescript-eslint/*']
+      prisma:
+        patterns: ['prisma', '@prisma/*']
+      react:
+        patterns: ['react', 'react-dom', '@types/react', '@types/react-dom', 'next']
+      dev-tooling:
+        patterns: ['vitest', '@vitest/*', 'tsx', 'turbo', 'husky', 'lint-staged', 'prettier']
+    labels: ['deps']
+    reviewers: []
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    commit-message:
+      prefix: chore(ci)
+    labels: ['deps', 'ci']
