@@ -13,16 +13,20 @@ Real-time financial intelligence + observability for the EazePay platform.
 
 Start here in this order:
 
-1. [HANDOVER.md](HANDOVER.md) — the CTO's first read · 30-second pitch + 5-minute tour
-2. [ONBOARDING.md](ONBOARDING.md) — clone-to-running setup
-3. [ARCHITECTURE.md](ARCHITECTURE.md) — system shape + 12 ADRs
-4. [PRD.md](PRD.md) — product context, KPIs, data dictionary
+1. [docs/HANDOVER.md](docs/HANDOVER.md) — the CTO's first read · 30-second pitch + 5-minute tour
+2. [docs/ONBOARDING.md](docs/ONBOARDING.md) — clone-to-running setup
+3. [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — system shape + 12 ADRs
+4. [docs/PRD.md](docs/PRD.md) — product context, KPIs, data dictionary
 5. [SECURITY.md](SECURITY.md) — threat model + auth + PII
-6. [PRIVACY.md](PRIVACY.md) — APP / GDPR alignment
-7. [DATA_CLASSIFICATION.md](DATA_CLASSIFICATION.md) — every field, classification, retention
-8. [SOC2_CONTROLS.md](SOC2_CONTROLS.md) — Trust Services Criteria mapping
-9. [ROADMAP.md](ROADMAP.md) — what's done, what's next, two-week shipping plan
-10. [CONTRIBUTING.md](CONTRIBUTING.md) — branch strategy + PR checklist
+6. [docs/governance/PRIVACY.md](docs/governance/PRIVACY.md) — APP / GDPR alignment
+7. [docs/governance/DATA_CLASSIFICATION.md](docs/governance/DATA_CLASSIFICATION.md) — every field, classification, retention
+8. [docs/governance/SOC2_CONTROLS.md](docs/governance/SOC2_CONTROLS.md) — Trust Services Criteria mapping
+9. [docs/ROADMAP.md](docs/ROADMAP.md) — what's done, what's next, two-week shipping plan
+10. [docs/RUNBOOK.md](docs/RUNBOOK.md) — deploy, rollback, incident response, debugging
+11. [docs/KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md) — where the bodies are buried
+12. [docs/GLOSSARY.md](docs/GLOSSARY.md) — domain terms (lender waterfall, propensity, take rate, …)
+13. [CONTRIBUTING.md](CONTRIBUTING.md) — branch strategy + PR checklist
+14. [CHANGELOG.md](CHANGELOG.md) — release notes
 
 ---
 
@@ -41,12 +45,12 @@ API on `:3010`, web on `:3011`. Login `admin@eazepay.local / Demo!1234`.
 
 Demo accounts (all password `Demo!1234`):
 
-| Email | Role | Sees |
-|---|---|---|
-| admin@eazepay.local | ADMIN | Everything · users · audit · pricing · secrets |
-| operator@eazepay.local | OPERATOR | Everything except user admin · can reveal PII |
-| viewer@eazepay.local | VIEWER | Read-only · masked PII |
-| investor@eazepay.local | INVESTOR | Aggregated views only |
+| Email                  | Role     | Sees                                           |
+| ---------------------- | -------- | ---------------------------------------------- |
+| admin@eazepay.local    | ADMIN    | Everything · users · audit · pricing · secrets |
+| operator@eazepay.local | OPERATOR | Everything except user admin · can reveal PII  |
+| viewer@eazepay.local   | VIEWER   | Read-only · masked PII                         |
+| investor@eazepay.local | INVESTOR | Aggregated views only                          |
 
 ---
 
@@ -78,22 +82,22 @@ Demo accounts (all password `Demo!1234`):
 
 ## Stack
 
-| Layer | Choice |
-|---|---|
-| Runtime | Node 20 LTS |
-| Language | TypeScript strict |
-| HTTP server | Fastify 4 |
-| ORM | Prisma 5 |
-| Database | PostgreSQL 16 + TimescaleDB (hypertables for ledger + metrics) |
-| Cache + queue | Redis 7 + BullMQ |
-| Auth | Cookie session (httpOnly · Secure · SameSite=Strict · CSRF double-submit) · argon2id · JWT HS256 dev / RS256 prod target |
-| PII | AES-256-GCM at rest · HMAC-SHA-256 lookup hash · key versioning byte |
-| Frontend | Next.js 14 App Router · Tailwind · TanStack Query · Recharts · Lucide |
-| Monorepo | pnpm workspaces + Turborepo |
-| Validation | Zod (runtime + types) |
-| Logging | Pino structured JSON · PII redaction list |
-| Tests | Vitest unit · Testcontainers Postgres integration · Playwright e2e |
-| CI | GitHub Actions matrix |
+| Layer         | Choice                                                                                                                   |
+| ------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| Runtime       | Node 20 LTS                                                                                                              |
+| Language      | TypeScript strict                                                                                                        |
+| HTTP server   | Fastify 4                                                                                                                |
+| ORM           | Prisma 5                                                                                                                 |
+| Database      | PostgreSQL 16 + TimescaleDB (hypertables for ledger + metrics)                                                           |
+| Cache + queue | Redis 7 + BullMQ                                                                                                         |
+| Auth          | Cookie session (httpOnly · Secure · SameSite=Strict · CSRF double-submit) · argon2id · JWT HS256 dev / RS256 prod target |
+| PII           | AES-256-GCM at rest · HMAC-SHA-256 lookup hash · key versioning byte                                                     |
+| Frontend      | Next.js 14 App Router · Tailwind · TanStack Query · Recharts · Lucide                                                    |
+| Monorepo      | pnpm workspaces + Turborepo                                                                                              |
+| Validation    | Zod (runtime + types)                                                                                                    |
+| Logging       | Pino structured JSON · PII redaction list                                                                                |
+| Tests         | Vitest unit · Testcontainers Postgres integration · Playwright e2e                                                       |
+| CI            | GitHub Actions matrix                                                                                                    |
 
 ---
 
@@ -133,4 +137,4 @@ pnpm --filter api worker:revenue
 
 ## Status
 
-**v0.1.0** · functional end-to-end on local · pre-production. See [ROADMAP.md](ROADMAP.md) for the path to staging + SOC 2 readiness.
+**v0.1.0** · functional end-to-end on local · pre-production. See [docs/ROADMAP.md](docs/ROADMAP.md) for the path to staging + SOC 2 readiness.

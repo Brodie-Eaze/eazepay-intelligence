@@ -1,17 +1,17 @@
 # Security · EazePay Intelligence
 
-This document is the technical security narrative. For the auditor-facing control mapping see [`SOC2_CONTROLS.md`](SOC2_CONTROLS.md). For data classification and PII handling see [`PRIVACY.md`](PRIVACY.md) + [`DATA_CLASSIFICATION.md`](DATA_CLASSIFICATION.md).
+This document is the technical security narrative. For the auditor-facing control mapping see [`docs/governance/SOC2_CONTROLS.md`](docs/governance/SOC2_CONTROLS.md). For data classification and PII handling see [`docs/governance/PRIVACY.md`](docs/governance/PRIVACY.md) + [`docs/governance/DATA_CLASSIFICATION.md`](docs/governance/DATA_CLASSIFICATION.md).
 
 ## Threat model (STRIDE)
 
-| Threat | Mitigation |
-|---|---|
-| **Spoofing** of webhook senders | HMAC SHA-256 over `${ts}.${rawBody}` with per-source secret; ±5 min timestamp tolerance; `Idempotency-Key` deduplication. Failure → 401 + audit row. |
-| **Tampering** with audit trail | `audit_logs` and `revenue_events` REVOKE UPDATE/DELETE at the runtime role; the migration role and runtime role are separate (`eazepay_owner` vs `eazepay_app`). |
-| **Repudiation** of admin actions | Every mutation writes an `audit_log` row with `userId`, `action`, `ipAddress`, `userAgent`, `metadata` in the same transaction. |
-| **Information disclosure** of PII | AES-256-GCM at rest; key versioning byte enables rotation; PII reveal is admin/operator only and audit-logged via `PII_ACCESSED`; logger redacts known PII paths. |
-| **DoS** at ingest | Per-IP rate limit (Fastify), composite IP+email rate limit on `/auth/login`, webhook bodies capped at 1 MiB, BullMQ + Redis absorbs ingest bursts. |
-| **Elevation of privilege** between scopes | RBAC checked at the route level (`requireRole`, `denyInvestorScope`); investor responses produced by *different* response schemas; cookies are httpOnly + Secure + SameSite=Strict. |
+| Threat                                    | Mitigation                                                                                                                                                                          |
+| ----------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Spoofing** of webhook senders           | HMAC SHA-256 over `${ts}.${rawBody}` with per-source secret; ±5 min timestamp tolerance; `Idempotency-Key` deduplication. Failure → 401 + audit row.                                |
+| **Tampering** with audit trail            | `audit_logs` and `revenue_events` REVOKE UPDATE/DELETE at the runtime role; the migration role and runtime role are separate (`eazepay_owner` vs `eazepay_app`).                    |
+| **Repudiation** of admin actions          | Every mutation writes an `audit_log` row with `userId`, `action`, `ipAddress`, `userAgent`, `metadata` in the same transaction.                                                     |
+| **Information disclosure** of PII         | AES-256-GCM at rest; key versioning byte enables rotation; PII reveal is admin/operator only and audit-logged via `PII_ACCESSED`; logger redacts known PII paths.                   |
+| **DoS** at ingest                         | Per-IP rate limit (Fastify), composite IP+email rate limit on `/auth/login`, webhook bodies capped at 1 MiB, BullMQ + Redis absorbs ingest bursts.                                  |
+| **Elevation of privilege** between scopes | RBAC checked at the route level (`requireRole`, `denyInvestorScope`); investor responses produced by _different_ response schemas; cookies are httpOnly + Secure + SameSite=Strict. |
 
 ## Authentication flow
 
@@ -32,12 +32,14 @@ Browser ──WS /ws/analytics?ticket=…──► API
 ```
 
 ### Refresh token rotation
+
 - Every successful refresh issues a new raw token, marks the old as `revokedAt = now()`, sets `replacedBy` linkage, and persists family id.
 - Reuse of an already-revoked token in the family triggers a **family-wide revoke** (theft detection).
 
 ## PII handling
 
 PII fields (`consumerName`, `consumerEmail`, `consumerPhone`):
+
 - **At rest:** `[version:1][iv:12][authTag:16][ciphertext:N]` — AES-256-GCM. `PII_ENCRYPTION_KEY` is base64 32 bytes.
 - **For lookup:** deterministic HMAC-SHA-256 hash with `PII_HASH_SECRET` pepper, stored as separate `*_hash` column with btree index.
 - **For display:** masked by default in `/applications` responses (`b****@example.com`); raw values returned only by `/applications/:id/pii` (admin/operator only, denied under investor scope).
@@ -45,19 +47,20 @@ PII fields (`consumerName`, `consumerEmail`, `consumerPhone`):
 
 ## Secret strategy
 
-| Secret | Format | Rotation |
-|---|---|---|
-| `JWT_ACCESS_SECRET` | string ≥32 chars (HS256) | RS256+KMS deferred to v1.1 |
-| `JWT_REFRESH_SECRET` | string ≥32 chars (HS256) | same |
-| `PII_ENCRYPTION_KEY` | base64 32 bytes | versioning supported (envelope byte 0); add v2 key, transition writes, decrypt-as-needed |
-| `PII_HASH_SECRET` | string ≥16 chars | rotation requires re-hashing all PII; do not rotate without a backfill plan |
-| `BUZZPAY/PIXIE/MICAMP_WEBHOOK_SECRET` | string ≥16 chars | coordinate with each vendor; supports overlap window via secondary verification (v1.1) |
+| Secret                                | Format                   | Rotation                                                                                 |
+| ------------------------------------- | ------------------------ | ---------------------------------------------------------------------------------------- |
+| `JWT_ACCESS_SECRET`                   | string ≥32 chars (HS256) | RS256+KMS deferred to v1.1                                                               |
+| `JWT_REFRESH_SECRET`                  | string ≥32 chars (HS256) | same                                                                                     |
+| `PII_ENCRYPTION_KEY`                  | base64 32 bytes          | versioning supported (envelope byte 0); add v2 key, transition writes, decrypt-as-needed |
+| `PII_HASH_SECRET`                     | string ≥16 chars         | rotation requires re-hashing all PII; do not rotate without a backfill plan              |
+| `BUZZPAY/PIXIE/MICAMP_WEBHOOK_SECRET` | string ≥16 chars         | coordinate with each vendor; supports overlap window via secondary verification (v1.1)   |
 
 Secrets live in `.env` for v1. Production roadmap: AWS KMS / 1Password Secrets Automation (vendor TBD).
 
 ## Database role hardening
 
 Two roles required in production:
+
 - `eazepay_owner` — owns schema, runs migrations.
 - `eazepay_app` — runtime role, has SELECT/INSERT/UPDATE/DELETE on most tables but UPDATE/DELETE **revoked** on `audit_logs` and `revenue_events`.
 

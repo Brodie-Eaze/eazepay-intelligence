@@ -71,44 +71,56 @@ Each domain follows: `*.routes.ts → *.service.ts → *.repository.ts → *.sch
 ## Architectural Decision Records
 
 ### ADR-001 — Modular monolith
+
 Single Node process serves the API; worker processes peeled off to separate runtime. Domain boundaries enforced at the source-tree level so any domain can be extracted to its own service when scale demands.
 **Trade-off:** zero microservice ceremony today; clean extraction path later.
 
 ### ADR-002 — TimescaleDB hypertables for metric tables
+
 `pixie_metrics`, `revenue_aggregations`, `revenue_events` are hypertables (chunked by 7-30 days). Continuous aggregate `revenue_daily_cagg` powers sub-100ms revenue queries even over multi-year ranges.
 **Trade-off:** small operational burden (Timescale extension required) for >10× analytics performance.
 
 ### ADR-003 — PII encrypted at rest with key versioning
+
 AES-256-GCM envelopes prefixed with a 1-byte key-version tag. Searchable lookup via deterministic HMAC-SHA-256 hash with separate `PII_HASH_SECRET` pepper. Decryption is service-mediated — every call audit-logged.
 **Trade-off:** equality lookup only (no partial / fuzzy match on encrypted columns). Sufficient for our use-case.
 
 ### ADR-004 — BullMQ over native Postgres queues
+
 BullMQ on Redis gives us delayed/retry/exponential-backoff for free, plus excellent observability. Postgres-as-queue (LISTEN/NOTIFY, SKIP LOCKED) was considered but rejected because we already need Redis for caching, pub/sub, rate-limiting, and idempotency.
 
 ### ADR-005 — Fastify over Express
+
 Native TypeScript types, plugin lifecycle, schema-validation hooks, lower per-request overhead. Plugin order locked in `server.ts` — helmet → cors → sensible → rate-limit → websocket → routes.
 
 ### ADR-006 — Inferred webhook payload contracts
-Until partner integration docs land we maintain Zod schemas for what we *expect*: `BuzzpayApplicationWebhookSchema`, `BuzzpayLenderDecisionWebhookSchema`, etc. Versioned in `webhook.schemas.ts`; trigger 422 on contract drift. HMAC + idempotency layer remains correct even if payload shapes shift.
+
+Until partner integration docs land we maintain Zod schemas for what we _expect_: `BuzzpayApplicationWebhookSchema`, `BuzzpayLenderDecisionWebhookSchema`, etc. Versioned in `webhook.schemas.ts`; trigger 422 on contract drift. HMAC + idempotency layer remains correct even if payload shapes shift.
 
 ### ADR-007 — Turborepo
+
 `turbo.json` declares `build / typecheck / lint / test` pipelines with topological deps. Local + CI both run the same graph; remote cache wired but disabled until vendor pick.
 
 ### ADR-008 — OpenAPI as single source of truth (planned)
+
 `@asteasolutions/zod-to-openapi` will emit OpenAPI 3.1 directly from Zod schemas; `openapi-typescript` consumes that into `packages/shared-types/src/api.ts`. CI will fail PRs whose API change doesn't update the generated client. **Not yet implemented** — see ROADMAP.md.
 
 ### ADR-009 — Read-only observability plane (no origination)
+
 Public mutation surface: auth, partner onboarding, user admin. That's it. All financial state changes arrive via webhooks. PII can be viewed by operators with audit logging — never used to drive any action from this system.
 
 ### ADR-010 — Cookie session + WS ticket auth
+
 - Access JWT (15 min) and refresh token (rotated, 7 day) live in `httpOnly; Secure; SameSite=Strict` cookies.
 - CSRF: double-submit token in `epi_csrf` cookie + `X-CSRF-Token` header, signed by the JWT secret.
 - WS: `POST /auth/ws/ticket` (cookie-authed, CSRF-checked) → 30-second single-use ticket → `WS /ws/analytics?ticket=…`. Ticket consumed on connect via Redis `GETDEL`.
 
 ### ADR-011 — Append-only RevenueEvent ledger
-Every dollar shown on a dashboard projects from `revenue_events`. Inserted by the webhook worker, never updated, never deleted (REVOKE at role level). Clawbacks/reversals are *new* negative-amount rows. Investor revenue numbers reconcile to a journal — every line auditable to the originating webhook.
+
+Every dollar shown on a dashboard projects from `revenue_events`. Inserted by the webhook worker, never updated, never deleted (REVOKE at role level). Clawbacks/reversals are _new_ negative-amount rows. Investor revenue numbers reconcile to a journal — every line auditable to the originating webhook.
 
 ### ADR-012 — Single typeface, navy + light-blue palette
+
 Inter throughout, including for numbers (tabular figures via `tnum` font feature). No JetBrains Mono, no monospace anywhere. Palette: navy ink, paper background, accent blue, light blue. Status pills use blue + slate variations — no traffic-light green/amber/red. Decision driven by founder review feedback; reduces visual noise and signals neutral data presentation.
 
 ---
@@ -116,6 +128,7 @@ Inter throughout, including for numbers (tabular figures via `tnum` font feature
 ## Data flow per source
 
 **BuzzPay → us:**
+
 ```
 BuzzPay event → POST /webhooks/buzzpay/* (HMAC + Idempotency-Key)
   → middleware.verifySignature → middleware.idempotencyGuard → repo.WebhookEvent.create(RECEIVED)
@@ -130,6 +143,7 @@ BuzzPay event → POST /webhooks/buzzpay/* (HMAC + Idempotency-Key)
 ```
 
 **Pixie/HighSale → us (daily batch):**
+
 ```
 Pixie nightly job → POST /webhooks/pixie/usage [{partnerId, date, pulls}]
   → same HMAC + idempotency flow
@@ -139,6 +153,7 @@ Pixie nightly job → POST /webhooks/pixie/usage [{partnerId, date, pulls}]
 ```
 
 **MiCamp → us:**
+
 ```
 MiCamp processing reports → POST /webhooks/micamp/processing
   → worker → RevenueEvent (PROCESSING_FEE) at 50% of reported gross fee
@@ -150,13 +165,13 @@ MiCamp reversal → POST /webhooks/micamp/reversal
 
 ## Performance targets
 
-| Endpoint | Target p99 | Strategy |
-|---|---|---|
-| `GET /analytics/overview` | <100 ms | Redis 30s cache + parallel Prisma + Timescale CAGG |
-| `GET /analytics/revenue` (1y) | <150 ms | Continuous aggregate, no row-by-row |
-| `POST /webhooks/*` | <30 ms | verify + persist + enqueue |
-| `GET /partners` (page) | <80 ms | composite index `(deletedAt, createdAt DESC, id DESC)` |
-| WS event fanout | <50 ms | Redis pub/sub, no DB round-trip |
+| Endpoint                      | Target p99 | Strategy                                               |
+| ----------------------------- | ---------- | ------------------------------------------------------ |
+| `GET /analytics/overview`     | <100 ms    | Redis 30s cache + parallel Prisma + Timescale CAGG     |
+| `GET /analytics/revenue` (1y) | <150 ms    | Continuous aggregate, no row-by-row                    |
+| `POST /webhooks/*`            | <30 ms     | verify + persist + enqueue                             |
+| `GET /partners` (page)        | <80 ms     | composite index `(deletedAt, createdAt DESC, id DESC)` |
+| WS event fanout               | <50 ms     | Redis pub/sub, no DB round-trip                        |
 
 ---
 
@@ -178,6 +193,7 @@ Enforced via code review on every PR:
 ## Deployment topology (v1)
 
 Single Linux host, docker-compose:
+
 - `postgres` (TimescaleDB image)
 - `redis`
 - `api` (Node 20, Fastify)

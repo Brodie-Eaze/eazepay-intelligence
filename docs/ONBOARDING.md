@@ -180,15 +180,15 @@ For a new dashboard page:
 
 ## Common gotchas
 
-| Symptom | Likely cause | Fix |
-|---|---|---|
-| `EADDRINUSE :3010` on `pnpm dev` | Another dev server is on 3010 | `lsof -ti:3010 | xargs kill` |
-| `column reference is ambiguous` from raw SQL | Unqualified column in JOIN | Always qualify columns when joining |
-| `PII_ENCRYPTION_KEY must decode to exactly 32 bytes` | Wrong key in env | `node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"` |
-| `Idempotency-Key must be present` on webhook test | Header missing | `curl -H "Idempotency-Key: test-1" ...` |
-| `Token kind mismatch` on JWT verify | Verifying refresh as access | Pass correct `JwtKind` to `verifyJwt` |
-| Customer book empty after seed | Seed didn't include `consumer_email_hash` | Re-run seed; check `encryptPII()` is being invoked |
-| WS doesn't connect | Browser sent the cookie but ticket is single-use | Check `Redis: ws:ticket:*` keys; cookie auth + ticket fetch happen on every reconnect |
+| Symptom                                              | Likely cause                                     | Fix                                                                                   |
+| ---------------------------------------------------- | ------------------------------------------------ | ------------------------------------------------------------------------------------- | ----------- |
+| `EADDRINUSE :3010` on `pnpm dev`                     | Another dev server is on 3010                    | `lsof -ti:3010                                                                        | xargs kill` |
+| `column reference is ambiguous` from raw SQL         | Unqualified column in JOIN                       | Always qualify columns when joining                                                   |
+| `PII_ENCRYPTION_KEY must decode to exactly 32 bytes` | Wrong key in env                                 | `node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"`         |
+| `Idempotency-Key must be present` on webhook test    | Header missing                                   | `curl -H "Idempotency-Key: test-1" ...`                                               |
+| `Token kind mismatch` on JWT verify                  | Verifying refresh as access                      | Pass correct `JwtKind` to `verifyJwt`                                                 |
+| Customer book empty after seed                       | Seed didn't include `consumer_email_hash`        | Re-run seed; check `encryptPII()` is being invoked                                    |
+| WS doesn't connect                                   | Browser sent the cookie but ticket is single-use | Check `Redis: ws:ticket:*` keys; cookie auth + ticket fetch happen on every reconnect |
 
 ---
 

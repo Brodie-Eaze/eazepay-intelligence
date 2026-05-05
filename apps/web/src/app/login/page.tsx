@@ -7,11 +7,23 @@ import { api, ApiError } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import type { SessionResponse } from '@/lib/types';
 
-interface DemoAccount { email: string; role: string; description: string }
+interface DemoAccount {
+  email: string;
+  role: string;
+  description: string;
+}
 const DEMO_ACCOUNTS: DemoAccount[] = [
-  { email: 'admin@eazepay.local',    role: 'Admin',    description: 'Full access · users · audit · pricing' },
-  { email: 'operator@eazepay.local', role: 'Operator', description: 'Read PII · onboard partners · all data' },
-  { email: 'viewer@eazepay.local',   role: 'Viewer',   description: 'Read-only · masked PII' },
+  {
+    email: 'admin@eazepay.local',
+    role: 'Admin',
+    description: 'Full access · users · audit · pricing',
+  },
+  {
+    email: 'operator@eazepay.local',
+    role: 'Operator',
+    description: 'Read PII · onboard partners · all data',
+  },
+  { email: 'viewer@eazepay.local', role: 'Viewer', description: 'Read-only · masked PII' },
   { email: 'investor@eazepay.local', role: 'Investor', description: 'Aggregated views only' },
 ];
 
@@ -67,7 +79,9 @@ export default function LoginPage(): JSX.Element {
         <div className="relative z-10">
           <div className="flex items-baseline gap-2">
             <span className="font-semibold tracking-tight text-2xl">EazePay</span>
-            <span className="text-accent text-[11px] font-semibold tracking-[0.18em]">INTELLIGENCE</span>
+            <span className="text-accent text-[11px] font-semibold tracking-[0.18em]">
+              INTELLIGENCE
+            </span>
           </div>
         </div>
 
@@ -76,8 +90,9 @@ export default function LoginPage(): JSX.Element {
             The financial intelligence layer for the EazePay platform.
           </h1>
           <p className="mt-4 text-surface/55 text-[15px] leading-relaxed">
-            Pixie's pre-qual feeds BuzzPay's decision engine, MiCamp clears the rails. Every credit
-            score, every dollar, every decision — visible in real time, traceable to a webhook.
+            One pane of glass over the customer book and the economics. Credit profile, risk band,
+            propensity vs outcome, every lender decision, every dollar funded and clawed back —
+            searchable, drillable, reconciling to a signed-webhook ledger.
           </p>
         </div>
 
@@ -93,7 +108,9 @@ export default function LoginPage(): JSX.Element {
         <div className="w-full max-w-[400px]">
           <div className="lg:hidden mb-8 text-center">
             <div className="font-semibold tracking-tight text-ink text-2xl">EazePay</div>
-            <div className="text-accent text-[11px] font-semibold tracking-[0.18em] mt-1">INTELLIGENCE</div>
+            <div className="text-accent text-[11px] font-semibold tracking-[0.18em] mt-1">
+              INTELLIGENCE
+            </div>
           </div>
 
           <h2 className="text-ink text-[28px] font-semibold tracking-tight">Welcome back</h2>
@@ -114,7 +131,10 @@ export default function LoginPage(): JSX.Element {
             <Field
               label="Password"
               right={
-                <button type="button" className="text-[11px] text-muted hover:text-accent transition">
+                <button
+                  type="button"
+                  className="text-[11px] text-muted hover:text-accent transition"
+                >
                   Forgot?
                 </button>
               }
@@ -164,7 +184,9 @@ export default function LoginPage(): JSX.Element {
             )}
 
             {error && (
-              <div className="text-[13px] text-danger bg-dangerSoft px-3 py-2 rounded-lg">{error}</div>
+              <div className="text-[13px] text-danger bg-dangerSoft px-3 py-2 rounded-lg">
+                {error}
+              </div>
             )}
 
             <button
@@ -172,7 +194,17 @@ export default function LoginPage(): JSX.Element {
               disabled={busy}
               className="w-full h-11 rounded-lg bg-ink text-surface font-medium tracking-tight text-[15px] hover:bg-ink2 disabled:opacity-50 disabled:cursor-not-allowed transition flex items-center justify-center gap-2 group"
             >
-              {busy ? 'Signing in…' : (<>Sign in <ArrowRight size={16} className="opacity-70 group-hover:translate-x-0.5 transition-transform" /></>)}
+              {busy ? (
+                'Signing in…'
+              ) : (
+                <>
+                  Sign in{' '}
+                  <ArrowRight
+                    size={16}
+                    className="opacity-70 group-hover:translate-x-0.5 transition-transform"
+                  />
+                </>
+              )}
             </button>
           </form>
 
@@ -196,10 +228,14 @@ export default function LoginPage(): JSX.Element {
                         : 'border-line hover:border-ink2 hover:bg-paper text-ink2'
                     }`}
                   >
-                    <div className={`text-[13px] font-medium tracking-tight ${active ? 'text-surface' : 'text-ink'}`}>
+                    <div
+                      className={`text-[13px] font-medium tracking-tight ${active ? 'text-surface' : 'text-ink'}`}
+                    >
                       {acct.role}
                     </div>
-                    <div className={`text-[11px] mt-0.5 truncate ${active ? 'text-surface/60' : 'text-muted'}`}>
+                    <div
+                      className={`text-[11px] mt-0.5 truncate ${active ? 'text-surface/60' : 'text-muted'}`}
+                    >
                       {acct.description}
                     </div>
                   </button>
@@ -213,7 +249,15 @@ export default function LoginPage(): JSX.Element {
   );
 }
 
-function Field({ label, right, children }: { label: string; right?: React.ReactNode; children: React.ReactNode }): JSX.Element {
+function Field({
+  label,
+  right,
+  children,
+}: {
+  label: string;
+  right?: React.ReactNode;
+  children: React.ReactNode;
+}): JSX.Element {
   return (
     <label className="block">
       <div className="flex items-baseline justify-between mb-1.5">

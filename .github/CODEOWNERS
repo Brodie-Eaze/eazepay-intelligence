@@ -15,6 +15,6 @@ apps/api/prisma/init-timescale.sql                     @Brodie-Eaze
 
 # Compliance docs require founder review
 SECURITY.md                                            @Brodie-Eaze
-PRIVACY.md                                             @Brodie-Eaze
-DATA_CLASSIFICATION.md                                 @Brodie-Eaze
-SOC2_CONTROLS.md                                       @Brodie-Eaze
+docs/governance/PRIVACY.md                             @Brodie-Eaze
+docs/governance/DATA_CLASSIFICATION.md                 @Brodie-Eaze
+docs/governance/SOC2_CONTROLS.md                       @Brodie-Eaze

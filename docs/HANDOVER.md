@@ -10,13 +10,14 @@
 
 EazePay Intelligence is the **read-only observability + financial-intelligence plane** for the EazePay platform. Pixie smart-form (HighSale) sits in front of BuzzPay's lender decision engine; MiCamp clears the rails. This product receives every event from those three systems via signed webhooks, persists them to an append-only ledger, and renders the entire customer book + economics in a real-time dashboard.
 
-We do not originate loans. We do not move money. We *see everything* and report on it.
+We do not originate loans. We do not move money. We _see everything_ and report on it.
 
 ---
 
 ## 5 minutes
 
 ### Architecture in one block
+
 ```
   BuzzPay ──┐
   Pixie    ─┤  HMAC + Idempotency-Key  ┌─────────────────────┐
@@ -40,6 +41,7 @@ We do not originate loans. We do not move money. We *see everything* and report 
 ```
 
 ### Stack
+
 - **API:** Node 20 LTS · TypeScript strict · Fastify 4 · Prisma 5 · PostgreSQL 16 + Timescale · Redis 7 · BullMQ · argon2id · Zod
 - **Web:** Next.js 14 App Router · Tailwind · TanStack Query · Recharts · native WebSocket with single-use ticket auth · Lucide icons
 - **Monorepo:** pnpm workspaces + Turborepo
@@ -48,6 +50,7 @@ We do not originate loans. We do not move money. We *see everything* and report 
 - **Tests:** Vitest unit + Testcontainers Postgres integration scaffold + Playwright e2e scaffold
 
 ### Boot in five commands
+
 ```bash
 docker compose up -d                          # postgres + redis (or use brew services on macOS)
 cp .env.example .env                          # fill local secrets — see ONBOARDING.md
@@ -62,23 +65,23 @@ Login `admin@eazepay.local / Demo!1234`.
 
 ## What's done
 
-| Surface | Status |
-|---|---|
-| Backend: 8 domains × full route/service/repo/schema/types pattern | ✅ |
-| Webhook ingestion w/ HMAC + idempotency + WebhookEvent durable persist | ✅ |
-| Append-only `RevenueEvent` ledger (clawback-safe) | ✅ |
-| Customer book (deduped by encrypted email hash) + financial-microscope detail page | ✅ |
-| Risk profiles · Income distribution · Propensity calibration | ✅ |
-| HighSale (Pixie) sliding-scale margin model + per-partner-per-day usage | ✅ |
-| BuzzPay deal book + APR mix · MiCamp processing | ✅ |
-| Reconciliation (real ledger SUM vs aggregation rollup diff) | ✅ |
-| Operations: System health · Webhook events · Queues · Sessions | ✅ |
-| Governance: Audit log · PII access log · Login activity | ✅ |
-| Admin: Users & roles (live CRUD) · Pricing inventory · Secrets inventory | ✅ |
-| Real-time WS gateway w/ ticket auth + per-client scope filtering | ✅ |
-| 4 dev/admin/operator/viewer accounts seeded · MFA enrolment flow wired | ✅ |
-| Dashboard: 30+ pages, Amala-style nav, single-typeface design system, navy + light-blue palette | ✅ |
-| Docs: ARCHITECTURE (12 ADRs), PRD, SECURITY, CONTRIBUTING, this HANDOVER, SOC2_CONTROLS, PRIVACY, DATA_CLASSIFICATION, ROADMAP, ONBOARDING | ✅ |
+| Surface                                                                                                                                    | Status |
+| ------------------------------------------------------------------------------------------------------------------------------------------ | ------ |
+| Backend: 8 domains × full route/service/repo/schema/types pattern                                                                          | ✅     |
+| Webhook ingestion w/ HMAC + idempotency + WebhookEvent durable persist                                                                     | ✅     |
+| Append-only `RevenueEvent` ledger (clawback-safe)                                                                                          | ✅     |
+| Customer book (deduped by encrypted email hash) + financial-microscope detail page                                                         | ✅     |
+| Risk profiles · Income distribution · Propensity calibration                                                                               | ✅     |
+| HighSale (Pixie) sliding-scale margin model + per-partner-per-day usage                                                                    | ✅     |
+| BuzzPay deal book + APR mix · MiCamp processing                                                                                            | ✅     |
+| Reconciliation (real ledger SUM vs aggregation rollup diff)                                                                                | ✅     |
+| Operations: System health · Webhook events · Queues · Sessions                                                                             | ✅     |
+| Governance: Audit log · PII access log · Login activity                                                                                    | ✅     |
+| Admin: Users & roles (live CRUD) · Pricing inventory · Secrets inventory                                                                   | ✅     |
+| Real-time WS gateway w/ ticket auth + per-client scope filtering                                                                           | ✅     |
+| 4 dev/admin/operator/viewer accounts seeded · MFA enrolment flow wired                                                                     | ✅     |
+| Dashboard: 30+ pages, Amala-style nav, single-typeface design system, navy + light-blue palette                                            | ✅     |
+| Docs: ARCHITECTURE (12 ADRs), PRD, SECURITY, CONTRIBUTING, this HANDOVER, SOC2_CONTROLS, PRIVACY, DATA_CLASSIFICATION, ROADMAP, ONBOARDING | ✅     |
 
 ## What's stubbed / deferred
 
@@ -95,16 +98,16 @@ See `ROADMAP.md` for the full prioritised list. Highlights:
 
 ## Where to look first
 
-| Question | Path |
-|---|---|
-| What domains do we have? | `apps/api/src/domains/` (8 directories) |
-| How does a webhook flow end-to-end? | `apps/api/src/domains/webhooks/webhook.routes.ts` → `webhook.queue.ts` → `workers/webhook.worker.ts` → `webhook.service.ts` |
-| How is PII protected? | `apps/api/src/shared/utils/encryption.ts` + `SECURITY.md` + `PRIVACY.md` |
-| How is auth wired? | `apps/api/src/domains/auth/auth.routes.ts` + `shared/middleware/{auth,csrf,rate-limit,rbac}.middleware.ts` |
-| What does the customer-detail page render? | `apps/web/src/app/(app)/customers/[hash]/page.tsx` |
-| Where are the ADRs? | `ARCHITECTURE.md` (12 ADRs numbered) |
-| What's the DB look like? | `apps/api/prisma/schema.prisma` |
-| Where do the dollars come from? | `RevenueEvent` table (append-only) — see `webhook.service.ts:recordRevenue()` |
+| Question                                   | Path                                                                                                                        |
+| ------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------- |
+| What domains do we have?                   | `apps/api/src/domains/` (8 directories)                                                                                     |
+| How does a webhook flow end-to-end?        | `apps/api/src/domains/webhooks/webhook.routes.ts` → `webhook.queue.ts` → `workers/webhook.worker.ts` → `webhook.service.ts` |
+| How is PII protected?                      | `apps/api/src/shared/utils/encryption.ts` + `SECURITY.md` + `PRIVACY.md`                                                    |
+| How is auth wired?                         | `apps/api/src/domains/auth/auth.routes.ts` + `shared/middleware/{auth,csrf,rate-limit,rbac}.middleware.ts`                  |
+| What does the customer-detail page render? | `apps/web/src/app/(app)/customers/[hash]/page.tsx`                                                                          |
+| Where are the ADRs?                        | `ARCHITECTURE.md` (12 ADRs numbered)                                                                                        |
+| What's the DB look like?                   | `apps/api/prisma/schema.prisma`                                                                                             |
+| Where do the dollars come from?            | `RevenueEvent` table (append-only) — see `webhook.service.ts:recordRevenue()`                                               |
 
 ---
 
