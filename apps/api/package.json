@@ -20,7 +20,9 @@
     "db:studio": "prisma studio",
     "worker:webhook": "tsx src/workers/webhook.worker.ts",
     "worker:aggregation": "tsx src/workers/aggregation.worker.ts",
-    "worker:revenue": "tsx src/workers/revenue.worker.ts"
+    "worker:revenue": "tsx src/workers/revenue.worker.ts",
+    "worker:export": "tsx src/workers/export.worker.ts",
+    "worker:webhook-delivery": "tsx src/workers/webhook-delivery.worker.ts"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"

@@ -98,27 +98,27 @@ enum WebhookProcessingStatus {
 // ─── Partner ────────────────────────────────────────────────────────────────
 
 model Partner {
-  id                  String        @id @db.Uuid
-  externalId          String        @unique @map("external_id")
-  name                String
-  industry            String
-  onboardingDate      DateTime      @map("onboarding_date") @db.Timestamptz(6)
-  status              PartnerStatus @default(ACTIVE)
-  tier                PartnerTier   @default(BRONZE)
-  contractValue       Decimal       @default(0) @map("contract_value") @db.Decimal(14, 2)
-  buzzpayRevSharePct  Decimal       @default(0) @map("buzzpay_rev_share_pct") @db.Decimal(5, 4)
-  pixieDataPullCost   Decimal       @default(1.00) @map("pixie_data_pull_cost") @db.Decimal(8, 4)
-  pixieChargeRate     Decimal       @default(3.00) @map("pixie_charge_rate") @db.Decimal(8, 4)
-  pixieMargin         Decimal       @default(2.00) @map("pixie_margin") @db.Decimal(8, 4)
-  metadata            Json          @default("{}")
-  deletedAt           DateTime?     @map("deleted_at") @db.Timestamptz(6)
-  createdAt           DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt           DateTime      @updatedAt @map("updated_at") @db.Timestamptz(6)
+  id                 String        @id @db.Uuid
+  externalId         String        @unique @map("external_id")
+  name               String
+  industry           String
+  onboardingDate     DateTime      @map("onboarding_date") @db.Timestamptz(6)
+  status             PartnerStatus @default(ACTIVE)
+  tier               PartnerTier   @default(BRONZE)
+  contractValue      Decimal       @default(0) @map("contract_value") @db.Decimal(14, 2)
+  buzzpayRevSharePct Decimal       @default(0) @map("buzzpay_rev_share_pct") @db.Decimal(5, 4)
+  pixieDataPullCost  Decimal       @default(1.00) @map("pixie_data_pull_cost") @db.Decimal(8, 4)
+  pixieChargeRate    Decimal       @default(3.00) @map("pixie_charge_rate") @db.Decimal(8, 4)
+  pixieMargin        Decimal       @default(2.00) @map("pixie_margin") @db.Decimal(8, 4)
+  metadata           Json          @default("{}")
+  deletedAt          DateTime?     @map("deleted_at") @db.Timestamptz(6)
+  createdAt          DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt          DateTime      @updatedAt @map("updated_at") @db.Timestamptz(6)
 
-  applications        Application[]
-  pixieMetrics        PixieMetric[]
-  lenderDecisions     LenderDecision[]
-  revenueEvents       RevenueEvent[]
+  applications    Application[]
+  pixieMetrics    PixieMetric[]
+  lenderDecisions LenderDecision[]
+  revenueEvents   RevenueEvent[]
 
   @@index([status, createdAt(sort: Desc)])
   @@index([tier])
@@ -129,39 +129,39 @@ model Partner {
 // ─── Application ────────────────────────────────────────────────────────────
 
 model Application {
-  id                          String              @id @db.Uuid
-  partnerId                   String              @map("partner_id") @db.Uuid
-  externalApplicationId       String              @unique @map("external_application_id")
+  id                    String @id @db.Uuid
+  partnerId             String @map("partner_id") @db.Uuid
+  externalApplicationId String @unique @map("external_application_id")
 
   // PII — ciphertext (Bytes, AES-256-GCM) + deterministic HMAC hash for lookup.
-  consumerNameCiphertext      Bytes               @map("consumer_name_ciphertext")
-  consumerEmailCiphertext     Bytes               @map("consumer_email_ciphertext")
-  consumerEmailHash           Bytes               @map("consumer_email_hash")
-  consumerPhoneCiphertext     Bytes               @map("consumer_phone_ciphertext")
-  consumerPhoneHash           Bytes               @map("consumer_phone_hash")
+  consumerNameCiphertext  Bytes @map("consumer_name_ciphertext")
+  consumerEmailCiphertext Bytes @map("consumer_email_ciphertext")
+  consumerEmailHash       Bytes @map("consumer_email_hash")
+  consumerPhoneCiphertext Bytes @map("consumer_phone_ciphertext")
+  consumerPhoneHash       Bytes @map("consumer_phone_hash")
 
   // Financial enrichment from Pixie pre-qual.
-  creditScore                 Int?                @map("credit_score")
-  availableCredit             Decimal?            @map("available_credit") @db.Decimal(14, 2)
-  notedAnnualIncome           Decimal?            @map("noted_annual_income") @db.Decimal(14, 2)
-  bankStatementsProvided      Boolean             @default(false) @map("bank_statements_provided")
+  creditScore            Int?     @map("credit_score")
+  availableCredit        Decimal? @map("available_credit") @db.Decimal(14, 2)
+  notedAnnualIncome      Decimal? @map("noted_annual_income") @db.Decimal(14, 2)
+  bankStatementsProvided Boolean  @default(false) @map("bank_statements_provided")
 
-  merchantPreapproval         Boolean             @default(false) @map("merchant_preapproval")
-  merchantPreapprovalAmount   Decimal?            @map("merchant_preapproval_amount") @db.Decimal(14, 2)
-  consumerPreapproval         Boolean             @default(false) @map("consumer_preapproval")
-  consumerPreapprovalAmount   Decimal?            @map("consumer_preapproval_amount") @db.Decimal(14, 2)
+  merchantPreapproval       Boolean  @default(false) @map("merchant_preapproval")
+  merchantPreapprovalAmount Decimal? @map("merchant_preapproval_amount") @db.Decimal(14, 2)
+  consumerPreapproval       Boolean  @default(false) @map("consumer_preapproval")
+  consumerPreapprovalAmount Decimal? @map("consumer_preapproval_amount") @db.Decimal(14, 2)
 
-  fundingEstimate             Decimal?            @map("funding_estimate") @db.Decimal(14, 2)
-  propensityScore             Decimal?            @map("propensity_score") @db.Decimal(5, 4)
-  openLinesOfCredit           Int?                @map("open_lines_of_credit")
+  fundingEstimate   Decimal? @map("funding_estimate") @db.Decimal(14, 2)
+  propensityScore   Decimal? @map("propensity_score") @db.Decimal(5, 4)
+  openLinesOfCredit Int?     @map("open_lines_of_credit")
 
-  status                      ApplicationStatus   @default(PENDING)
-  submittedAt                 DateTime?           @map("submitted_at") @db.Timestamptz(6)
-  createdAt                   DateTime            @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt                   DateTime            @updatedAt @map("updated_at") @db.Timestamptz(6)
+  status      ApplicationStatus @default(PENDING)
+  submittedAt DateTime?         @map("submitted_at") @db.Timestamptz(6)
+  createdAt   DateTime          @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime          @updatedAt @map("updated_at") @db.Timestamptz(6)
 
-  partner                     Partner             @relation(fields: [partnerId], references: [id])
-  lenderDecisions             LenderDecision[]
+  partner         Partner          @relation(fields: [partnerId], references: [id])
+  lenderDecisions LenderDecision[]
 
   @@index([partnerId, createdAt(sort: Desc)])
   @@index([status, createdAt(sort: Desc)])
@@ -173,27 +173,27 @@ model Application {
 // ─── LenderDecision ─────────────────────────────────────────────────────────
 
 model LenderDecision {
-  id                   String                 @id @db.Uuid
-  applicationId        String                 @map("application_id") @db.Uuid
-  partnerId            String                 @map("partner_id") @db.Uuid
-  lenderName           String                 @map("lender_name")
-  lenderTier           LenderTier             @map("lender_tier")
-  decision             LenderDecisionOutcome
-  decisionTimestamp    DateTime               @map("decision_timestamp") @db.Timestamptz(6)
-  approvalAmount       Decimal?               @map("approval_amount") @db.Decimal(14, 2)
-  apr                  Decimal?               @db.Decimal(7, 4)
-  term                 Int?
-  monthlyPayment       Decimal?               @map("monthly_payment") @db.Decimal(14, 2)
-  originationFee       Decimal?               @map("origination_fee") @db.Decimal(14, 2)
-  fundingStatus        FundingStatus          @default(PENDING) @map("funding_status")
-  fundingTimestamp     DateTime?              @map("funding_timestamp") @db.Timestamptz(6)
-  fundingAmount        Decimal?               @map("funding_amount") @db.Decimal(14, 2)
-  createdAt            DateTime               @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt            DateTime               @updatedAt @map("updated_at") @db.Timestamptz(6)
+  id                String                @id @db.Uuid
+  applicationId     String                @map("application_id") @db.Uuid
+  partnerId         String                @map("partner_id") @db.Uuid
+  lenderName        String                @map("lender_name")
+  lenderTier        LenderTier            @map("lender_tier")
+  decision          LenderDecisionOutcome
+  decisionTimestamp DateTime              @map("decision_timestamp") @db.Timestamptz(6)
+  approvalAmount    Decimal?              @map("approval_amount") @db.Decimal(14, 2)
+  apr               Decimal?              @db.Decimal(7, 4)
+  term              Int?
+  monthlyPayment    Decimal?              @map("monthly_payment") @db.Decimal(14, 2)
+  originationFee    Decimal?              @map("origination_fee") @db.Decimal(14, 2)
+  fundingStatus     FundingStatus         @default(PENDING) @map("funding_status")
+  fundingTimestamp  DateTime?             @map("funding_timestamp") @db.Timestamptz(6)
+  fundingAmount     Decimal?              @map("funding_amount") @db.Decimal(14, 2)
+  createdAt         DateTime              @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt         DateTime              @updatedAt @map("updated_at") @db.Timestamptz(6)
 
-  application          Application            @relation(fields: [applicationId], references: [id])
-  partner              Partner                @relation(fields: [partnerId], references: [id])
-  revenueEvents        RevenueEvent[]
+  application   Application    @relation(fields: [applicationId], references: [id])
+  partner       Partner        @relation(fields: [partnerId], references: [id])
+  revenueEvents RevenueEvent[]
 
   @@index([partnerId, createdAt(sort: Desc)])
   @@index([applicationId])
@@ -208,23 +208,23 @@ model LenderDecision {
 // Clawbacks/reversals arrive as new negative-amount rows.
 
 model RevenueEvent {
-  id                 String              @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  partnerId          String              @map("partner_id") @db.Uuid
-  lenderDecisionId   String?             @map("lender_decision_id") @db.Uuid
-  pixieMetricPeriod  DateTime?           @map("pixie_metric_period") @db.Timestamptz(6)
-  source             WebhookSource
-  stream             RevenueStream
-  eventType          RevenueEventType    @map("event_type")
-  amount             Decimal             @db.Decimal(14, 2)
-  currency           String              @default("AUD") @db.Char(3)
-  effectiveAt        DateTime            @map("effective_at") @db.Timestamptz(6)
-  recordedAt         DateTime            @default(now()) @map("recorded_at") @db.Timestamptz(6)
-  idempotencyKey     String              @unique @map("idempotency_key")
-  metadata           Json                @default("{}")
-  createdAt          DateTime            @default(now()) @map("created_at") @db.Timestamptz(6)
+  id                String           @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  partnerId         String           @map("partner_id") @db.Uuid
+  lenderDecisionId  String?          @map("lender_decision_id") @db.Uuid
+  pixieMetricPeriod DateTime?        @map("pixie_metric_period") @db.Timestamptz(6)
+  source            WebhookSource
+  stream            RevenueStream
+  eventType         RevenueEventType @map("event_type")
+  amount            Decimal          @db.Decimal(14, 2)
+  currency          String           @default("AUD") @db.Char(3)
+  effectiveAt       DateTime         @map("effective_at") @db.Timestamptz(6)
+  recordedAt        DateTime         @default(now()) @map("recorded_at") @db.Timestamptz(6)
+  idempotencyKey    String           @unique @map("idempotency_key")
+  metadata          Json             @default("{}")
+  createdAt         DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
 
-  partner            Partner             @relation(fields: [partnerId], references: [id])
-  lenderDecision     LenderDecision?     @relation(fields: [lenderDecisionId], references: [id])
+  partner        Partner         @relation(fields: [partnerId], references: [id])
+  lenderDecision LenderDecision? @relation(fields: [lenderDecisionId], references: [id])
 
   @@id([effectiveAt, partnerId, idempotencyKey])
   @@index([partnerId, effectiveAt(sort: Desc)])
@@ -259,23 +259,23 @@ model WebhookEvent {
 // ─── PixieMetric (Timescale hypertable) ─────────────────────────────────────
 
 model PixieMetric {
-  id                    String             @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  partnerId             String             @map("partner_id") @db.Uuid
-  period                AggregationPeriod
-  periodStart           DateTime           @map("period_start") @db.Timestamptz(6)
-  periodEnd             DateTime           @map("period_end") @db.Timestamptz(6)
-  dataPullsThisPeriod   Int                @map("data_pulls_this_period")
-  dataPullsCumulative   Int                @map("data_pulls_cumulative")
-  costPerPull           Decimal            @map("cost_per_pull") @db.Decimal(8, 4)
-  chargePerPull         Decimal            @map("charge_per_pull") @db.Decimal(8, 4)
-  profitPerPull         Decimal            @map("profit_per_pull") @db.Decimal(8, 4)
-  totalRevenue          Decimal            @map("total_revenue") @db.Decimal(14, 2)
-  volumeThreshold       Int                @map("volume_threshold")
-  volumeAchieved        Int                @map("volume_achieved")
-  discountApplied       Decimal            @default(0) @map("discount_applied") @db.Decimal(14, 2)
-  createdAt             DateTime           @default(now()) @map("created_at") @db.Timestamptz(6)
+  id                  String            @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  partnerId           String            @map("partner_id") @db.Uuid
+  period              AggregationPeriod
+  periodStart         DateTime          @map("period_start") @db.Timestamptz(6)
+  periodEnd           DateTime          @map("period_end") @db.Timestamptz(6)
+  dataPullsThisPeriod Int               @map("data_pulls_this_period")
+  dataPullsCumulative Int               @map("data_pulls_cumulative")
+  costPerPull         Decimal           @map("cost_per_pull") @db.Decimal(8, 4)
+  chargePerPull       Decimal           @map("charge_per_pull") @db.Decimal(8, 4)
+  profitPerPull       Decimal           @map("profit_per_pull") @db.Decimal(8, 4)
+  totalRevenue        Decimal           @map("total_revenue") @db.Decimal(14, 2)
+  volumeThreshold     Int               @map("volume_threshold")
+  volumeAchieved      Int               @map("volume_achieved")
+  discountApplied     Decimal           @default(0) @map("discount_applied") @db.Decimal(14, 2)
+  createdAt           DateTime          @default(now()) @map("created_at") @db.Timestamptz(6)
 
-  partner               Partner            @relation(fields: [partnerId], references: [id])
+  partner Partner @relation(fields: [partnerId], references: [id])
 
   @@id([periodStart, partnerId, period])
   @@index([partnerId, periodStart(sort: Desc)])
@@ -285,24 +285,24 @@ model PixieMetric {
 // ─── RevenueAggregation (Timescale hypertable) ──────────────────────────────
 
 model RevenueAggregation {
-  id                    String             @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  period                AggregationPeriod
-  periodStart           DateTime           @map("period_start") @db.Timestamptz(6)
-  periodEnd             DateTime           @map("period_end") @db.Timestamptz(6)
-  totalApplications     Int                @map("total_applications")
-  approvedApplications  Int                @map("approved_applications")
-  fundedApplications    Int                @map("funded_applications")
-  buzzpayRevshareTotal  Decimal            @map("buzzpay_revshare_total") @db.Decimal(14, 2)
-  processingFeesTotal   Decimal            @map("processing_fees_total") @db.Decimal(14, 2)
-  pixieMarginTotal      Decimal            @map("pixie_margin_total") @db.Decimal(14, 2)
-  pixieDataPullsTotal   Int                @map("pixie_data_pulls_total")
-  activePartnerCount    Int                @map("active_partner_count")
-  newPartnerCount       Int                @map("new_partner_count")
-  totalRevenue          Decimal            @map("total_revenue") @db.Decimal(14, 2)
-  approvalRate          Decimal            @map("approval_rate") @db.Decimal(5, 4)
-  fundingRate           Decimal            @map("funding_rate") @db.Decimal(5, 4)
-  avgDealSize           Decimal            @map("avg_deal_size") @db.Decimal(14, 2)
-  createdAt             DateTime           @default(now()) @map("created_at") @db.Timestamptz(6)
+  id                   String            @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  period               AggregationPeriod
+  periodStart          DateTime          @map("period_start") @db.Timestamptz(6)
+  periodEnd            DateTime          @map("period_end") @db.Timestamptz(6)
+  totalApplications    Int               @map("total_applications")
+  approvedApplications Int               @map("approved_applications")
+  fundedApplications   Int               @map("funded_applications")
+  buzzpayRevshareTotal Decimal           @map("buzzpay_revshare_total") @db.Decimal(14, 2)
+  processingFeesTotal  Decimal           @map("processing_fees_total") @db.Decimal(14, 2)
+  pixieMarginTotal     Decimal           @map("pixie_margin_total") @db.Decimal(14, 2)
+  pixieDataPullsTotal  Int               @map("pixie_data_pulls_total")
+  activePartnerCount   Int               @map("active_partner_count")
+  newPartnerCount      Int               @map("new_partner_count")
+  totalRevenue         Decimal           @map("total_revenue") @db.Decimal(14, 2)
+  approvalRate         Decimal           @map("approval_rate") @db.Decimal(5, 4)
+  fundingRate          Decimal           @map("funding_rate") @db.Decimal(5, 4)
+  avgDealSize          Decimal           @map("avg_deal_size") @db.Decimal(14, 2)
+  createdAt            DateTime          @default(now()) @map("created_at") @db.Timestamptz(6)
 
   @@id([periodStart, period])
   @@index([period, periodStart(sort: Desc)])
@@ -312,34 +312,43 @@ model RevenueAggregation {
 // ─── User / Auth ────────────────────────────────────────────────────────────
 
 model User {
-  id            String     @id @db.Uuid
-  email         String     @unique
-  passwordHash  String     @map("password_hash")
-  role          UserRole   @default(VIEWER)
-  mfaEnabled    Boolean    @default(false) @map("mfa_enabled")
-  mfaSecret     String?    @map("mfa_secret")
-  lastLoginAt   DateTime?  @map("last_login_at") @db.Timestamptz(6)
-  deletedAt     DateTime?  @map("deleted_at") @db.Timestamptz(6)
-  createdAt     DateTime   @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt     DateTime   @updatedAt @map("updated_at") @db.Timestamptz(6)
+  id           String    @id @db.Uuid
+  email        String    @unique
+  passwordHash String    @map("password_hash")
+  role         UserRole  @default(VIEWER)
+  mfaEnabled   Boolean   @default(false) @map("mfa_enabled")
+  mfaSecret    String?   @map("mfa_secret")
+  lastLoginAt  DateTime? @map("last_login_at") @db.Timestamptz(6)
+  deletedAt    DateTime? @map("deleted_at") @db.Timestamptz(6)
+  createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt    DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
 
-  refreshTokens RefreshToken[]
-  auditLogs     AuditLog[]
+  refreshTokens        RefreshToken[]
+  auditLogs            AuditLog[]
+  apiTokens            ApiToken[]
+  exports              Export[]
+  webhookSubscriptions WebhookSubscription[]
+  notes                Note[]
+  tagAssignments       TagAssignment[]
+  savedViews           SavedView[]
+  scheduledReports     ScheduledReport[]
+  casesOpened          Case[]                @relation("CaseOpenedBy")
+  casesAssigned        Case[]                @relation("CaseAssignee")
 
   @@map("users")
 }
 
 model RefreshToken {
-  id          String    @id @db.Uuid
-  userId      String    @map("user_id") @db.Uuid
-  familyId    String    @map("family_id") @db.Uuid
-  tokenHash   String    @unique @map("token_hash")
-  expiresAt   DateTime  @map("expires_at") @db.Timestamptz(6)
-  revokedAt   DateTime? @map("revoked_at") @db.Timestamptz(6)
-  replacedBy  String?   @map("replaced_by") @db.Uuid
-  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  id         String    @id @db.Uuid
+  userId     String    @map("user_id") @db.Uuid
+  familyId   String    @map("family_id") @db.Uuid
+  tokenHash  String    @unique @map("token_hash")
+  expiresAt  DateTime  @map("expires_at") @db.Timestamptz(6)
+  revokedAt  DateTime? @map("revoked_at") @db.Timestamptz(6)
+  replacedBy String?   @map("replaced_by") @db.Uuid
+  createdAt  DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
 
-  user        User      @relation(fields: [userId], references: [id])
+  user User @relation(fields: [userId], references: [id])
 
   @@index([userId])
   @@index([familyId])
@@ -357,10 +366,355 @@ model AuditLog {
   userAgent    String?  @map("user_agent")
   createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
 
-  user         User?    @relation(fields: [userId], references: [id])
+  user User? @relation(fields: [userId], references: [id])
 
   @@index([userId, createdAt(sort: Desc)])
   @@index([resourceType, resourceId])
   @@index([action, createdAt(sort: Desc)])
   @@map("audit_logs")
+}
+
+// ─── Tier-1 enterprise enums ────────────────────────────────────────────────
+
+enum ApiTokenScope {
+  READ
+  WRITE
+  ADMIN
+}
+
+enum ExportType {
+  CUSTOMERS
+  APPLICATIONS
+  LENDER_DECISIONS
+  REVENUE_LEDGER
+  PARTNERS
+  AUDIT_LOG
+}
+
+enum ExportFormat {
+  CSV
+  JSON
+  XLSX
+}
+
+enum ExportStatus {
+  PENDING
+  RUNNING
+  COMPLETED
+  FAILED
+  EXPIRED
+}
+
+enum WebhookDeliveryStatus {
+  PENDING
+  SUCCESS
+  FAILED
+  RETRYING
+  ABANDONED
+}
+
+enum AlertSeverity {
+  INFO
+  WARN
+  CRITICAL
+}
+
+enum AlertState {
+  OPEN
+  ACKNOWLEDGED
+  SNOOZED
+  RESOLVED
+}
+
+enum ChannelKind {
+  EMAIL
+  SLACK
+  WEBHOOK
+  IN_APP
+}
+
+enum CaseStatus {
+  OPEN
+  IN_PROGRESS
+  WAITING
+  RESOLVED
+  CLOSED
+}
+
+enum CaseType {
+  FRAUD
+  DISPUTE
+  REGULATORY
+  SUPPORT
+  OTHER
+}
+
+// ─── API tokens (programmatic access) ──────────────────────────────────────
+
+model ApiToken {
+  id           String          @id @db.Uuid
+  userId       String          @map("user_id") @db.Uuid
+  name         String
+  prefix       String          @unique // visible part of the token, e.g. "epi_pk_a1b2c3d4"
+  hashedSecret String          @map("hashed_secret") // SHA-256 of the secret half
+  scopes       ApiTokenScope[]
+  expiresAt    DateTime?       @map("expires_at") @db.Timestamptz(6)
+  lastUsedAt   DateTime?       @map("last_used_at") @db.Timestamptz(6)
+  revokedAt    DateTime?       @map("revoked_at") @db.Timestamptz(6)
+  createdAt    DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([userId, revokedAt])
+  @@map("api_tokens")
+}
+
+// ─── Async exports ─────────────────────────────────────────────────────────
+
+model Export {
+  id          String       @id @db.Uuid
+  userId      String       @map("user_id") @db.Uuid
+  type        ExportType
+  format      ExportFormat
+  filters     Json         @default("{}")
+  status      ExportStatus @default(PENDING)
+  rowCount    Int?         @map("row_count")
+  filePath    String?      @map("file_path")
+  fileBytes   Int?         @map("file_bytes")
+  error       String?
+  createdAt   DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
+  startedAt   DateTime?    @map("started_at") @db.Timestamptz(6)
+  completedAt DateTime?    @map("completed_at") @db.Timestamptz(6)
+  expiresAt   DateTime?    @map("expires_at") @db.Timestamptz(6)
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([userId, createdAt(sort: Desc)])
+  @@index([status, createdAt(sort: Desc)])
+  @@map("exports")
+}
+
+// ─── Outbound webhook subscriptions + deliveries ───────────────────────────
+
+model WebhookSubscription {
+  id          String   @id @db.Uuid
+  ownerUserId String   @map("owner_user_id") @db.Uuid
+  name        String
+  url         String
+  secretHash  String   @map("secret_hash") // signing key, stored hashed
+  eventTypes  String[] @map("event_types")
+  isActive    Boolean  @default(true) @map("is_active")
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  owner      User              @relation(fields: [ownerUserId], references: [id])
+  deliveries WebhookDelivery[]
+
+  @@index([ownerUserId, isActive])
+  @@map("webhook_subscriptions")
+}
+
+model WebhookDelivery {
+  id               String                @id @db.Uuid
+  subscriptionId   String                @map("subscription_id") @db.Uuid
+  eventType        String                @map("event_type")
+  payload          Json
+  status           WebhookDeliveryStatus @default(PENDING)
+  attemptCount     Int                   @default(0) @map("attempt_count")
+  lastResponseCode Int?                  @map("last_response_code")
+  lastError        String?               @map("last_error")
+  scheduledFor     DateTime              @default(now()) @map("scheduled_for") @db.Timestamptz(6)
+  deliveredAt      DateTime?             @map("delivered_at") @db.Timestamptz(6)
+  createdAt        DateTime              @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  subscription WebhookSubscription @relation(fields: [subscriptionId], references: [id])
+
+  @@index([subscriptionId, createdAt(sort: Desc)])
+  @@index([status, scheduledFor])
+  @@map("webhook_deliveries")
+}
+
+// ─── Notification channels + alert rules + alerts ──────────────────────────
+
+model NotificationChannel {
+  id        String      @id @db.Uuid
+  name      String
+  kind      ChannelKind
+  config    Json // { url } for SLACK/WEBHOOK, { to } for EMAIL
+  isActive  Boolean     @default(true) @map("is_active")
+  createdAt DateTime    @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  alertRules       AlertRule[]
+  scheduledReports ScheduledReport[] @relation("ScheduledReportChannel")
+
+  @@map("notification_channels")
+}
+
+model AlertRule {
+  id            String        @id @db.Uuid
+  name          String
+  description   String?
+  query         Json // declarative rule (e.g. { metric: "webhook_failure_rate_24h", op: ">", value: 0.05 })
+  windowMinutes Int           @default(60) @map("window_minutes")
+  severity      AlertSeverity @default(WARN)
+  channelId     String?       @map("channel_id") @db.Uuid
+  isActive      Boolean       @default(true) @map("is_active")
+  createdAt     DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt     DateTime      @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  channel NotificationChannel? @relation(fields: [channelId], references: [id])
+  alerts  Alert[]
+
+  @@map("alert_rules")
+}
+
+model Alert {
+  id             String        @id @db.Uuid
+  ruleId         String        @map("rule_id") @db.Uuid
+  state          AlertState    @default(OPEN)
+  severity       AlertSeverity
+  payload        Json // captured metric values + context
+  firedAt        DateTime      @default(now()) @map("fired_at") @db.Timestamptz(6)
+  acknowledgedAt DateTime?     @map("acknowledged_at") @db.Timestamptz(6)
+  acknowledgedBy String?       @map("acknowledged_by") @db.Uuid
+  snoozedUntil   DateTime?     @map("snoozed_until") @db.Timestamptz(6)
+  resolvedAt     DateTime?     @map("resolved_at") @db.Timestamptz(6)
+
+  rule AlertRule @relation(fields: [ruleId], references: [id])
+
+  @@index([state, firedAt(sort: Desc)])
+  @@index([ruleId, firedAt(sort: Desc)])
+  @@map("alerts")
+}
+
+// ─── Notes + tags (cross-resource) ─────────────────────────────────────────
+
+model Note {
+  id           String   @id @db.Uuid
+  resourceType String   @map("resource_type") // 'customer' / 'partner' / 'application' / 'lender_decision' / 'case'
+  resourceId   String   @map("resource_id")
+  authorUserId String   @map("author_user_id") @db.Uuid
+  body         String
+  pinned       Boolean  @default(false)
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt    DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  author User @relation(fields: [authorUserId], references: [id])
+
+  @@index([resourceType, resourceId, createdAt(sort: Desc)])
+  @@index([authorUserId, createdAt(sort: Desc)])
+  @@map("notes")
+}
+
+model Tag {
+  id          String   @id @db.Uuid
+  name        String   @unique
+  color       String   @default("slate")
+  description String?
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  assignments TagAssignment[]
+
+  @@map("tags")
+}
+
+model TagAssignment {
+  id           String   @id @db.Uuid
+  tagId        String   @map("tag_id") @db.Uuid
+  resourceType String   @map("resource_type")
+  resourceId   String   @map("resource_id")
+  assignedBy   String   @map("assigned_by") @db.Uuid
+  assignedAt   DateTime @default(now()) @map("assigned_at") @db.Timestamptz(6)
+
+  tag  Tag  @relation(fields: [tagId], references: [id])
+  user User @relation(fields: [assignedBy], references: [id])
+
+  @@unique([tagId, resourceType, resourceId])
+  @@index([resourceType, resourceId])
+  @@map("tag_assignments")
+}
+
+// ─── Saved views (search bookmarks) ────────────────────────────────────────
+
+model SavedView {
+  id           String   @id @db.Uuid
+  userId       String   @map("user_id") @db.Uuid
+  name         String
+  resourceType String   @map("resource_type") // 'customer' / 'application' / 'partner' / 'ledger'
+  query        Json
+  isShared     Boolean  @default(false) @map("is_shared")
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt    DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([userId, resourceType])
+  @@map("saved_views")
+}
+
+// ─── Scheduled reports ─────────────────────────────────────────────────────
+
+model ScheduledReport {
+  id             String    @id @db.Uuid
+  userId         String    @map("user_id") @db.Uuid
+  name           String
+  reportType     String    @map("report_type") // matches an export type or a custom report key
+  params         Json      @default("{}")
+  cronExpression String    @map("cron_expression") // e.g. "0 9 * * MON" — Mondays 9am
+  channelId      String?   @map("channel_id") @db.Uuid
+  isActive       Boolean   @default(true) @map("is_active")
+  lastRunAt      DateTime? @map("last_run_at") @db.Timestamptz(6)
+  nextRunAt      DateTime? @map("next_run_at") @db.Timestamptz(6)
+  createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt      DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  user    User                 @relation(fields: [userId], references: [id])
+  channel NotificationChannel? @relation("ScheduledReportChannel", fields: [channelId], references: [id])
+  runs    ReportRun[]
+
+  @@index([userId])
+  @@index([nextRunAt, isActive])
+  @@map("scheduled_reports")
+}
+
+model ReportRun {
+  id                String       @id @db.Uuid
+  scheduledReportId String       @map("scheduled_report_id") @db.Uuid
+  status            ExportStatus @default(PENDING)
+  filePath          String?      @map("file_path")
+  fileBytes         Int?         @map("file_bytes")
+  error             String?
+  startedAt         DateTime?    @map("started_at") @db.Timestamptz(6)
+  completedAt       DateTime?    @map("completed_at") @db.Timestamptz(6)
+  createdAt         DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  scheduledReport ScheduledReport @relation(fields: [scheduledReportId], references: [id])
+
+  @@index([scheduledReportId, createdAt(sort: Desc)])
+  @@map("report_runs")
+}
+
+// ─── Cases / workflow management ───────────────────────────────────────────
+
+model Case {
+  id             String     @id @db.Uuid
+  type           CaseType
+  status         CaseStatus @default(OPEN)
+  title          String
+  description    String?
+  assigneeUserId String?    @map("assignee_user_id") @db.Uuid
+  resourceType   String?    @map("resource_type") // optional link to customer / partner / application
+  resourceId     String?    @map("resource_id")
+  openedByUserId String     @map("opened_by_user_id") @db.Uuid
+  openedAt       DateTime   @default(now()) @map("opened_at") @db.Timestamptz(6)
+  resolvedAt     DateTime?  @map("resolved_at") @db.Timestamptz(6)
+  createdAt      DateTime   @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt      DateTime   @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  openedBy User  @relation("CaseOpenedBy", fields: [openedByUserId], references: [id])
+  assignee User? @relation("CaseAssignee", fields: [assigneeUserId], references: [id])
+
+  @@index([status, openedAt(sort: Desc)])
+  @@index([assigneeUserId, status])
+  @@map("cases")
 }

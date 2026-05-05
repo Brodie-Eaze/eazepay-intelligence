@@ -39,6 +39,14 @@ import { registerAnalyticsRoutes } from './domains/analytics/analytics.routes.js
 import { registerAdminRoutes } from './domains/admin/admin.routes.js';
 import { registerCustomerRoutes } from './domains/customers/customer.routes.js';
 import { registerUserRoutes } from './domains/users/user.routes.js';
+import { registerApiTokenRoutes } from './domains/api-tokens/api-token.routes.js';
+import { registerExportRoutes } from './domains/exports/export.routes.js';
+import { registerOutboundWebhookRoutes } from './domains/outbound-webhooks/outbound-webhook.routes.js';
+import { registerSearchRoutes } from './domains/search/search.routes.js';
+import { registerNoteRoutes } from './domains/notes/note.routes.js';
+import { registerTagRoutes } from './domains/tags/tag.routes.js';
+import { registerAlertRoutes } from './domains/alerts/alert.routes.js';
+import { registerScheduledReportRoutes } from './domains/scheduled-reports/scheduled-report.routes.js';
 import { registerAnalyticsWebSocket } from './websocket/analytics.gateway.js';
 
 /**
@@ -93,7 +101,13 @@ export async function buildServer(): Promise<FastifyInstance> {
   // Prisma.Decimal → string (preserves precision; no Number rounding).
   app.setReplySerializer((payload, statusCode) => {
     return JSON.stringify(payload, (_key, value) => {
-      if (value !== null && typeof value === 'object' && 'toFixed' in value && 's' in value && 'd' in value) {
+      if (
+        value !== null &&
+        typeof value === 'object' &&
+        'toFixed' in value &&
+        's' in value &&
+        'd' in value
+      ) {
         // Duck-typed Prisma.Decimal — serialize as string.
         return (value as { toString(): string }).toString();
       }
@@ -121,7 +135,11 @@ export async function buildServer(): Promise<FastifyInstance> {
     }
 
     if (isAppError(err)) {
-      const body: Record<string, unknown> = { code: err.errorCode, message: err.message, requestId };
+      const body: Record<string, unknown> = {
+        code: err.errorCode,
+        message: err.message,
+        requestId,
+      };
       if (err.details) body.details = err.details;
       reply.status(err.statusCode).send({ error: body });
       return;
@@ -144,7 +162,11 @@ export async function buildServer(): Promise<FastifyInstance> {
 
   app.setNotFoundHandler((req, reply) => {
     reply.status(404).send({
-      error: { code: 'NOT_FOUND', message: `Route ${req.method} ${req.url} not found`, requestId: req.id },
+      error: {
+        code: 'NOT_FOUND',
+        message: `Route ${req.method} ${req.url} not found`,
+        requestId: req.id,
+      },
     });
   });
 
@@ -166,6 +188,14 @@ export async function buildServer(): Promise<FastifyInstance> {
       await registerAdminRoutes(instance);
       await registerCustomerRoutes(instance);
       await registerUserRoutes(instance);
+      await registerApiTokenRoutes(instance);
+      await registerExportRoutes(instance);
+      await registerOutboundWebhookRoutes(instance);
+      await registerSearchRoutes(instance);
+      await registerNoteRoutes(instance);
+      await registerTagRoutes(instance);
+      await registerAlertRoutes(instance);
+      await registerScheduledReportRoutes(instance);
     },
     { prefix: '/api/v1' },
   );

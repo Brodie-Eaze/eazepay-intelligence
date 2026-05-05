@@ -4,20 +4,56 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useUser } from '@/lib/auth';
 import {
-  LayoutDashboard, Radio,
-  Users, ShieldAlert, Wallet, Target,
-  Inbox, Kanban,
-  Landmark, Handshake, Percent,
+  LayoutDashboard,
+  Radio,
+  Users,
+  ShieldAlert,
+  Wallet,
+  Target,
+  Inbox,
+  Kanban,
+  Landmark,
+  Handshake,
+  Percent,
   Building2,
-  DollarSign, Layers, BookOpen, RotateCcw, Gauge, CreditCard,
-  Activity, Webhook, ListOrdered, Monitor,
-  Scroll, Eye, LogIn,
-  ShieldCheck, Tags, KeyRound,
+  DollarSign,
+  Layers,
+  BookOpen,
+  RotateCcw,
+  Gauge,
+  CreditCard,
+  Activity,
+  Webhook,
+  ListOrdered,
+  Monitor,
+  Scroll,
+  Eye,
+  LogIn,
+  ShieldCheck,
+  Tags,
+  KeyRound,
+  Search,
+  Bell,
+  FileDown,
+  CalendarClock,
+  StickyNote,
+  Tag,
+  Webhook as WebhookIcon,
+  Key,
   type LucideIcon,
 } from 'lucide-react';
 
-interface NavItem { href: string; label: string; icon: LucideIcon; operatorOnly?: boolean; adminOnly?: boolean }
-interface NavGroup { label: string; items: NavItem[] }
+interface NavItem {
+  href: string;
+  label: string;
+  icon: LucideIcon;
+  operatorOnly?: boolean;
+  adminOnly?: boolean;
+}
+interface NavGroup {
+  label: string;
+  items: NavItem[];
+}
 
 const GROUPS: NavGroup[] = [
   {
@@ -25,6 +61,8 @@ const GROUPS: NavGroup[] = [
     items: [
       { href: '/overview', label: 'Overview', icon: LayoutDashboard },
       { href: '/live', label: 'Live activity', icon: Radio },
+      { href: '/search', label: 'Search', icon: Search },
+      { href: '/alerts', label: 'Alerts', icon: Bell, operatorOnly: true },
     ],
   },
   {
@@ -53,9 +91,7 @@ const GROUPS: NavGroup[] = [
   },
   {
     label: 'Network',
-    items: [
-      { href: '/partners', label: 'Partners', icon: Building2 },
-    ],
+    items: [{ href: '/partners', label: 'Partners', icon: Building2 }],
   },
   {
     label: 'Money',
@@ -93,6 +129,16 @@ const GROUPS: NavGroup[] = [
       { href: '/admin/secrets', label: 'Secrets', icon: KeyRound, adminOnly: true },
     ],
   },
+  {
+    label: 'Workspace',
+    items: [
+      { href: '/tokens', label: 'API tokens', icon: Key },
+      { href: '/exports', label: 'Data exports', icon: FileDown },
+      { href: '/reports', label: 'Scheduled reports', icon: CalendarClock },
+      { href: '/subscriptions', label: 'Outbound webhooks', icon: WebhookIcon, operatorOnly: true },
+      { href: '/tags', label: 'Tags', icon: Tag, operatorOnly: true },
+    ],
+  },
 ];
 
 export function Sidebar(): JSX.Element {
@@ -111,16 +157,24 @@ export function Sidebar(): JSX.Element {
   return (
     <aside className="w-64 shrink-0 border-r border-line2 bg-surface px-3 py-6 flex flex-col overflow-y-auto">
       <Link href="/overview" className="block mb-7 px-3">
-        <div className="font-semibold tracking-tight text-ink text-[17px] leading-none">EazePay</div>
-        <div className="text-accent text-[10px] font-semibold tracking-[0.18em] mt-1.5">INTELLIGENCE</div>
+        <div className="font-semibold tracking-tight text-ink text-[17px] leading-none">
+          EazePay
+        </div>
+        <div className="text-accent text-[10px] font-semibold tracking-[0.18em] mt-1.5">
+          INTELLIGENCE
+        </div>
       </Link>
 
       {filtered.map((group) => (
         <div key={group.label} className="mb-5">
-          <div className="px-3 text-[10px] font-semibold uppercase tracking-[0.16em] text-soft mb-2">{group.label}</div>
+          <div className="px-3 text-[10px] font-semibold uppercase tracking-[0.16em] text-soft mb-2">
+            {group.label}
+          </div>
           <nav className="space-y-0.5">
             {group.items.map((item) => {
-              const active = path === item.href || (item.href !== '/overview' && path?.startsWith(`${item.href}/`));
+              const active =
+                path === item.href ||
+                (item.href !== '/overview' && path?.startsWith(`${item.href}/`));
               const Icon = item.icon;
               return (
                 <Link
