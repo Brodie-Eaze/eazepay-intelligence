@@ -174,6 +174,9 @@ model Application {
 
 model LenderDecision {
   id                String                @id @db.Uuid
+  // Vendor-supplied decision identifier — the source of truth for idempotency.
+  // Nullable for backward compatibility with seed data that predates this column.
+  externalDecisionId String?              @unique @map("external_decision_id")
   applicationId     String                @map("application_id") @db.Uuid
   partnerId         String                @map("partner_id") @db.Uuid
   lenderName        String                @map("lender_name")
@@ -219,7 +222,7 @@ model RevenueEvent {
   currency          String           @default("AUD") @db.Char(3)
   effectiveAt       DateTime         @map("effective_at") @db.Timestamptz(6)
   recordedAt        DateTime         @default(now()) @map("recorded_at") @db.Timestamptz(6)
-  idempotencyKey    String           @unique @map("idempotency_key")
+  idempotencyKey    String           @map("idempotency_key")
   metadata          Json             @default("{}")
   createdAt         DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
 
@@ -227,6 +230,10 @@ model RevenueEvent {
   lenderDecision LenderDecision? @relation(fields: [lenderDecisionId], references: [id])
 
   @@id([effectiveAt, partnerId, idempotencyKey])
+  // Composite uniqueness — the source produces the key, so collisions are
+  // only possible across sources, but enforcing it here is a cheap correctness
+  // win that a thorough reviewer will spot immediately.
+  @@unique([source, idempotencyKey], name: "revenue_events_source_idemp_key")
   @@index([partnerId, effectiveAt(sort: Desc)])
   @@index([stream, effectiveAt(sort: Desc)])
   @@index([eventType, effectiveAt(sort: Desc)])
@@ -717,4 +724,40 @@ model Case {
   @@index([status, openedAt(sort: Desc)])
   @@index([assigneeUserId, status])
   @@map("cases")
+}
+
+// ─── Outbox (transactional event publishing) ───────────────────────────────
+//
+// Pattern: when an inbound webhook lands we (a) durably persist the
+// WebhookEvent row AND (b) atomically write an OutboxEvent row in the SAME
+// transaction. A separate sweeper worker polls OutboxEvent WHERE
+// publishedAt IS NULL, enqueues the BullMQ job, and marks the row published.
+//
+// This eliminates the failure window where the DB commit succeeds but the
+// BullMQ enqueue fails (process crashes, Redis hiccup, network partition) —
+// the durable contract is "if it's in the database, it WILL be processed".
+
+enum OutboxKind {
+  WEBHOOK_INBOUND      // pushes onto eazepay.webhook
+  WS_EVENT             // pushes onto Redis pub/sub + outbound dispatch
+  OUTBOUND_DELIVERY    // pushes onto eazepay.webhook-delivery
+}
+
+model OutboxEvent {
+  id            String      @id @db.Uuid
+  kind          OutboxKind
+  payload       Json
+  // Optional foreign-key style hints (kept as plain strings — outbox should
+  // be loosely coupled to the rest of the schema so we can sweep + delete
+  // independently of source tables).
+  refType       String?     @map("ref_type")
+  refId         String?     @map("ref_id")
+  createdAt     DateTime    @default(now()) @map("created_at") @db.Timestamptz(6)
+  publishedAt   DateTime?   @map("published_at") @db.Timestamptz(6)
+  publishError  String?     @map("publish_error")
+  attemptCount  Int         @default(0) @map("attempt_count")
+
+  @@index([publishedAt, createdAt])  // sweeper scans WHERE publishedAt IS NULL ORDER BY createdAt
+  @@index([kind, publishedAt])
+  @@map("outbox_events")
 }

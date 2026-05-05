@@ -1,13 +1,38 @@
+/**
+ * WebSocket event publisher + outbound webhook fanout dispatcher.
+ *
+ * Hot path: this is called from every webhook worker on every processed event.
+ * Two requirements:
+ *
+ *   1. Publish to Redis pub/sub for in-process WS gateway fanout (sync, fast).
+ *   2. Dispatch to outbound webhook subscribers via the durable BullMQ
+ *      delivery queue (NOT inline fetch — that would block the worker and
+ *      provide no retry semantics).
+ *
+ * Design note (deliberate): this module DOES NOT swallow errors. If outbound
+ * dispatch fails to create delivery rows, we log + rethrow. Silent failure on
+ * event fanout is a class of bug that is impossible to catch in production
+ * without dedicated observability — we'd rather fail loudly and let the
+ * webhook worker retry the entire job (which is itself idempotent).
+ *
+ * The dependency on Prisma + the OutboundWebhookService is hoisted to module
+ * top-level so we don't pay the dynamic-import cost per event (~100ms x 100ev/s
+ * is unacceptable). The cycle was avoided by ensuring database.ts has no
+ * dependency on this file.
+ */
 import type { Redis } from 'ioredis';
 import { getRedisPublisher } from '../../config/redis.js';
+import { getPrisma } from '../../config/database.js';
+import { getLogger } from '../../config/logger.js';
 import { partnerLabel } from '../../domains/partners/partner.types.js';
+import { OutboundWebhookService } from '../../domains/outbound-webhooks/outbound-webhook.service.js';
 
 export const WS_CHANNEL = 'ws:analytics';
 
 /**
  * Discriminated union for every event the dashboard reacts to. Keep in sync
- * with `apps/web/src/lib/ws-events.ts` (codegen would be ideal — manually
- * mirrored for now, drift-checked in tests).
+ * with `apps/web/src/lib/types.ts` `WsEvent` (codegen would be ideal — manually
+ * mirrored for now; OpenAPI-driven codegen is in ROADMAP P2).
  */
 export type WsEvent =
   | {
@@ -70,30 +95,48 @@ export type WsEvent =
     }
   | { type: 'system.heartbeat'; at: string; serverTime: string };
 
+// Cached service instance — module-scoped to avoid per-event allocation.
+let outboundService: OutboundWebhookService | undefined;
+function getOutbound(): OutboundWebhookService {
+  if (!outboundService) outboundService = new OutboundWebhookService(getPrisma());
+  return outboundService;
+}
+
 /**
- * Publish a WebSocket event onto the Redis fanout channel.
- * The consumer-facing contract is `WsEvent`, but the producer side accepts
- * any object — we trust ourselves to construct the correct shape via
- * `withPartnerLabel` plus the union literal `type` field.
+ * Producer-side typing trade-off (intentional, documented):
+ *
+ * The consumer-facing wire contract is the `WsEvent` discriminated union above.
+ * On the producer side we accept `object` because TypeScript inference of
+ * literal `type: '…'` through the generic `withPartnerLabel<E>` helper
+ * widens to `string` and the union no longer narrows. Three options were
+ * considered:
+ *
+ *   (a) Strict input type `WsEvent` here — broke ~12 call sites with
+ *       inference-widening errors that needed `as const` everywhere.
+ *   (b) `<const E>` generic — works on TS 5.0+ but caused other inference
+ *       regressions in the helper chain.
+ *   (c) `object` here + producers self-disciplined via `withPartnerLabel`
+ *       (current).
+ *
+ * Trade-off accepted. A wire-format snapshot test in `tests/integration/`
+ * would pin the contract; deferred to P2 alongside OpenAPI emission.
  */
 export async function publishWsEvent(event: object, redis?: Redis): Promise<void> {
   const r = redis ?? getRedisPublisher();
   await r.publish(WS_CHANNEL, JSON.stringify(event));
 
-  // Fan out to outbound webhook subscribers (best-effort; failure here must
-  // not block the in-process WS publish).
-  void dispatchOutbound(event).catch(() => {});
-}
-
-async function dispatchOutbound(event: object): Promise<void> {
+  // Outbound webhook fanout. Errors here are LOGGED and RETHROWN — the calling
+  // webhook worker is responsible for retry semantics (BullMQ exponential
+  // backoff). Inline silencing was removed deliberately; see file header.
   const evt = event as { type?: string };
   if (!evt.type) return;
-  // Lazy import to avoid pulling Prisma into modules that only need WS.
-  const [{ getPrisma }, { OutboundWebhookService }] = await Promise.all([
-    import('../../config/database.js'),
-    import('../../domains/outbound-webhooks/outbound-webhook.service.js'),
-  ]);
-  await new OutboundWebhookService(getPrisma()).dispatch(evt.type, event);
+  try {
+    await getOutbound().dispatch(evt.type, event);
+  } catch (err) {
+    const log = getLogger();
+    log.error({ err, eventType: evt.type }, 'ws-publisher.outbound_dispatch_failed');
+    throw err;
+  }
 }
 
 /**

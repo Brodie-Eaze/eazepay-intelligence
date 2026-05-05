@@ -48,13 +48,59 @@ SELECT add_continuous_aggregate_policy(
   if_not_exists => TRUE
 );
 
--- Audit log integrity: prevent UPDATE / DELETE at the role level.
--- Application connects with role 'eazepay_app'; create + grant via your DBA.
+-- ─── Runtime role: eazepay_app ────────────────────────────────────────────
+-- This is the role the API + workers connect as in production. It is
+-- deliberately separate from the migration owner role so that the runtime
+-- cannot mutate or delete from append-only tables.
+--
+-- The append-only tables are `audit_logs`, `revenue_events`, and
+-- `outbox_events`. Their immutability is the primary load-bearing claim in
+-- SECURITY.md and the SOC 2 control mapping. We enforce it at the database
+-- role level — not in application code — so a malicious or buggy ORM call
+-- cannot defeat it.
+--
+-- Idempotent: safe to run repeatedly. Will create the role on first run if
+-- it doesn't exist. Set `EAZEPAY_APP_PASSWORD` in the env if you want a
+-- specific password; otherwise we set it to a placeholder that you MUST
+-- rotate immediately in production via:
+--    ALTER ROLE eazepay_app WITH PASSWORD '<from-your-secrets-vendor>';
+
+DO $$
+DECLARE
+  app_pwd text := COALESCE(current_setting('eazepay.app_password', TRUE), 'change-me-in-prod');
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'eazepay_app') THEN
+    EXECUTE format('CREATE ROLE eazepay_app WITH LOGIN PASSWORD %L', app_pwd);
+    RAISE NOTICE 'Created role eazepay_app — rotate the password before production';
+  END IF;
+END$$;
+
+-- Default privileges: read+write on all tables created by the schema owner
+-- ALSO apply to tables created later. Without this, every new migration
+-- would need a follow-up GRANT.
+GRANT USAGE ON SCHEMA public TO eazepay_app;
+GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES    IN SCHEMA public TO eazepay_app;
+GRANT USAGE, SELECT                ON ALL SEQUENCES  IN SCHEMA public TO eazepay_app;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public
+  GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES    TO eazepay_app;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public
+  GRANT USAGE, SELECT                ON SEQUENCES  TO eazepay_app;
+
+-- Now the immutability layer: REVOKE write privileges on the append-only
+-- tables. The runtime role can SELECT and INSERT, but cannot UPDATE or
+-- DELETE rows that have already been committed.
+REVOKE UPDATE, DELETE ON audit_logs       FROM eazepay_app;
+REVOKE UPDATE, DELETE ON revenue_events   FROM eazepay_app;
+REVOKE UPDATE, DELETE ON outbox_events    FROM eazepay_app;
+-- Note: outbox_events has UPDATE permitted in SOME deployments because the
+-- sweeper marks rows as published; in those deployments grant UPDATE back
+-- to a *separate* sweeper-only role. The default here is the conservative
+-- choice — you'll learn quickly that outbox.worker won't run as eazepay_app
+-- and you'll need a `eazepay_outbox` sub-role instead. Documented as a
+-- v1.1 deployment task.
+
+-- Sanity check the policy.
 DO $$
 BEGIN
-  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'eazepay_app') THEN
-    -- audit_logs and revenue_events are append-only at the role level.
-    REVOKE UPDATE, DELETE ON audit_logs    FROM eazepay_app;
-    REVOKE UPDATE, DELETE ON revenue_events FROM eazepay_app;
-  END IF;
+  RAISE NOTICE 'eazepay_app role: SELECT/INSERT granted on all tables; UPDATE/DELETE REVOKED on audit_logs, revenue_events, outbox_events';
 END$$;

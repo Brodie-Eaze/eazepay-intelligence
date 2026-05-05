@@ -1,24 +1,38 @@
 /**
- * Webhook signature verification + idempotency guard.
+ * Webhook signature verification + durable idempotency guard.
  *
  * SOC 2 control mapping:
- *   CC6.1 (logical access)         — only signed traffic reaches the queue
- *   CC6.6 (external threat)         — HMAC + timestamp + idempotency together
- *                                     defeat both spoofing and replay
- *   CC7.3 (security event eval)     — every receipt + outcome audit-logged
+ *   CC6.1 (logical access)      — only signed traffic reaches the queue
+ *   CC6.6 (external threat)     — HMAC + timestamp + idempotency together
+ *                                 defeat both spoofing and replay
+ *   CC7.3 (security event eval) — every receipt + outcome audit-logged
  *
- * Order of operations (intentional):
+ * Replay protection has TWO layers:
+ *   1. Hot path: Redis SETNX cache (`idem:{source}:{key}`, 24h TTL).
+ *      Sub-millisecond — protects against burst replays + most retry
+ *      windows.
+ *   2. Cold fallback: Postgres unique constraint on
+ *      (source, idempotency_key) in `webhook_events`. If the Redis cache
+ *      misses (eviction, > 24h vendor retry, Redis flush) the DB throws
+ *      P2002 on insert and we treat that as "already seen". Durable
+ *      forever.
+ *
+ * The DB layer is the source of truth; Redis is the cache. This is the
+ * pattern Stripe uses for the same problem.
+ *
+ * Order of operations:
  *   1. Header presence (sig, ts, idempotency-key)
- *   2. Timestamp tolerance ±300s (caps replay window even on stolen payloads)
- *   3. Constant-time HMAC SHA-256 compare over `${ts}.${rawBody}` with the
- *      per-source secret
- *   4. Redis SETNX dedupe — replays return the original 202 verbatim
- *   5. Durable persist of the WebhookEvent row (audit trail) BEFORE we ack
- *   6. Continue to the route handler, which enqueues + replies 202
+ *   2. Timestamp tolerance ±300s
+ *   3. Constant-time HMAC SHA-256 compare over `${ts}.${rawBody}`
+ *   4. Redis SETNX (hot replay short-circuit)
+ *   5. Postgres upsert on (source, key) — unique-violation surfaces as replay
+ *   6. Continue to the route handler, which writes the outbox row in a tx
  *
  * Failure modes:
- *   - Bad signature → 401 INVALID_SIGNATURE, audit row, request dropped
- *   - Replay (same idempotency-key in 24h window) → 202 with cached body
+ *   - Bad signature           → 401 INVALID_SIGNATURE
+ *   - Replay (Redis hit)      → 202 with cached body
+ *   - Replay (Postgres hit)   → 202 with current event row's metadata
+ *   - First-time event        → preHandler returns; route handler completes
  */
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import type { FastifyRequest, FastifyReply, preHandlerHookHandler } from 'fastify';
@@ -82,8 +96,7 @@ export function verifyWebhookSignature(source: WebhookSource): preHandlerHookHan
     if (skew > TOLERANCE_SECONDS) throw errors.invalidSignature();
 
     // Compute expected signature over `${ts}.${rawBody}`.
-    const raw =
-      typeof req.body === 'string' ? req.body : JSON.stringify(req.body ?? {});
+    const raw = typeof req.body === 'string' ? req.body : JSON.stringify(req.body ?? {});
     const data = `${tsStr}.${raw}`;
     const expected = createHmac('sha256', secretFor(source)).update(data).digest();
     let provided: Buffer;
@@ -96,21 +109,35 @@ export function verifyWebhookSignature(source: WebhookSource): preHandlerHookHan
       throw errors.invalidSignature();
     }
 
-    // Idempotency: short-circuit replays at the edge.
+    // Idempotency layer 1: hot Redis cache.
     const redis = getRedis();
     const cacheKey = `idem:${source}:${keyStr}`;
-    const existing = await redis.get(cacheKey);
-    if (existing) {
-      const cached = JSON.parse(existing) as { status: number; body: unknown };
-      reply.status(cached.status).send(cached.body);
-      return; // halts further preHandlers + main handler
+    const cached = await redis.get(cacheKey);
+    if (cached) {
+      const c = JSON.parse(cached) as { status: number; body: unknown };
+      reply.status(c.status).send(c.body);
+      return;
     }
 
-    // Persist receipt durably BEFORE we ack — gives us a complete inbound audit trail.
-    const event = await getPrisma().webhookEvent.upsert({
+    // Idempotency layer 2: durable Postgres constraint.
+    // findUnique on (source, key) — if it exists, this is a replay that
+    // outlived the Redis TTL or evaded the cache.
+    const prisma = getPrisma();
+    const prior = await prisma.webhookEvent.findUnique({
       where: { source_idempotencyKey: { source, idempotencyKey: keyStr } },
-      update: {},
-      create: {
+    });
+    if (prior) {
+      // Re-warm Redis with a 202 ack so future hot-path replays are sub-ms.
+      const body = { accepted: true, eventId: prior.id, replayed: true };
+      await redis.setex(cacheKey, 86_400, JSON.stringify({ status: 202, body }));
+      reply.status(202).send(body);
+      return;
+    }
+
+    // First-time event: durably persist BEFORE we ack so the outbox handler
+    // (in the route) can attach to this row in the same transaction.
+    const event = await prisma.webhookEvent.create({
+      data: {
         id: uuidv7(),
         source,
         eventType: deriveEventTypeFromUrl(req.url),

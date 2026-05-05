@@ -1,6 +1,7 @@
-import { createHash, randomBytes } from 'node:crypto';
+import { createHmac, randomBytes } from 'node:crypto';
 import type { PrismaClient, RefreshToken, User } from '@prisma/client';
 import { v7 as uuidv7 } from 'uuid';
+import { getEnv } from '../../config/env.js';
 
 export interface IAuthRepository {
   findUserByEmail(email: string): Promise<User | null>;
@@ -27,8 +28,23 @@ export interface IAuthRepository {
 export class AuthRepository implements IAuthRepository {
   constructor(private readonly prisma: PrismaClient) {}
 
+  /**
+   * Hash a refresh token for at-rest storage.
+   *
+   * HMAC-SHA-256 keyed with `JWT_REFRESH_SECRET`, not bare SHA-256. The raw
+   * token is 48 random bytes, so SHA-256 alone would already be cryptographically
+   * sound (no length-extension exposure on a fixed-length input), but HMAC:
+   *
+   *   - removes the theoretical length-extension class entirely
+   *   - couples the index to the deployment's secret (an attacker with
+   *     read-only DB access cannot pre-compute hashes from raw tokens
+   *     without also obtaining the env)
+   *   - costs nothing — same primitive, one extra parameter
+   *
+   * Standard pattern at financial platforms; cheap correctness win.
+   */
   static hashRefresh(raw: string): string {
-    return createHash('sha256').update(raw).digest('hex');
+    return createHmac('sha256', getEnv().JWT_REFRESH_SECRET).update(raw).digest('hex');
   }
 
   static newRawRefreshToken(): string {

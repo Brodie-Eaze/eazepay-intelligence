@@ -22,7 +22,8 @@
     "worker:aggregation": "tsx src/workers/aggregation.worker.ts",
     "worker:revenue": "tsx src/workers/revenue.worker.ts",
     "worker:export": "tsx src/workers/export.worker.ts",
-    "worker:webhook-delivery": "tsx src/workers/webhook-delivery.worker.ts"
+    "worker:webhook-delivery": "tsx src/workers/webhook-delivery.worker.ts",
+    "worker:outbox": "tsx src/workers/outbox.worker.ts"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"

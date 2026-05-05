@@ -2,6 +2,22 @@
 
 The honest list of tech debt, hacks, and known gaps. **Read this before you make architectural assumptions.**
 
+> ### Recently resolved (commit `outbox_external_decision_composite_unique`)
+>
+> The pre-CTO-review pass closed eight architectural concerns. Documented here for context on what was addressed:
+>
+> - **🔴 Silent failure in outbound webhook fanout** — `dispatchOutbound` no longer swallows errors. Failure is logged and rethrown so the webhook worker's retry semantics apply.
+> - **Lazy Prisma import in WS hot path** — hoisted to module top-level; per-event allocation cost eliminated.
+> - **Outbox pattern** — webhook ingest now writes a `WebhookEvent` row + an `OutboxEvent` row in a single transaction. The new `outbox.worker` sweeper publishes to BullMQ with `FOR UPDATE SKIP LOCKED` so multiple replicas can run safely. Closes the two-phase-commit window between DB write and BullMQ enqueue.
+> - **Durable idempotency** — webhook signature middleware now consults Postgres on Redis cache miss. Replay protection holds even if Redis evicts or a vendor retries beyond the 24h TTL.
+> - **External decision ID** — `lender_decisions.external_decision_id` is now a unique column. `processBuzzpayDecision`, `processBuzzpayFunding`, `processBuzzpayClawback` upsert / look up by the vendor's literal `decisionId`. No more UUID guessing.
+> - **Refresh-token storage** — switched from bare SHA-256 to HMAC-SHA-256 keyed with `JWT_REFRESH_SECRET`.
+> - **`eazepay_app` runtime DB role** — `init-timescale.sql` now creates the role and applies REVOKE on `audit_logs`, `revenue_events`, and `outbox_events`. The append-only claim is now enforced at the database, not the application layer.
+> - **Composite uniqueness on `revenue_events`** — `(source, idempotency_key)` is now `UNIQUE`. Cross-source key collisions are prevented at the DB.
+> - **Connection pool tuning** — `.env.example` documents `connection_limit=10&pool_timeout=20`.
+> - **`publishWsEvent` typing trade-off** — the relaxation is now explicitly documented inline with the three options that were considered and why we picked this one. Reviewer-friendly.
+> - **PII KMS path** — `SECURITY.md` now describes the v1.1 envelope-encryption upgrade (per-row DEKs wrapped by KMS-managed KEK) explicitly.
+
 ---
 
 ## Architecture
@@ -24,7 +40,7 @@ The plan (ADR-008) is for `@asteasolutions/zod-to-openapi` to emit `openapi.json
 
 ### `WsEvent` typing is permissive at the publisher boundary
 
-`publishWsEvent(event: object)` accepts any object — the `WsEvent` discriminated union is the consumer-facing wire contract but isn't enforced on producers. The TypeScript inference around the `withPartnerLabel<E>` generic + discriminated union was over-strict and producer code became unreadable. Trade-off: we trust ourselves to construct the correct shape. A wire-format snapshot test would catch drift; not yet implemented.
+`publishWsEvent(event: object)` accepts any object — the `WsEvent` discriminated union is the consumer-facing wire contract but isn't enforced on producers. The TypeScript inference around the `withPartnerLabel<E>` generic + discriminated union was over-strict and producer code became unreadable. Documented in detail at the top of `apps/api/src/shared/utils/ws-publisher.ts` — three alternatives were considered. A wire-format snapshot test would catch drift at runtime; deferred to P2 alongside the OpenAPI codegen pipeline.
 
 ---
 

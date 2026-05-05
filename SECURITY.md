@@ -45,6 +45,35 @@ PII fields (`consumerName`, `consumerEmail`, `consumerPhone`):
 - **For display:** masked by default in `/applications` responses (`b****@example.com`); raw values returned only by `/applications/:id/pii` (admin/operator only, denied under investor scope).
 - **In logs:** Pino redacts paths matching `*.consumerName | *.consumerEmail | *.consumerPhone | *.passwordHash | *.password | *.mfaSecret | *.tokenHash | …`.
 
+### Key management — current state and the v1.1 envelope upgrade
+
+**Today (v0.1):** `PII_ENCRYPTION_KEY` is loaded once at process boot from the
+environment. Every PII row in the corpus is encrypted under the same KEK
+(key-encryption key, version 1). The 1-byte version prefix on every ciphertext
+envelope means we can rotate to a v2 KEK without re-encrypting the corpus —
+new writes use v2, reads honour the per-row version byte, and we let v1
+ciphertext age out naturally.
+
+**Honest gap:** there is no per-row data-encryption key (DEK). The whole
+corpus shares a single KEK. If that KEK is exfiltrated, the entire historical
+PII set is compromised at once.
+
+**v1.1 hardening (envelope encryption):**
+
+1. Each row gets a freshly-generated per-row 32-byte DEK
+2. The DEK encrypts the PII; the DEK itself is encrypted by the KEK and stored
+   alongside the ciphertext
+3. The KEK lives in AWS KMS / 1Password / GCP KMS — never in the application
+   environment, never on disk
+4. Rotation rotates the KEK only; DEKs are touched lazily on next write to a
+   given row, or eagerly via a backfill job
+
+This is the standard pattern at financial platforms that hold PII at scale
+(Stripe, Plaid, Block). It is documented in `docs/ROADMAP.md` P1 alongside
+the secrets-vendor decision. The architectural placeholder is already in
+`encryption.ts`'s `KEY_VERSIONS` map — extending it from "version → KEK" to
+"version → KMS key reference" is mechanical when KMS lands.
+
 ## Secret strategy
 
 | Secret                                | Format                   | Rotation                                                                                 |

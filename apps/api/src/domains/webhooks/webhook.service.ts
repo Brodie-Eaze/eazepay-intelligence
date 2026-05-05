@@ -107,17 +107,27 @@ export class WebhookProcessor {
         consumerPhoneCiphertext: phone.ciphertext,
         consumerPhoneHash: phone.hash,
         creditScore: data.enrichment.creditScore ?? null,
-        availableCredit: data.enrichment.availableCredit ? new Prisma.Decimal(data.enrichment.availableCredit) : null,
-        notedAnnualIncome: data.enrichment.notedAnnualIncome ? new Prisma.Decimal(data.enrichment.notedAnnualIncome) : null,
+        availableCredit: data.enrichment.availableCredit
+          ? new Prisma.Decimal(data.enrichment.availableCredit)
+          : null,
+        notedAnnualIncome: data.enrichment.notedAnnualIncome
+          ? new Prisma.Decimal(data.enrichment.notedAnnualIncome)
+          : null,
         bankStatementsProvided: data.enrichment.bankStatementsProvided ?? false,
         merchantPreapproval: data.enrichment.merchantPreapproval ?? false,
         merchantPreapprovalAmount: data.enrichment.merchantPreapprovalAmount
-          ? new Prisma.Decimal(data.enrichment.merchantPreapprovalAmount) : null,
+          ? new Prisma.Decimal(data.enrichment.merchantPreapprovalAmount)
+          : null,
         consumerPreapproval: data.enrichment.consumerPreapproval ?? false,
         consumerPreapprovalAmount: data.enrichment.consumerPreapprovalAmount
-          ? new Prisma.Decimal(data.enrichment.consumerPreapprovalAmount) : null,
-        fundingEstimate: data.enrichment.fundingEstimate ? new Prisma.Decimal(data.enrichment.fundingEstimate) : null,
-        propensityScore: data.enrichment.propensityScore ? new Prisma.Decimal(data.enrichment.propensityScore) : null,
+          ? new Prisma.Decimal(data.enrichment.consumerPreapprovalAmount)
+          : null,
+        fundingEstimate: data.enrichment.fundingEstimate
+          ? new Prisma.Decimal(data.enrichment.fundingEstimate)
+          : null,
+        propensityScore: data.enrichment.propensityScore
+          ? new Prisma.Decimal(data.enrichment.propensityScore)
+          : null,
         openLinesOfCredit: data.enrichment.openLinesOfCredit ?? null,
         status: data.status,
         submittedAt: data.submittedAt ? new Date(data.submittedAt) : new Date(),
@@ -144,11 +154,15 @@ export class WebhookProcessor {
     });
     if (!application) throw errors.notFound('Application', data.externalApplicationId);
 
-    const id = uuidv7();
+    // Idempotency: vendor's `decisionId` is the canonical key. We store it on
+    // `external_decision_id` (UNIQUE), and upsert against it. This prevents a
+    // retried webhook from creating a second lender_decisions row even if the
+    // earlier processing attempt partially succeeded before crashing.
     const decision = await this.prisma.lenderDecision.upsert({
-      where: { id: data.decisionId.startsWith('uuid:') ? data.decisionId.slice(5) : id },
+      where: { externalDecisionId: data.decisionId },
       create: {
-        id,
+        id: uuidv7(),
+        externalDecisionId: data.decisionId,
         applicationId: application.id,
         partnerId: application.partnerId,
         lenderName: data.lenderName,
@@ -202,7 +216,11 @@ export class WebhookProcessor {
 
   private async processBuzzpayFunding(job: ProcessJobInput): Promise<void> {
     const data = BuzzpayFundingWebhookSchema.parse(job.payload);
-    const decision = await this.prisma.lenderDecision.findUnique({ where: { id: data.decisionId } });
+    // Look up via vendor's externalDecisionId — never via our internal UUID,
+    // which the vendor doesn't know about.
+    const decision = await this.prisma.lenderDecision.findUnique({
+      where: { externalDecisionId: data.decisionId },
+    });
     if (!decision) throw errors.notFound('LenderDecision', data.decisionId);
 
     await this.prisma.lenderDecision.update({
@@ -256,7 +274,9 @@ export class WebhookProcessor {
 
   private async processBuzzpayClawback(job: ProcessJobInput): Promise<void> {
     const data = BuzzpayClawbackWebhookSchema.parse(job.payload);
-    const decision = await this.prisma.lenderDecision.findUnique({ where: { id: data.decisionId } });
+    const decision = await this.prisma.lenderDecision.findUnique({
+      where: { externalDecisionId: data.decisionId },
+    });
     if (!decision) throw errors.notFound('LenderDecision', data.decisionId);
     const amount = new Prisma.Decimal(data.amount).neg(); // negative event
     await this.recordRevenue({
@@ -281,7 +301,9 @@ export class WebhookProcessor {
     const data = PixieUsageWebhookSchema.parse(job.payload);
     const env = getEnv();
     const date = new Date(data.date);
-    const dayStart = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
+    const dayStart = new Date(
+      Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()),
+    );
     const dayEnd = new Date(dayStart.getTime() + 86_399_999);
 
     for (const p of data.partners) {
@@ -305,7 +327,13 @@ export class WebhookProcessor {
       const cumulative = (cumulativeRow._sum.dataPullsThisPeriod ?? 0) + p.pulls;
 
       await this.prisma.pixieMetric.upsert({
-        where: { periodStart_partnerId_period: { periodStart: dayStart, partnerId: partner.id, period: 'DAILY' } },
+        where: {
+          periodStart_partnerId_period: {
+            periodStart: dayStart,
+            partnerId: partner.id,
+            period: 'DAILY',
+          },
+        },
         create: {
           partnerId: partner.id,
           period: 'DAILY',
