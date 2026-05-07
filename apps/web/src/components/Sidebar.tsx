@@ -40,6 +40,7 @@ import {
   Tag,
   Webhook as WebhookIcon,
   Key,
+  Briefcase,
   type LucideIcon,
 } from 'lucide-react';
 
@@ -64,6 +65,10 @@ const GROUPS: NavGroup[] = [
       { href: '/search', label: 'Search', icon: Search },
       { href: '/alerts', label: 'Alerts', icon: Bell, operatorOnly: true },
     ],
+  },
+  {
+    label: 'Portfolio',
+    items: [{ href: '/portfolio', label: 'Holdco view', icon: Briefcase }],
   },
   {
     label: 'People',
