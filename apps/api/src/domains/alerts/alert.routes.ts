@@ -1,10 +1,18 @@
 /**
  * Alert rules + open alerts + notification channels.
  *
- * `AlertRule` defines a declarative metric query + threshold + window. The
- * evaluation worker (not yet running on a schedule — see ROADMAP) iterates
- * the rules, queries the live data, and creates `Alert` rows when conditions
- * fire. Operators acknowledge / snooze / resolve from the UI.
+ * `AlertRule` defines a declarative metric query + threshold + window
+ * (DSL: `apps/api/src/domains/alerts/alert.evaluator.ts`).
+ *
+ * The evaluation loop runs as a separate process: `pnpm --filter api
+ * worker:alert`. It polls every ALERT_POLL_INTERVAL_MS (default 30s),
+ * evaluates each active rule against its windowed metric, and applies
+ * the state machine: new HIT → create OPEN Alert + dispatch; rule went
+ * COOL → auto-RESOLVED. Per-rule cadence + cross-replica locking via
+ * Redis prevents stampedes and double-fires.
+ *
+ * Operators acknowledge / snooze / resolve from the UI; those transitions
+ * are below.
  */
 import type { FastifyInstance } from 'fastify';
 import { v7 as uuidv7 } from 'uuid';

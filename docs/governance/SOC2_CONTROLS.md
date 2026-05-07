@@ -213,6 +213,46 @@ Pass-the-pen-test pass. Each change made a specific control evidenceable.
 - **Long-running worker role.** `eazepay_worker_long` (5-min statement_timeout) for exports + backfills, defined in `init-timescale.sql`. Same UPDATE/DELETE REVOKE on append-only tables as the API role. `getPrismaLong()` accessor wired into `export.worker.ts` + `aggregation.worker.ts`.
 - **Prisma metrics → Prometheus.** `GET /metrics` returns the writer + reader + long pool / query metrics, namespaced by `db` label. Enables alerting on `pool_busy / pool_open > 0.8` and slow-query rates.
 - **PgBouncer-ready connection mode.** Documented at `docs/COMPUTE_LIMITS.md#pgbouncer-mode`. `&pgbouncer=true` on the connection string disables prepared statements for transaction-pool safety.
+
+---
+
+## Appendix D — Alert engine (added 2026-05-07)
+
+The alert rule store has existed since v0.1.0 with a CRUD UI on `/alerts`; until this pass, the evaluation worker did not exist and rules silently never fired. That gap is closed.
+
+**Evaluator** (`apps/api/src/domains/alerts/alert.evaluator.ts`):
+
+- Closed declarative DSL — no arbitrary SQL. `RuleQuerySchema` is a Zod discriminated union over a finite set of metrics: `webhook_failure_rate`, `webhook_event_count`, `failed_login_count`, `application_count`, `revenue_amount`, `pii_access_count`, `ingestion_rejected_count`, `replication_lag_ms`.
+- Each metric maps to a known, indexed query against the read replica with `windowMinutes` as lookback.
+- New metrics are one entry in the union plus a query — adding the next metric is a 10-line PR.
+
+**Worker** (`apps/api/src/workers/alert.worker.ts`, `pnpm --filter api worker:alert`):
+
+- Polls every `ALERT_POLL_INTERVAL_MS` (default 30s).
+- Per-rule cadence floor: a rule is re-evaluated no more often than `windowMinutes/2` (a 60-min rule does not double-fire from a 30s poll). Tracked in Redis at `alert:last:<id>`.
+- Cross-replica SETNX lock at `alert:lock:<id>` so multiple workers don't stampede.
+- State machine:
+  - HIT && no open alert → create OPEN Alert, dispatch to channel
+  - HIT && open exists → no-op (no double-fire)
+  - COOL && open exists → mark RESOLVED, audit `ALERT_RESOLVED`
+  - COOL && no open → no-op
+
+**Dispatcher** (`apps/api/src/domains/alerts/alert.dispatcher.ts`):
+
+- On every fire, writes `ALERT_FIRED` audit row with rule, channel, severity, and dispatch outcome (CC4.1, CC7.3).
+- IN_APP — no-op (the Alert row IS the surface).
+- WEBHOOK — flagged for OutboundWebhookService delivery (HMAC-signed, retried).
+- EMAIL / SLACK — stubbed; vendor integrations deferred to v1.1. The audit row records `dispatched: false, reason: integration_pending`.
+
+**Tests** (`tests/unit/alert-engine.test.ts`, 12 cases):
+
+- Each metric → query mapping (failure rate, login count, revenue, comparators)
+- Cycle state machine (fire on transition, no double-fire while open, auto-resolve when cool, malformed rule counted as error not crash, cadence skip honoured)
+
+**Audit actions added**: `ALERT_FIRED`, `ALERT_RESOLVED`.
+
+This closes one of the deal-blockers from Appendix A — the platform demonstrably does what its UI promises.
+
 - **Role-level connection safety** in `init-timescale.sql`. The `eazepay_app` role inherits `statement_timeout=30s`, `idle_in_transaction_session_timeout=10s`, `lock_timeout=5s`. Application code cannot opt out — every connection inherits these.
 - **Slow-query log** via Prisma `$on('query')`. Anything ≥ `DATABASE_SLOW_QUERY_LOG_MS` (default 500ms) emits at WARN with full query text. Pipe to your log aggregator; alert on sustained increases.
 - **Connection pool bound** via `DATABASE_URL?connection_limit=N`. Documented sizing: total ≤ Postgres `max_connections − 20%`. PgBouncer is the path forward when totals exceed.
