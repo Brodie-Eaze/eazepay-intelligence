@@ -24,7 +24,8 @@
     "worker:export": "tsx src/workers/export.worker.ts",
     "worker:webhook-delivery": "tsx src/workers/webhook-delivery.worker.ts",
     "worker:outbox": "tsx src/workers/outbox.worker.ts",
-    "worker:alert": "tsx src/workers/alert.worker.ts"
+    "worker:alert": "tsx src/workers/alert.worker.ts",
+    "worker:lifecycle": "tsx src/workers/lifecycle.worker.ts"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"

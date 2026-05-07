@@ -344,6 +344,7 @@ model User {
   scheduledReports     ScheduledReport[]
   casesOpened          Case[]                @relation("CaseOpenedBy")
   casesAssigned        Case[]                @relation("CaseAssignee")
+  rtbfRequests         RtbfRequest[]         @relation("RtbfRequestedBy")
 
   @@map("users")
 }
@@ -595,6 +596,46 @@ model Alert {
   @@index([state, firedAt(sort: Desc)])
   @@index([ruleId, firedAt(sort: Desc)])
   @@map("alerts")
+}
+
+// ─── Right-to-be-forgotten (GDPR Art. 17 / APP) ────────────────────────────
+// One row per data-subject erasure request. The lifecycle worker processes
+// PENDING rows: finds every Application carrying the customer's email hash,
+// overwrites the encrypted PII columns with zeros, and stamps COMPLETED.
+//
+// Why we keep the rows after scrub: lender_decisions, revenue_events, and
+// audit_logs reference applications. Hard-deleting an application would
+// orphan a financial record (we have a 7-year regulatory retention on
+// those). Cryptoshred + scrub + audit is the GDPR-aligned compromise: the
+// data subject's PII is irrecoverable, the financial trail survives.
+
+enum RtbfRequestStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
+model RtbfRequest {
+  id              String            @id @db.Uuid
+  // Hash of the consumer's email. Matches Application.consumerEmailHash so
+  // the worker can locate every related row.
+  emailHash       Bytes             @map("email_hash")
+  status          RtbfRequestStatus @default(PENDING)
+  // Free-text reason from the partner / data subject (kept for audit).
+  reason          String?
+  requestedById   String            @map("requested_by_id") @db.Uuid
+  requestedAt     DateTime          @default(now()) @map("requested_at") @db.Timestamptz(6)
+  startedAt       DateTime?         @map("started_at") @db.Timestamptz(6)
+  completedAt     DateTime?         @map("completed_at") @db.Timestamptz(6)
+  applicationsScrubbed Int          @default(0) @map("applications_scrubbed")
+  error           String?
+
+  requestedBy User @relation("RtbfRequestedBy", fields: [requestedById], references: [id])
+
+  @@index([status, requestedAt(sort: Desc)])
+  @@index([emailHash])
+  @@map("rtbf_requests")
 }
 
 // ─── Notes + tags (cross-resource) ─────────────────────────────────────────

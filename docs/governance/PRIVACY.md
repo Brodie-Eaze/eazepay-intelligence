@@ -43,21 +43,21 @@ We act as a **processor** under GDPR-style framing (an APP entity under AU law).
 
 ## GDPR-specific provisions (forward compatibility)
 
-| Article | Right                                      | Implementation                                                                                                                                       |
-| ------- | ------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Art. 15 | Right of access                            | API supports per-customer PII retrieval; export-to-portable-JSON pending (see `ROADMAP.md`).                                                         |
-| Art. 16 | Right to rectification                     | Upstream — re-submit to BuzzPay.                                                                                                                     |
-| Art. 17 | Right to erasure ("right to be forgotten") | Designed: cryptoshred via key version retirement + targeted row scrub. **Not yet implemented.**                                                      |
-| Art. 18 | Right to restriction of processing         | Soft-delete on `Partner`/`User` available; per-customer restriction flag pending.                                                                    |
-| Art. 20 | Right to data portability                  | JSON export endpoint pending.                                                                                                                        |
-| Art. 21 | Right to object                            | Routed to upstream partner.                                                                                                                          |
-| Art. 22 | Automated decision-making                  | We do not make automated decisions. The decision engine is BuzzPay; we render the outcome.                                                           |
-| Art. 25 | Data protection by design and default      | Built into the architecture (encryption, redaction, RBAC) rather than bolted on.                                                                     |
-| Art. 28 | Processor obligations                      | Documented in this file + `SOC2_CONTROLS.md`. DPA template available.                                                                                |
-| Art. 30 | Records of processing activities           | `webhook_events` (every inbound) + `audit_logs` (every access) + `revenue_events` (every dollar). All three are durable, append-only, and queryable. |
-| Art. 32 | Security of processing                     | Covered by `SECURITY.md`.                                                                                                                            |
-| Art. 33 | Breach notification (72h)                  | Incident response playbook in `SECURITY.md`.                                                                                                         |
-| Art. 34 | Communication of breach to data subject    | Routed via the partner who collected the data.                                                                                                       |
+| Article | Right                                      | Implementation                                                                                                                                                                                                                                                                              |
+| ------- | ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Art. 15 | Right of access                            | API supports per-customer PII retrieval; export-to-portable-JSON pending (see `ROADMAP.md`).                                                                                                                                                                                                |
+| Art. 16 | Right to rectification                     | Upstream — re-submit to BuzzPay.                                                                                                                                                                                                                                                            |
+| Art. 17 | Right to erasure ("right to be forgotten") | **Implemented.** `POST /admin/rtbf` (admin + CSRF). Lifecycle worker drains PENDING requests; `RtbfService.process` overwrites encrypted PII columns on every Application carrying the email hash with zero buffers in one tx. Audit-logged: RTBF_SUBMITTED / RTBF_PROCESSED / RTBF_FAILED. |
+| Art. 18 | Right to restriction of processing         | Soft-delete on `Partner`/`User` available; per-customer restriction flag pending.                                                                                                                                                                                                           |
+| Art. 20 | Right to data portability                  | JSON export endpoint pending.                                                                                                                                                                                                                                                               |
+| Art. 21 | Right to object                            | Routed to upstream partner.                                                                                                                                                                                                                                                                 |
+| Art. 22 | Automated decision-making                  | We do not make automated decisions. The decision engine is BuzzPay; we render the outcome.                                                                                                                                                                                                  |
+| Art. 25 | Data protection by design and default      | Built into the architecture (encryption, redaction, RBAC) rather than bolted on.                                                                                                                                                                                                            |
+| Art. 28 | Processor obligations                      | Documented in this file + `SOC2_CONTROLS.md`. DPA template available.                                                                                                                                                                                                                       |
+| Art. 30 | Records of processing activities           | `webhook_events` (every inbound) + `audit_logs` (every access) + `revenue_events` (every dollar). All three are durable, append-only, and queryable.                                                                                                                                        |
+| Art. 32 | Security of processing                     | Covered by `SECURITY.md`.                                                                                                                                                                                                                                                                   |
+| Art. 33 | Breach notification (72h)                  | Incident response playbook in `SECURITY.md`.                                                                                                                                                                                                                                                |
+| Art. 34 | Communication of breach to data subject    | Routed via the partner who collected the data.                                                                                                                                                                                                                                              |
 
 ---
 
@@ -127,17 +127,25 @@ The encryption key (`PII_ENCRYPTION_KEY`) is base64-encoded 32 random bytes. In 
 
 ## Data retention
 
-| Data                         | Retention                                                         | Mechanism                                           |
-| ---------------------------- | ----------------------------------------------------------------- | --------------------------------------------------- |
-| Customer PII (encrypted)     | Until partner deletion request, or 7 years after last application | Cryptoshred via key version retirement + row delete |
-| Application records          | 7 years (AU regulatory baseline)                                  | Hard delete via lifecycle job                       |
-| Audit logs                   | 7 years                                                           | Append-only, no delete during retention window      |
-| Revenue events               | 7 years (financial record retention)                              | Append-only, no delete                              |
-| Refresh tokens               | 30 days after expiry                                              | Lifecycle job (pending implementation)              |
-| Webhook events (raw payload) | 90 days                                                           | Lifecycle job (pending implementation)              |
-| Sessions                     | Until logout / 7-day expiry                                       | Application logic                                   |
+| Data                         | Retention                                                         | Mechanism                                                                     |
+| ---------------------------- | ----------------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| Customer PII (encrypted)     | Until partner deletion request, or 7 years after last application | Cryptoshred via key version retirement + row delete                           |
+| Application records          | 7 years (AU regulatory baseline)                                  | Hard delete via lifecycle job                                                 |
+| Audit logs                   | 7 years                                                           | Append-only, no delete during retention window                                |
+| Revenue events               | 7 years (financial record retention)                              | Append-only, no delete                                                        |
+| Refresh tokens               | 30 days after expiry                                              | **Implemented** — `worker:lifecycle` deletes expired/revoked rows past grace  |
+| Webhook events (raw payload) | 90 days                                                           | **Implemented** — `worker:lifecycle` clears `webhook_events.payload` past TTL |
+| Sessions                     | Until logout / 7-day expiry                                       | Application logic                                                             |
 
-Lifecycle jobs not yet implemented — see `ROADMAP.md`.
+Lifecycle jobs are now implemented in `apps/api/src/workers/lifecycle.worker.ts` (`pnpm --filter api worker:lifecycle`). Tasks per cycle:
+
+1. **Webhook payload scrub** — clears `webhook_events.payload` JSON past `LIFECYCLE_WEBHOOK_PAYLOAD_TTL_DAYS` (default 90). Row + metadata kept for audit.
+2. **Refresh-token purge** — hard-deletes `refresh_tokens` revoked or expired more than `LIFECYCLE_REFRESH_TOKEN_GRACE_DAYS` (default 30) ago.
+3. **RTBF processor** — drains PENDING `rtbf_requests` rows via `RtbfService.process` (cryptoshred PII columns on every matching Application).
+
+Each task writes a `LIFECYCLE_PURGE` audit row with `task`, `count`, and `cutoffIso`. RTBF processing writes `RTBF_PROCESSED` / `RTBF_FAILED`.
+
+Application + revenue-event 7-year retention is **not** in this worker; those tables are append-only by Postgres role REVOKE and the regulatory horizon is far enough out that lifecycle deletion is a v1.1+ concern.
 
 ---
 

@@ -49,6 +49,7 @@ import { registerAlertRoutes } from './domains/alerts/alert.routes.js';
 import { registerScheduledReportRoutes } from './domains/scheduled-reports/scheduled-report.routes.js';
 import { registerPortfolioRoutes } from './domains/portfolio/portfolio.routes.js';
 import { registerIngestionRoutes } from './domains/ingestion/ingestion.routes.js';
+import { registerRtbfRoutes } from './domains/rtbf/rtbf.routes.js';
 import { registerAnalyticsWebSocket } from './websocket/analytics.gateway.js';
 
 /**
@@ -252,6 +253,7 @@ export async function buildServer(): Promise<FastifyInstance> {
       await registerScheduledReportRoutes(instance);
       await registerPortfolioRoutes(instance);
       await registerIngestionRoutes(instance);
+      await registerRtbfRoutes(instance);
     },
     { prefix: '/api/v1' },
   );
