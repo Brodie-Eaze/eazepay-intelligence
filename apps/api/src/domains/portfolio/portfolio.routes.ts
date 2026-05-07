@@ -4,60 +4,34 @@
  * Two halves: a READ surface (used by the UI) and an INGESTION surface
  * (used by devs and the eventual ETL workers to push real silo data).
  *
+ * v0 was fixture-backed in-memory; this is the durable Prisma-backed
+ * implementation. Reads come from `portfolio_*` tables via
+ * `PortfolioRepository`; writes upsert / replace-set on those tables.
+ *
  * Security model:
  *   - Reads behind requireAuth.
- *   - Writes behind requireAuth + csrfGuard + requireRole('ADMIN'). When the
- *     PORTFOLIO_OPERATOR role lands, swap ADMIN for PORTFOLIO_OPERATOR.
+ *   - Writes behind requireAuth + csrfGuard + requireRole('ADMIN').
+ *     Swap ADMIN for PORTFOLIO_OPERATOR when that role lands.
  *   - Every financial deep-dive read writes a PORTFOLIO_FINANCIALS_ACCESSED
  *     audit row (CC7.3). Every ingestion call writes a PORTFOLIO_DATA_INGESTED
  *     row tagged with surface + counts.
- *   - No PII, but financials are RESTRICTED data. Don't echo payloads into
- *     request logs (Fastify redaction config covers this globally).
- *
- * Read precedence: pushed real data > deterministic mock generator. So the
- * moment a dev hits POST /pnl with real data, the UI surfaces it without any
- * code change. When the persistence layer lands, replace the in-memory store
- * in portfolio.fixtures.ts with Prisma calls — the route layer doesn't change.
+ *   - Financials are RESTRICTED data — Fastify redaction config strips
+ *     payloads from request logs.
  */
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
+import { PortfolioBusinessStatus } from '@prisma/client';
+import { getPrismaWriter, getPrismaReader } from '../../config/database.js';
 import { requireAuth } from '../../shared/middleware/auth.middleware.js';
 import { csrfGuard } from '../../shared/middleware/csrf.middleware.js';
 import { requireRole } from '../../shared/middleware/rbac.middleware.js';
 import { writeAuditLog } from '../../shared/middleware/audit-log.middleware.js';
 import { errors } from '../../shared/errors/app-error.js';
-import {
-  listVerticals,
-  getVertical,
-  listBusinesses,
-  getBusiness,
-  buildMonthlyPnl,
-  buildRevenueChannels,
-  buildProductLines,
-  buildUnitEconomics,
-  buildCohorts,
-  buildHeadcount,
-  upsertVertical,
-  upsertBusiness,
-  patchBusiness,
-  setPnl,
-  getPushedPnl,
-  setChannels,
-  getPushedChannels,
-  setProducts,
-  getPushedProducts,
-  setUnitEconomics,
-  getPushedUnitEconomics,
-  setCohorts,
-  getPushedCohorts,
-  setHeadcount,
-  getPushedHeadcount,
-} from './portfolio.fixtures.js';
+import { PortfolioRepository } from './portfolio.repository.js';
 
 const VerticalParam = z.object({ vertical: z.string().min(1).max(64) });
 const BusinessParam = z.object({ slug: z.string().min(1).max(64) });
 
-// ─── Ingestion schemas (the dev contract) ────────────────────────────────
 const VerticalUpsert = z.object({
   slug: z
     .string()
@@ -76,12 +50,17 @@ const BusinessUpsert = z.object({
     .regex(/^[a-z0-9-]+$/, 'lowercase, digits, dashes only'),
   name: z.string().min(1).max(160),
   vertical: z.string().min(1).max(64),
-  status: z.enum(['ACTIVE', 'INTEGRATING', 'EXITED', 'PROSPECT']),
+  status: z.nativeEnum(PortfolioBusinessStatus),
   acquiredAt: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'YYYY-MM-DD'),
   ownershipPct: z.number().min(0).max(1),
   hqRegion: z.string().min(1).max(40),
   segment: z.string().min(1).max(120),
   fteCount: z.number().int().min(0),
+  currency: z
+    .string()
+    .length(3)
+    .regex(/^[A-Z]{3}$/)
+    .optional(),
   ttmRevenue: z.number().min(0),
   ttmEbitda: z.number(),
   ttmGrossProfit: z.number(),
@@ -119,6 +98,10 @@ const FinancialPeriod = z.object({
 const PnlPush = z.object({ periods: z.array(FinancialPeriod).min(1).max(120) });
 
 const RevenuePush = z.object({
+  asOf: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/)
+    .optional(),
   channels: z
     .array(
       z.object({
@@ -144,6 +127,10 @@ const RevenuePush = z.object({
 });
 
 const UnitEconomicsPush = z.object({
+  asOf: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/)
+    .optional(),
   cac: z.number().min(0),
   ltv: z.number().min(0),
   paybackMonths: z.number().min(0),
@@ -157,7 +144,7 @@ const CohortsPush = z.object({
   cohorts: z
     .array(
       z.object({
-        cohort: z.string().min(1).max(16),
+        cohortMonth: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
         customers: z.number().int().min(0),
         m0: z.number().min(0).max(1),
         m3: z.number().min(0).max(1),
@@ -170,6 +157,10 @@ const CohortsPush = z.object({
 });
 
 const HeadcountPush = z.object({
+  asOf: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/)
+    .optional(),
   rows: z
     .array(
       z.object({
@@ -183,16 +174,23 @@ const HeadcountPush = z.object({
     .max(40),
 });
 
+function todayDate(): Date {
+  const d = new Date();
+  d.setUTCHours(0, 0, 0, 0);
+  return d;
+}
+
 export async function registerPortfolioRoutes(app: FastifyInstance): Promise<void> {
+  const repo = new PortfolioRepository(getPrismaWriter(), getPrismaReader());
+
   // ─── READ: Portfolio index — verticals + roll-ups ───────────────────────
   app.get('/portfolio', { preHandler: requireAuth }, async () => {
-    const verticals = listVerticals();
-    const all = listBusinesses();
+    const [verticals, all] = await Promise.all([repo.listVerticals(), repo.listBusinesses()]);
     return {
       verticals: verticals.map((v) => {
-        const inV = all.filter((b) => b.vertical === v.slug);
-        const ttmRevenue = inV.reduce((s, b) => s + b.ttmRevenue, 0);
-        const ttmEbitda = inV.reduce((s, b) => s + b.ttmEbitda, 0);
+        const inV = all.filter((b) => b.verticalSlug === v.slug);
+        const ttmRevenue = inV.reduce((s, b) => s + Number(b.ttmRevenue), 0);
+        const ttmEbitda = inV.reduce((s, b) => s + Number(b.ttmEbitda), 0);
         const fteCount = inV.reduce((s, b) => s + b.fteCount, 0);
         return {
           slug: v.slug,
@@ -209,11 +207,11 @@ export async function registerPortfolioRoutes(app: FastifyInstance): Promise<voi
       rollup: {
         businessCount: all.length,
         activeCount: all.filter((b) => b.status === 'ACTIVE').length,
-        ttmRevenue: all.reduce((s, b) => s + b.ttmRevenue, 0),
-        ttmEbitda: all.reduce((s, b) => s + b.ttmEbitda, 0),
+        ttmRevenue: all.reduce((s, b) => s + Number(b.ttmRevenue), 0),
+        ttmEbitda: all.reduce((s, b) => s + Number(b.ttmEbitda), 0),
         fteCount: all.reduce((s, b) => s + b.fteCount, 0),
-        cashOnHand: all.reduce((s, b) => s + b.cashOnHand, 0),
-        netDebt: all.reduce((s, b) => s + b.netDebt, 0),
+        cashOnHand: all.reduce((s, b) => s + Number(b.cashOnHand), 0),
+        netDebt: all.reduce((s, b) => s + Number(b.netDebt), 0),
       },
     };
   });
@@ -221,20 +219,20 @@ export async function registerPortfolioRoutes(app: FastifyInstance): Promise<voi
   // ─── READ: Vertical detail ──────────────────────────────────────────────
   app.get('/portfolio/verticals/:vertical', { preHandler: requireAuth }, async (req) => {
     const params = VerticalParam.parse(req.params);
-    const vertical = getVertical(params.vertical);
+    const vertical = await repo.getVertical(params.vertical);
     if (!vertical) throw errors.notFound('vertical');
-    const businesses = listBusinesses({ vertical: vertical.slug as never });
+    const businesses = await repo.listBusinesses({ vertical: vertical.slug });
     return {
       vertical,
       rollup: {
         businessCount: businesses.length,
         activeCount: businesses.filter((b) => b.status === 'ACTIVE').length,
-        ttmRevenue: businesses.reduce((s, b) => s + b.ttmRevenue, 0),
-        ttmEbitda: businesses.reduce((s, b) => s + b.ttmEbitda, 0),
-        ttmGrossProfit: businesses.reduce((s, b) => s + b.ttmGrossProfit, 0),
+        ttmRevenue: businesses.reduce((s, b) => s + Number(b.ttmRevenue), 0),
+        ttmEbitda: businesses.reduce((s, b) => s + Number(b.ttmEbitda), 0),
+        ttmGrossProfit: businesses.reduce((s, b) => s + Number(b.ttmGrossProfit), 0),
         fteCount: businesses.reduce((s, b) => s + b.fteCount, 0),
-        cashOnHand: businesses.reduce((s, b) => s + b.cashOnHand, 0),
-        netDebt: businesses.reduce((s, b) => s + b.netDebt, 0),
+        cashOnHand: businesses.reduce((s, b) => s + Number(b.cashOnHand), 0),
+        netDebt: businesses.reduce((s, b) => s + Number(b.netDebt), 0),
       },
       businesses,
     };
@@ -243,15 +241,15 @@ export async function registerPortfolioRoutes(app: FastifyInstance): Promise<voi
   // ─── READ: Business overview ────────────────────────────────────────────
   app.get('/portfolio/businesses/:slug', { preHandler: requireAuth }, async (req) => {
     const params = BusinessParam.parse(req.params);
-    const business = getBusiness(params.slug);
+    const business = await repo.getBusiness(params.slug);
     if (!business) throw errors.notFound('business');
-    const vertical = getVertical(business.vertical);
+    const vertical = await repo.getVertical(business.verticalSlug);
     await writeAuditLog({
       req,
       action: 'PORTFOLIO_FINANCIALS_ACCESSED',
       resourceType: 'portfolio_business',
       resourceId: business.slug,
-      metadata: { surface: 'overview', vertical: business.vertical },
+      metadata: { surface: 'overview', vertical: business.verticalSlug },
     });
     return { business, vertical };
   });
@@ -259,19 +257,15 @@ export async function registerPortfolioRoutes(app: FastifyInstance): Promise<voi
   // ─── READ: Business P&L ─────────────────────────────────────────────────
   app.get('/portfolio/businesses/:slug/pnl', { preHandler: requireAuth }, async (req) => {
     const params = BusinessParam.parse(req.params);
-    const business = getBusiness(params.slug);
+    const business = await repo.getBusiness(params.slug);
     if (!business) throw errors.notFound('business');
-    const periods = getPushedPnl(business.slug) ?? buildMonthlyPnl(business);
+    const periods = await repo.listFinancialPeriods(business.slug);
     await writeAuditLog({
       req,
       action: 'PORTFOLIO_FINANCIALS_ACCESSED',
       resourceType: 'portfolio_business',
       resourceId: business.slug,
-      metadata: {
-        surface: 'pnl',
-        months: periods.length,
-        source: getPushedPnl(business.slug) ? 'ingested' : 'generated',
-      },
+      metadata: { surface: 'pnl', months: periods.length },
     });
     return { periods };
   });
@@ -279,8 +273,12 @@ export async function registerPortfolioRoutes(app: FastifyInstance): Promise<voi
   // ─── READ: Business revenue ─────────────────────────────────────────────
   app.get('/portfolio/businesses/:slug/revenue', { preHandler: requireAuth }, async (req) => {
     const params = BusinessParam.parse(req.params);
-    const business = getBusiness(params.slug);
+    const business = await repo.getBusiness(params.slug);
     if (!business) throw errors.notFound('business');
+    const [channels, products] = await Promise.all([
+      repo.getLatestChannels(business.slug),
+      repo.getLatestProducts(business.slug),
+    ]);
     await writeAuditLog({
       req,
       action: 'PORTFOLIO_FINANCIALS_ACCESSED',
@@ -288,10 +286,7 @@ export async function registerPortfolioRoutes(app: FastifyInstance): Promise<voi
       resourceId: business.slug,
       metadata: { surface: 'revenue' },
     });
-    return {
-      channels: getPushedChannels(business.slug) ?? buildRevenueChannels(business),
-      products: getPushedProducts(business.slug) ?? buildProductLines(business),
-    };
+    return { channels, products };
   });
 
   // ─── READ: Unit economics ───────────────────────────────────────────────
@@ -300,7 +295,7 @@ export async function registerPortfolioRoutes(app: FastifyInstance): Promise<voi
     { preHandler: requireAuth },
     async (req) => {
       const params = BusinessParam.parse(req.params);
-      const business = getBusiness(params.slug);
+      const business = await repo.getBusiness(params.slug);
       if (!business) throw errors.notFound('business');
       await writeAuditLog({
         req,
@@ -309,14 +304,14 @@ export async function registerPortfolioRoutes(app: FastifyInstance): Promise<voi
         resourceId: business.slug,
         metadata: { surface: 'unit_economics' },
       });
-      return getPushedUnitEconomics(business.slug) ?? buildUnitEconomics(business);
+      return repo.getUnitEconomics(business.slug);
     },
   );
 
   // ─── READ: Cohorts ──────────────────────────────────────────────────────
   app.get('/portfolio/businesses/:slug/cohorts', { preHandler: requireAuth }, async (req) => {
     const params = BusinessParam.parse(req.params);
-    const business = getBusiness(params.slug);
+    const business = await repo.getBusiness(params.slug);
     if (!business) throw errors.notFound('business');
     await writeAuditLog({
       req,
@@ -325,13 +320,13 @@ export async function registerPortfolioRoutes(app: FastifyInstance): Promise<voi
       resourceId: business.slug,
       metadata: { surface: 'cohorts' },
     });
-    return { cohorts: getPushedCohorts(business.slug) ?? buildCohorts(business) };
+    return { cohorts: await repo.listCohorts(business.slug) };
   });
 
   // ─── READ: Headcount ────────────────────────────────────────────────────
   app.get('/portfolio/businesses/:slug/headcount', { preHandler: requireAuth }, async (req) => {
     const params = BusinessParam.parse(req.params);
-    const business = getBusiness(params.slug);
+    const business = await repo.getBusiness(params.slug);
     if (!business) throw errors.notFound('business');
     await writeAuditLog({
       req,
@@ -340,7 +335,7 @@ export async function registerPortfolioRoutes(app: FastifyInstance): Promise<voi
       resourceId: business.slug,
       metadata: { surface: 'headcount' },
     });
-    return { rows: getPushedHeadcount(business.slug) ?? buildHeadcount(business) };
+    return { rows: await repo.getLatestHeadcount(business.slug) };
   });
 
   // ─── INGESTION: Vertical upsert ─────────────────────────────────────────
@@ -349,7 +344,11 @@ export async function registerPortfolioRoutes(app: FastifyInstance): Promise<voi
     { preHandler: [requireAuth, csrfGuard, requireRole('ADMIN')] },
     async (req) => {
       const body = VerticalUpsert.parse(req.body);
-      const created = upsertVertical(body as never);
+      const created = await repo.upsertVertical({
+        slug: body.slug,
+        name: body.name,
+        description: body.description,
+      });
       await writeAuditLog({
         req,
         action: 'PORTFOLIO_VERTICAL_CREATED',
@@ -367,15 +366,34 @@ export async function registerPortfolioRoutes(app: FastifyInstance): Promise<voi
     { preHandler: [requireAuth, csrfGuard, requireRole('ADMIN')] },
     async (req) => {
       const body = BusinessUpsert.parse(req.body);
-      if (!getVertical(body.vertical)) throw errors.notFound('vertical');
-      const existed = Boolean(getBusiness(body.slug));
-      const saved = upsertBusiness(body as never);
+      if (!(await repo.getVertical(body.vertical))) throw errors.notFound('vertical');
+      const existed = Boolean(await repo.getBusiness(body.slug));
+      const saved = await repo.upsertBusiness({
+        slug: body.slug,
+        name: body.name,
+        verticalSlug: body.vertical,
+        status: body.status,
+        acquiredAt: new Date(body.acquiredAt),
+        ownershipPct: body.ownershipPct,
+        hqRegion: body.hqRegion,
+        segment: body.segment,
+        fteCount: body.fteCount,
+        ...(body.currency ? { currency: body.currency } : {}),
+        ttmRevenue: body.ttmRevenue,
+        ttmEbitda: body.ttmEbitda,
+        ttmGrossProfit: body.ttmGrossProfit,
+        arr: body.arr,
+        nrr: body.nrr,
+        grossMargin: body.grossMargin,
+        cashOnHand: body.cashOnHand,
+        netDebt: body.netDebt,
+      });
       await writeAuditLog({
         req,
         action: existed ? 'PORTFOLIO_BUSINESS_UPDATED' : 'PORTFOLIO_BUSINESS_CREATED',
         resourceType: 'portfolio_business',
         resourceId: saved.slug,
-        metadata: { vertical: saved.vertical, status: saved.status },
+        metadata: { vertical: saved.verticalSlug, status: saved.status },
       });
       return saved;
     },
@@ -388,7 +406,12 @@ export async function registerPortfolioRoutes(app: FastifyInstance): Promise<voi
     async (req) => {
       const params = BusinessParam.parse(req.params);
       const body = BusinessPatch.parse(req.body);
-      const updated = patchBusiness(params.slug, body as never);
+      const { vertical: _v, acquiredAt: _a, ...rest } = body;
+      const updated = await repo.patchBusiness(params.slug, {
+        ...rest,
+        ...(_a ? { acquiredAt: new Date(_a) } : {}),
+        ...(_v ? { verticalSlug: _v } : {}),
+      });
       if (!updated) throw errors.notFound('business');
       await writeAuditLog({
         req,
@@ -401,23 +424,26 @@ export async function registerPortfolioRoutes(app: FastifyInstance): Promise<voi
     },
   );
 
-  // ─── INGESTION: P&L bulk upsert ─────────────────────────────────────────
+  // ─── INGESTION: P&L bulk replace ────────────────────────────────────────
   app.post(
     '/portfolio/businesses/:slug/pnl',
     { preHandler: [requireAuth, csrfGuard, requireRole('ADMIN')] },
     async (req) => {
       const params = BusinessParam.parse(req.params);
-      if (!getBusiness(params.slug)) throw errors.notFound('business');
+      if (!(await repo.getBusiness(params.slug))) throw errors.notFound('business');
       const body = PnlPush.parse(req.body);
-      setPnl(params.slug, body.periods);
+      const ingested = await repo.replaceFinancialPeriods(
+        params.slug,
+        body.periods.map((p) => ({ ...p, periodStart: new Date(p.periodStart) })),
+      );
       await writeAuditLog({
         req,
         action: 'PORTFOLIO_DATA_INGESTED',
         resourceType: 'portfolio_business',
         resourceId: params.slug,
-        metadata: { surface: 'pnl', count: body.periods.length },
+        metadata: { surface: 'pnl', count: ingested },
       });
-      return { ingested: body.periods.length };
+      return { ingested };
     },
   );
 
@@ -427,22 +453,21 @@ export async function registerPortfolioRoutes(app: FastifyInstance): Promise<voi
     { preHandler: [requireAuth, csrfGuard, requireRole('ADMIN')] },
     async (req) => {
       const params = BusinessParam.parse(req.params);
-      if (!getBusiness(params.slug)) throw errors.notFound('business');
+      if (!(await repo.getBusiness(params.slug))) throw errors.notFound('business');
       const body = RevenuePush.parse(req.body);
-      setChannels(params.slug, body.channels);
-      setProducts(params.slug, body.products);
+      const asOf = body.asOf ? new Date(body.asOf) : todayDate();
+      const [channels, products] = await Promise.all([
+        repo.replaceChannels(params.slug, asOf, body.channels),
+        repo.replaceProducts(params.slug, asOf, body.products),
+      ]);
       await writeAuditLog({
         req,
         action: 'PORTFOLIO_DATA_INGESTED',
         resourceType: 'portfolio_business',
         resourceId: params.slug,
-        metadata: {
-          surface: 'revenue',
-          channels: body.channels.length,
-          products: body.products.length,
-        },
+        metadata: { surface: 'revenue', channels, products, asOf: asOf.toISOString().slice(0, 10) },
       });
-      return { channels: body.channels.length, products: body.products.length };
+      return { channels, products };
     },
   );
 
@@ -452,9 +477,18 @@ export async function registerPortfolioRoutes(app: FastifyInstance): Promise<voi
     { preHandler: [requireAuth, csrfGuard, requireRole('ADMIN')] },
     async (req) => {
       const params = BusinessParam.parse(req.params);
-      if (!getBusiness(params.slug)) throw errors.notFound('business');
+      if (!(await repo.getBusiness(params.slug))) throw errors.notFound('business');
       const body = UnitEconomicsPush.parse(req.body);
-      setUnitEconomics(params.slug, body);
+      const saved = await repo.upsertUnitEconomics(params.slug, {
+        asOf: body.asOf ? new Date(body.asOf) : todayDate(),
+        cac: body.cac,
+        ltv: body.ltv,
+        paybackMonths: body.paybackMonths,
+        arpu: body.arpu,
+        grossMargin: body.grossMargin,
+        nrr: body.nrr,
+        churnMonthly: body.churnMonthly,
+      });
       await writeAuditLog({
         req,
         action: 'PORTFOLIO_DATA_INGESTED',
@@ -462,7 +496,7 @@ export async function registerPortfolioRoutes(app: FastifyInstance): Promise<voi
         resourceId: params.slug,
         metadata: { surface: 'unit_economics' },
       });
-      return body;
+      return saved;
     },
   );
 
@@ -472,17 +506,20 @@ export async function registerPortfolioRoutes(app: FastifyInstance): Promise<voi
     { preHandler: [requireAuth, csrfGuard, requireRole('ADMIN')] },
     async (req) => {
       const params = BusinessParam.parse(req.params);
-      if (!getBusiness(params.slug)) throw errors.notFound('business');
+      if (!(await repo.getBusiness(params.slug))) throw errors.notFound('business');
       const body = CohortsPush.parse(req.body);
-      setCohorts(params.slug, body.cohorts);
+      const ingested = await repo.replaceCohorts(
+        params.slug,
+        body.cohorts.map((c) => ({ ...c, cohortMonth: new Date(c.cohortMonth) })),
+      );
       await writeAuditLog({
         req,
         action: 'PORTFOLIO_DATA_INGESTED',
         resourceType: 'portfolio_business',
         resourceId: params.slug,
-        metadata: { surface: 'cohorts', count: body.cohorts.length },
+        metadata: { surface: 'cohorts', count: ingested },
       });
-      return { ingested: body.cohorts.length };
+      return { ingested };
     },
   );
 
@@ -492,17 +529,18 @@ export async function registerPortfolioRoutes(app: FastifyInstance): Promise<voi
     { preHandler: [requireAuth, csrfGuard, requireRole('ADMIN')] },
     async (req) => {
       const params = BusinessParam.parse(req.params);
-      if (!getBusiness(params.slug)) throw errors.notFound('business');
+      if (!(await repo.getBusiness(params.slug))) throw errors.notFound('business');
       const body = HeadcountPush.parse(req.body);
-      setHeadcount(params.slug, body.rows);
+      const asOf = body.asOf ? new Date(body.asOf) : todayDate();
+      const ingested = await repo.replaceHeadcount(params.slug, asOf, body.rows);
       await writeAuditLog({
         req,
         action: 'PORTFOLIO_DATA_INGESTED',
         resourceType: 'portfolio_business',
         resourceId: params.slug,
-        metadata: { surface: 'headcount', count: body.rows.length },
+        metadata: { surface: 'headcount', count: ingested, asOf: asOf.toISOString().slice(0, 10) },
       });
-      return { ingested: body.rows.length };
+      return { ingested };
     },
   );
 }

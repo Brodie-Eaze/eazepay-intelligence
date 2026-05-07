@@ -598,6 +598,189 @@ model Alert {
   @@map("alerts")
 }
 
+// ─── Portfolio (silos) ─────────────────────────────────────────────────────
+// Holdco view. Each `PortfolioVertical` (coaching / medical / home-improvement
+// / …) groups one or more `PortfolioBusiness` rows (the actual silos). Every
+// silo has its own monthly P&L, revenue channels, product lines, unit
+// economics, cohorts, and headcount snapshots — same shape across silos so
+// rollups are trivially aggregable.
+//
+// Persistence replaces the in-memory `Map`-backed fixtures that lived in
+// `portfolio.fixtures.ts`. The deterministic mock generators are still used
+// by `prisma/seed-portfolio.ts` to seed demo data; runtime reads come
+// straight from these tables.
+
+enum PortfolioBusinessStatus {
+  ACTIVE
+  INTEGRATING
+  EXITED
+  PROSPECT
+}
+
+model PortfolioVertical {
+  slug        String   @id
+  name        String
+  description String   @default("")
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  businesses PortfolioBusiness[]
+
+  @@map("portfolio_verticals")
+}
+
+model PortfolioBusiness {
+  slug           String                  @id
+  name           String
+  verticalSlug   String                  @map("vertical_slug")
+  status         PortfolioBusinessStatus @default(ACTIVE)
+  acquiredAt     DateTime                @map("acquired_at") @db.Date
+  ownershipPct   Decimal                 @map("ownership_pct") @db.Decimal(5, 4)
+  hqRegion       String                  @map("hq_region")
+  segment        String
+  fteCount       Int                     @map("fte_count")
+  // Trailing-twelve-months snapshot. Currency follows the platform default
+  // (USD) unless the silo's accounting feed reports in a different ISO.
+  currency       String                  @default("USD") @db.Char(3)
+  ttmRevenue     Decimal                 @map("ttm_revenue") @db.Decimal(18, 2)
+  ttmEbitda      Decimal                 @map("ttm_ebitda") @db.Decimal(18, 2)
+  ttmGrossProfit Decimal                 @map("ttm_gross_profit") @db.Decimal(18, 2)
+  arr            Decimal                 @default(0) @db.Decimal(18, 2)
+  nrr            Decimal                 @db.Decimal(5, 4)
+  grossMargin    Decimal                 @map("gross_margin") @db.Decimal(5, 4)
+  cashOnHand     Decimal                 @map("cash_on_hand") @db.Decimal(18, 2)
+  netDebt        Decimal                 @map("net_debt") @db.Decimal(18, 2)
+  createdAt      DateTime                @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt      DateTime                @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  vertical        PortfolioVertical          @relation(fields: [verticalSlug], references: [slug])
+  pnlPeriods      PortfolioFinancialPeriod[]
+  revenueChannels PortfolioRevenueChannel[]
+  productLines    PortfolioProductLine[]
+  unitEconomics   PortfolioUnitEconomics?
+  cohorts         PortfolioCohort[]
+  headcount       PortfolioHeadcount[]
+
+  @@index([verticalSlug])
+  @@index([status])
+  @@map("portfolio_businesses")
+}
+
+model PortfolioFinancialPeriod {
+  id           String   @id @db.Uuid
+  businessSlug String   @map("business_slug")
+  periodStart  DateTime @map("period_start") @db.Date
+  periodLabel  String   @map("period_label")
+  // Full P&L line items in reporting currency.
+  revenue              Decimal @db.Decimal(18, 2)
+  cogs                 Decimal @db.Decimal(18, 2)
+  grossProfit          Decimal @map("gross_profit") @db.Decimal(18, 2)
+  marketingSpend       Decimal @map("marketing_spend") @db.Decimal(18, 2)
+  payroll              Decimal @db.Decimal(18, 2)
+  rentAndUtilities     Decimal @map("rent_and_utilities") @db.Decimal(18, 2)
+  softwareAndTools     Decimal @map("software_and_tools") @db.Decimal(18, 2)
+  professionalServices Decimal @map("professional_services") @db.Decimal(18, 2)
+  otherOpex            Decimal @map("other_opex") @db.Decimal(18, 2)
+  ebitda               Decimal @db.Decimal(18, 2)
+  depreciation         Decimal @db.Decimal(18, 2)
+  interest             Decimal @db.Decimal(18, 2)
+  tax                  Decimal @db.Decimal(18, 2)
+  netIncome            Decimal @map("net_income") @db.Decimal(18, 2)
+  cashIn               Decimal @map("cash_in") @db.Decimal(18, 2)
+  cashOut              Decimal @map("cash_out") @db.Decimal(18, 2)
+  arBalance            Decimal @map("ar_balance") @db.Decimal(18, 2)
+  apBalance            Decimal @map("ap_balance") @db.Decimal(18, 2)
+  createdAt            DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  business PortfolioBusiness @relation(fields: [businessSlug], references: [slug], onDelete: Cascade)
+
+  @@unique([businessSlug, periodStart])
+  @@index([businessSlug, periodStart(sort: Desc)])
+  @@map("portfolio_financial_periods")
+}
+
+model PortfolioRevenueChannel {
+  id           String   @id @db.Uuid
+  businessSlug String   @map("business_slug")
+  asOf         DateTime @map("as_of") @db.Date
+  channel      String
+  revenue      Decimal  @db.Decimal(18, 2)
+  customers    Int
+  share        Decimal  @db.Decimal(5, 4)
+
+  business PortfolioBusiness @relation(fields: [businessSlug], references: [slug], onDelete: Cascade)
+
+  @@unique([businessSlug, asOf, channel])
+  @@index([businessSlug, asOf(sort: Desc)])
+  @@map("portfolio_revenue_channels")
+}
+
+model PortfolioProductLine {
+  id           String   @id @db.Uuid
+  businessSlug String   @map("business_slug")
+  asOf         DateTime @map("as_of") @db.Date
+  name         String
+  revenue      Decimal  @db.Decimal(18, 2)
+  units        Int
+  avgPrice     Decimal  @map("avg_price") @db.Decimal(18, 2)
+
+  business PortfolioBusiness @relation(fields: [businessSlug], references: [slug], onDelete: Cascade)
+
+  @@unique([businessSlug, asOf, name])
+  @@index([businessSlug, asOf(sort: Desc)])
+  @@map("portfolio_product_lines")
+}
+
+model PortfolioUnitEconomics {
+  businessSlug  String   @id @map("business_slug")
+  asOf          DateTime @map("as_of") @db.Date
+  cac           Decimal  @db.Decimal(18, 2)
+  ltv           Decimal  @db.Decimal(18, 2)
+  paybackMonths Decimal  @map("payback_months") @db.Decimal(8, 2)
+  arpu          Decimal  @db.Decimal(18, 2)
+  grossMargin   Decimal  @map("gross_margin") @db.Decimal(5, 4)
+  nrr           Decimal  @db.Decimal(5, 4)
+  churnMonthly  Decimal  @map("churn_monthly") @db.Decimal(5, 4)
+  updatedAt     DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  business PortfolioBusiness @relation(fields: [businessSlug], references: [slug], onDelete: Cascade)
+
+  @@map("portfolio_unit_economics")
+}
+
+model PortfolioCohort {
+  id           String   @id @db.Uuid
+  businessSlug String   @map("business_slug")
+  cohortMonth  DateTime @map("cohort_month") @db.Date
+  customers    Int
+  m0           Decimal  @db.Decimal(5, 4)
+  m3           Decimal  @db.Decimal(5, 4)
+  m6           Decimal  @db.Decimal(5, 4)
+  m12          Decimal  @db.Decimal(5, 4)
+
+  business PortfolioBusiness @relation(fields: [businessSlug], references: [slug], onDelete: Cascade)
+
+  @@unique([businessSlug, cohortMonth])
+  @@index([businessSlug, cohortMonth(sort: Desc)])
+  @@map("portfolio_cohorts")
+}
+
+model PortfolioHeadcount {
+  id             String   @id @db.Uuid
+  businessSlug   String   @map("business_slug")
+  asOf           DateTime @map("as_of") @db.Date
+  function       String
+  ftes           Int
+  payrollMonthly Decimal  @map("payroll_monthly") @db.Decimal(18, 2)
+  openRoles      Int      @map("open_roles")
+
+  business PortfolioBusiness @relation(fields: [businessSlug], references: [slug], onDelete: Cascade)
+
+  @@unique([businessSlug, asOf, function])
+  @@index([businessSlug, asOf(sort: Desc)])
+  @@map("portfolio_headcount")
+}
+
 // ─── FX rates for multi-currency reporting ─────────────────────────────────
 // Stored per (asOf date, base, quote). The FX service picks the latest
 // row at-or-before the requested timestamp to convert revenue amounts into
