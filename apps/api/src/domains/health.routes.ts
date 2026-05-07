@@ -1,5 +1,11 @@
 import type { FastifyInstance } from 'fastify';
-import { getPrisma, getPrismaReader, isReaderUsingFallback } from '../config/database.js';
+import {
+  getPrisma,
+  getPrismaReader,
+  getPrismaLong,
+  isReaderUsingFallback,
+  isLongUsingFallback,
+} from '../config/database.js';
 import { getRedis } from '../config/redis.js';
 
 interface DependencyStatus {
@@ -68,9 +74,30 @@ export function registerHealthRoute(app: FastifyInstance): void {
         redis: redis.status,
         replica: replica.status,
         replicaConfigured: !isReaderUsingFallback(),
+        longRoleConfigured: !isLongUsingFallback(),
         ...(replica.lagMs !== undefined ? { replicaLagMs: replica.lagMs } : {}),
       },
     });
+  });
+
+  // /metrics — Prometheus exposition. Aggregates pool + query metrics from
+  // every Prisma client (writer, reader, long-running). Each client's metrics
+  // are namespaced via the `db` label so a Prometheus dashboard can split
+  // primary vs replica vs long-running pool pressure.
+  //
+  // Use Prometheus scrape with a scrape interval ≥ 10s. The endpoint is
+  // unauthenticated by design — it must work for k8s/ECS service-discovery
+  // scrapers — but expose it on a private network only (Fastify's listen
+  // binding is :0.0.0.0 in dev; deploy behind a private ALB).
+  app.get('/metrics', async (_req, reply) => {
+    const writer = await getPrisma().$metrics.prometheus({ globalLabels: { db: 'writer' } });
+    const reader = isReaderUsingFallback()
+      ? ''
+      : await getPrismaReader().$metrics.prometheus({ globalLabels: { db: 'reader' } });
+    const long = isLongUsingFallback()
+      ? ''
+      : await getPrismaLong().$metrics.prometheus({ globalLabels: { db: 'long' } });
+    reply.header('content-type', 'text/plain; version=0.0.4').send(writer + reader + long);
   });
 }
 

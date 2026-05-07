@@ -14,6 +14,11 @@ const EnvSchema = z.object({
   // Optional read replica. Analytics + dashboard reads route here when set.
   // Falls back to primary if the replica is unreachable at boot.
   DATABASE_REPLICA_URL: z.string().url().optional(),
+  // Optional long-running worker URL. When set, workers (export, aggregation,
+  // scheduled-report) connect as `eazepay_worker_long` with a 5-min
+  // statement_timeout instead of the API's 30-sec budget. Falls back to
+  // DATABASE_URL when unset.
+  DATABASE_LONG_URL: z.string().url().optional(),
   // Slow-query threshold for Prisma query logging (CC7.2 monitoring).
   DATABASE_SLOW_QUERY_LOG_MS: z.coerce.number().int().positive().default(500),
   REDIS_URL: z.string().url(),

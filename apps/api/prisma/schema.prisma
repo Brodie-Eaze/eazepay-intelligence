@@ -3,7 +3,10 @@
 // + deterministic HMAC hash (Bytes) for lookup. See SECURITY.md for the encryption design.
 
 generator client {
-  provider = "prisma-client-js"
+  provider        = "prisma-client-js"
+  // Metrics preview enables `prisma.$metrics.json()` / `.prometheus()` for
+  // pool + query observability. Surfaced at /metrics for Prometheus scrape.
+  previewFeatures = ["metrics"]
 }
 
 datasource db {

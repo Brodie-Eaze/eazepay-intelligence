@@ -12,7 +12,22 @@ import { ExportFormat, ExportStatus, ExportType, type PrismaClient } from '@pris
 const STORAGE_ROOT = process.env.EXPORT_STORAGE_DIR ?? join(process.cwd(), 'tmp', 'exports');
 
 export class ExportService {
-  constructor(private readonly prisma: PrismaClient) {}
+  /**
+   * Two clients:
+   *   - `prisma` (writer)  → status updates on the Export row
+   *   - `reader`           → heavy data fetches that produce the export bytes
+   *
+   * Status writes need read-after-write consistency (the worker reads its own
+   * RUNNING marker before continuing, ditto the COMPLETED marker for the
+   * download endpoint), so they go to the writer. The bulk extraction can
+   * tolerate replication lag and is exactly the workload the replica is sized
+   * for. If `reader` is omitted, both fall back to the writer (current
+   * behaviour for tests / no-replica deployments).
+   */
+  constructor(
+    private readonly prisma: PrismaClient,
+    private readonly reader: PrismaClient = prisma,
+  ) {}
 
   async runExport(exportId: string): Promise<void> {
     const exp = await this.prisma.export.findUnique({ where: { id: exportId } });
@@ -79,7 +94,7 @@ export class ExportService {
   ): Promise<{ rows: Array<Record<string, unknown>>; columns: string[] }> {
     switch (type) {
       case ExportType.CUSTOMERS: {
-        const apps = await this.prisma.application.findMany({
+        const apps = await this.reader.application.findMany({
           orderBy: { createdAt: 'desc' },
           take: 10_000,
           include: { partner: { select: { id: true, name: true, externalId: true } } },
@@ -108,7 +123,7 @@ export class ExportService {
 
       case ExportType.APPLICATIONS: {
         const partnerId = typeof filters.partnerId === 'string' ? filters.partnerId : undefined;
-        const apps = await this.prisma.application.findMany({
+        const apps = await this.reader.application.findMany({
           where: partnerId ? { partnerId } : {},
           orderBy: { createdAt: 'desc' },
           take: 50_000,
@@ -129,7 +144,7 @@ export class ExportService {
       }
 
       case ExportType.LENDER_DECISIONS: {
-        const decisions = await this.prisma.lenderDecision.findMany({
+        const decisions = await this.reader.lenderDecision.findMany({
           orderBy: { decisionTimestamp: 'desc' },
           take: 50_000,
         });
@@ -152,7 +167,7 @@ export class ExportService {
       }
 
       case ExportType.REVENUE_LEDGER: {
-        const events = await this.prisma.revenueEvent.findMany({
+        const events = await this.reader.revenueEvent.findMany({
           orderBy: { effectiveAt: 'desc' },
           take: 50_000,
         });
@@ -172,7 +187,7 @@ export class ExportService {
       }
 
       case ExportType.PARTNERS: {
-        const partners = await this.prisma.partner.findMany({
+        const partners = await this.reader.partner.findMany({
           where: { deletedAt: null },
           orderBy: { createdAt: 'desc' },
         });
@@ -192,7 +207,7 @@ export class ExportService {
       }
 
       case ExportType.AUDIT_LOG: {
-        const rows = await this.prisma.auditLog.findMany({
+        const rows = await this.reader.auditLog.findMany({
           orderBy: { createdAt: 'desc' },
           take: 50_000,
           include: { user: { select: { email: true, role: true } } },

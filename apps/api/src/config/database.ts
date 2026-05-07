@@ -34,7 +34,27 @@ import { getLogger } from './logger.js';
 
 let writerCache: PrismaClient | undefined;
 let readerCache: PrismaClient | undefined;
+let longCache: PrismaClient | undefined;
 let readerIsFallback = false;
+let longIsFallback = false;
+
+// Prisma model actions that mutate state. Anything in this set hitting the
+// reader is a bug — we either tried to write to a replica (Postgres rejects
+// with read-only error, but we want to fail earlier and louder) or we forgot
+// a writer/reader split.
+const WRITE_ACTIONS = new Set([
+  'create',
+  'createMany',
+  'createManyAndReturn',
+  'update',
+  'updateMany',
+  'updateManyAndReturn',
+  'upsert',
+  'delete',
+  'deleteMany',
+  'executeRaw',
+  'executeRawUnsafe',
+]);
 
 function buildClient(url: string, label: 'writer' | 'reader'): PrismaClient {
   const env = getEnv();
@@ -58,6 +78,29 @@ function buildClient(url: string, label: 'writer' | 'reader'): PrismaClient {
       log.debug({ duration: e.duration, query: e.query, db: label }, 'prisma.query');
     }
   });
+
+  // Reader-only guard: refuse mutating operations on the read replica client.
+  //
+  // Postgres will reject these with "cannot execute … in a read-only
+  // transaction" anyway — but that error surfaces deep inside Prisma's
+  // engine, after we've already burnt a connection round-trip and emitted a
+  // confusing stack trace. Catching here gives an immediate, actionable
+  // error pointing at the offending model+action.
+  //
+  // In production the error is downgraded to a critical log + thrown error
+  // (the request ends in 500 either way, but this preserves the safety net
+  // without conditionalising business logic). In dev/test it's noisy on
+  // purpose so the wrong wiring gets caught in PR review or a unit test.
+  if (label === 'reader') {
+    client.$use(async (params, next) => {
+      if (WRITE_ACTIONS.has(params.action)) {
+        const message = `prisma.reader.write_blocked model=${params.model ?? '<raw>'} action=${params.action} — writes must use getPrismaWriter()`;
+        log.error({ model: params.model, action: params.action }, 'prisma.reader.write_blocked');
+        throw new Error(message);
+      }
+      return next(params);
+    });
+  }
 
   return client;
 }
@@ -97,6 +140,36 @@ export function getPrismaReader(): PrismaClient {
   return readerCache;
 }
 
+/**
+ * Long-running worker client. Connects as the `eazepay_worker_long` role
+ * with a 5-minute statement_timeout for export pipelines + aggregation
+ * backfills. Falls back to the writer when DATABASE_LONG_URL is unset.
+ *
+ * Workers should prefer this client for the bulk steps of their job; status
+ * mutations on small tables (`Export.status`, etc.) can stay on the writer.
+ */
+export function getPrismaLong(): PrismaClient {
+  if (longCache) return longCache;
+  const env = getEnv();
+  if (env.DATABASE_LONG_URL) {
+    try {
+      longCache = buildClient(env.DATABASE_LONG_URL, 'writer');
+      longIsFallback = false;
+    } catch (err) {
+      getLogger().error(
+        { err: (err as Error).message },
+        'prisma.long_init_failed_fallback_to_writer',
+      );
+      longCache = getPrismaWriter();
+      longIsFallback = true;
+    }
+  } else {
+    longCache = getPrismaWriter();
+    longIsFallback = true;
+  }
+  return longCache;
+}
+
 /** Backward-compat alias for the writer. Existing call-sites are unchanged. */
 export function getPrisma(): PrismaClient {
   return getPrismaWriter();
@@ -106,13 +179,21 @@ export function isReaderUsingFallback(): boolean {
   return readerIsFallback;
 }
 
+export function isLongUsingFallback(): boolean {
+  return longIsFallback;
+}
+
 export async function disconnectPrisma(): Promise<void> {
   const writer = writerCache;
   const reader = readerCache;
+  const long = longCache;
   writerCache = undefined;
   readerCache = undefined;
-  await Promise.allSettled([
-    writer ? writer.$disconnect() : Promise.resolve(),
-    reader && reader !== writer ? reader.$disconnect() : Promise.resolve(),
-  ]);
+  longCache = undefined;
+  // De-dupe: if reader/long fell back to the writer, only disconnect once.
+  const uniques = new Set<PrismaClient>();
+  if (writer) uniques.add(writer);
+  if (reader) uniques.add(reader);
+  if (long) uniques.add(long);
+  await Promise.allSettled([...uniques].map((c) => c.$disconnect()));
 }

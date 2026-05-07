@@ -109,14 +109,42 @@ REVOKE UPDATE, DELETE ON outbox_events    FROM eazepay_app;
 -- lock_timeout                             5s — fails fast on contention
 --
 -- Workers that legitimately need longer (export pipelines, aggregation
--- backfills) connect as a separate role with extended timeouts
--- (TODO: `eazepay_worker_long`).
+-- backfills, scheduled-report runners) connect as a separate role with
+-- extended timeouts. Same SELECT/INSERT grants, same REVOKE on append-only
+-- tables, just longer per-statement budget.
 ALTER ROLE eazepay_app SET statement_timeout = '30s';
 ALTER ROLE eazepay_app SET idle_in_transaction_session_timeout = '10s';
 ALTER ROLE eazepay_app SET lock_timeout = '5s';
 
+-- ─── Long-running worker role: eazepay_worker_long ────────────────────────
+-- Inherits the same write-restriction posture as eazepay_app (cannot UPDATE/
+-- DELETE on append-only tables) but with a 5-minute statement budget for
+-- exports / backfills / monthly-rollup queries that legitimately scan
+-- millions of rows.
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'eazepay_worker_long') THEN
+    CREATE ROLE eazepay_worker_long LOGIN;
+  END IF;
+END$$;
+
+GRANT USAGE ON SCHEMA public TO eazepay_worker_long;
+GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES   IN SCHEMA public TO eazepay_worker_long;
+GRANT USAGE, SELECT                ON ALL SEQUENCES IN SCHEMA public TO eazepay_worker_long;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public
+  GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES   TO eazepay_worker_long;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public
+  GRANT USAGE, SELECT                ON SEQUENCES TO eazepay_worker_long;
+
+REVOKE UPDATE, DELETE ON audit_logs     FROM eazepay_worker_long;
+REVOKE UPDATE, DELETE ON revenue_events FROM eazepay_worker_long;
+
+ALTER ROLE eazepay_worker_long SET statement_timeout = '5min';
+ALTER ROLE eazepay_worker_long SET idle_in_transaction_session_timeout = '30s';
+ALTER ROLE eazepay_worker_long SET lock_timeout = '10s';
+
 -- Sanity check the policy.
 DO $$
 BEGIN
-  RAISE NOTICE 'eazepay_app: SELECT/INSERT on all; UPDATE/DELETE REVOKED on audit_logs, revenue_events, outbox_events; statement_timeout=30s idle_in_tx=10s lock=5s';
+  RAISE NOTICE 'eazepay_app: stmt=30s idle=10s lock=5s; eazepay_worker_long: stmt=5min idle=30s lock=10s; UPDATE/DELETE REVOKED on audit_logs + revenue_events for both';
 END$$;

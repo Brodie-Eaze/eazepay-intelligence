@@ -79,6 +79,45 @@ Two singletons: `getPrismaWriter()` (primary) and `getPrismaReader()` (replica).
 
 **Replication lag visibility**: `/health/ready` runs `SELECT EXTRACT(EPOCH FROM (now() - pg_last_xact_replay_timestamp())) * 1000 AS lag_ms` against the replica and returns `replicaLagMs` in the body. >30s flags `replica: degraded`.
 
+### Long-running worker role
+
+A third role — `eazepay_worker_long` — exists for export pipelines, aggregation backfills, and scheduled-report runs that legitimately scan millions of rows.
+
+| Role                  | statement_timeout | idle_in_tx | lock_timeout | Use case                                             |
+| --------------------- | ----------------- | ---------- | ------------ | ---------------------------------------------------- |
+| `eazepay_app`         | 30s               | 10s        | 5s           | API request path, websocket, signed-webhook ingress  |
+| `eazepay_worker_long` | 5min              | 30s        | 10s          | Export worker, aggregation worker, scheduled reports |
+
+Set `DATABASE_LONG_URL=postgresql://eazepay_worker_long:…` to opt in. Workers fall back to `DATABASE_URL` (and the 30s budget) when unset.
+
+`getPrismaLong()` is the third client accessor (alongside `getPrismaWriter()` and `getPrismaReader()`) and is wired into `export.worker.ts` and `aggregation.worker.ts`. The status-update path (Export.status, RevenueAggregation upsert) still goes to the writer for read-after-write consistency.
+
+### Reader write-block guard (defense in depth)
+
+Postgres rejects writes against a hot standby with "cannot execute … in a read-only transaction." That error surfaces deep inside Prisma's engine after a connection round-trip and a confusing stack trace. We catch earlier:
+
+- A Prisma `$use` middleware on the reader client refuses any of `create / createMany / update / updateMany / upsert / delete / deleteMany / executeRaw / executeRawUnsafe` and throws `prisma.reader.write_blocked` with the model + action.
+- Tested directly in [`apps/api/tests/unit/database-multi.test.ts`](../apps/api/tests/unit/database-multi.test.ts) — every mutation surface is locked down by a unit test that doesn't require a live DB.
+
+This is the SOC 2-load-bearing safety net: even if a future route author types `getPrismaReader().partner.update(...)`, the request 500s with an obvious error in dev/test long before it hits a replica.
+
+### PgBouncer mode
+
+Behind PgBouncer in transaction-pool mode, append `&pgbouncer=true` to every `*_URL` env var. Prisma 5.x respects this flag and disables prepared statements (PgBouncer's transaction pooling can't safely share them across clients). Required when total backend connections exceed Postgres `max_connections` minus headroom.
+
+### Prometheus metrics endpoint
+
+`GET /metrics` returns Prisma metrics in Prometheus exposition format, namespaced by client (`db="writer"|"reader"|"long"`). Scrape on a private network — no auth on this endpoint by design (k8s/ECS service-discovery scrapers can't supply credentials at scrape time).
+
+Metric examples (from Prisma's metrics preview):
+
+- `prisma_pool_connections_busy` / `prisma_pool_connections_idle` / `prisma_pool_connections_open` — connection pool depth
+- `prisma_client_queries_total` — total queries per client
+- `prisma_client_queries_duration_histogram_ms_bucket` — query latency distribution
+- `prisma_pool_connections_open_current` — open connection gauge
+
+Build dashboards on top of these; alert on `pool_busy / pool_open > 0.8` sustained.
+
 ### Connection pool
 
 Set via `DATABASE_URL` query string (`?connection_limit=N&pool_timeout=S`).

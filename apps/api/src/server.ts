@@ -23,7 +23,7 @@ import { ZodError } from 'zod';
 
 import { getEnv } from './config/env.js';
 import { getLogger } from './config/logger.js';
-import { getPrisma } from './config/database.js';
+import { getPrisma, getPrismaReader, disconnectPrisma } from './config/database.js';
 import { getRedis } from './config/redis.js';
 import { AppError, errors, isAppError } from './shared/errors/app-error.js';
 
@@ -260,12 +260,18 @@ export async function buildServer(): Promise<FastifyInstance> {
     await registerAnalyticsWebSocket(instance);
   });
 
-  // Touch deps so their lazy singletons construct at boot, surfacing config errors.
+  // Touch deps so their lazy singletons construct at boot, surfacing config errors
+  // (writer + reader; reader is a no-op when DATABASE_REPLICA_URL is unset since
+  // it falls back to the writer instance).
   getPrisma();
+  getPrismaReader();
   getRedis();
 
+  // Drain BOTH clients on close. Previously only the writer disconnected, which
+  // leaked the reader's pool when a replica was configured. `disconnectPrisma`
+  // handles writer+reader and de-dupes when reader is the writer fallback.
   app.addHook('onClose', async () => {
-    await getPrisma().$disconnect();
+    await disconnectPrisma();
   });
 
   return app as unknown as FastifyInstance;

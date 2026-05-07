@@ -1,11 +1,8 @@
 import { Worker } from 'bullmq';
 import { getLogger } from '../config/logger.js';
-import { getPrisma } from '../config/database.js';
+import { getPrisma, getPrismaLong } from '../config/database.js';
 import { getRedis } from '../config/redis.js';
-import {
-  AGGREGATION_QUEUE_NAME,
-  type AggregationJob,
-} from '../shared/queues/aggregation.queue.js';
+import { AGGREGATION_QUEUE_NAME, type AggregationJob } from '../shared/queues/aggregation.queue.js';
 
 /**
  * Materializes daily/monthly/yearly RevenueAggregation rows from the ledger.
@@ -15,6 +12,13 @@ import {
  */
 async function main(): Promise<void> {
   const log = getLogger();
+  // Reads run on the long-running role (5-min statement budget, separate
+  // pool — these aggregations scan millions of rows in big windows and we
+  // do NOT want them stealing API request capacity). Writes (the rollup
+  // upsert) go to the primary. The rollup output lands in
+  // RevenueAggregation, not the source RevenueEvent table, so there's no
+  // read-after-write hazard within a single job.
+  const reader = getPrismaLong();
   const prisma = getPrisma();
 
   const worker = new Worker<AggregationJob>(
@@ -37,17 +41,41 @@ async function main(): Promise<void> {
         pulls,
         avgDeal,
       ] = await Promise.all([
-        prisma.revenueEvent.aggregate({ where: { effectiveAt: { gte: from, lte: to } }, _sum: { amount: true } }),
-        prisma.revenueEvent.aggregate({ where: { effectiveAt: { gte: from, lte: to }, stream: 'BUZZPAY' }, _sum: { amount: true } }),
-        prisma.revenueEvent.aggregate({ where: { effectiveAt: { gte: from, lte: to }, stream: 'PIXIE' }, _sum: { amount: true } }),
-        prisma.revenueEvent.aggregate({ where: { effectiveAt: { gte: from, lte: to }, stream: 'MICAMP' }, _sum: { amount: true } }),
-        prisma.application.count({ where: { createdAt: { gte: from, lte: to } } }),
-        prisma.application.count({ where: { createdAt: { gte: from, lte: to }, status: { in: ['APPROVED', 'FUNDED'] } } }),
-        prisma.application.count({ where: { createdAt: { gte: from, lte: to }, status: 'FUNDED' } }),
-        prisma.partner.count({ where: { status: 'ACTIVE', deletedAt: null } }),
-        prisma.partner.count({ where: { onboardingDate: { gte: from, lte: to }, deletedAt: null } }),
-        prisma.pixieMetric.aggregate({ where: { period: 'DAILY', periodStart: { gte: from, lte: to } }, _sum: { dataPullsThisPeriod: true } }),
-        prisma.lenderDecision.aggregate({ where: { fundingTimestamp: { gte: from, lte: to }, fundingStatus: 'FUNDED' }, _avg: { fundingAmount: true } }),
+        reader.revenueEvent.aggregate({
+          where: { effectiveAt: { gte: from, lte: to } },
+          _sum: { amount: true },
+        }),
+        reader.revenueEvent.aggregate({
+          where: { effectiveAt: { gte: from, lte: to }, stream: 'BUZZPAY' },
+          _sum: { amount: true },
+        }),
+        reader.revenueEvent.aggregate({
+          where: { effectiveAt: { gte: from, lte: to }, stream: 'PIXIE' },
+          _sum: { amount: true },
+        }),
+        reader.revenueEvent.aggregate({
+          where: { effectiveAt: { gte: from, lte: to }, stream: 'MICAMP' },
+          _sum: { amount: true },
+        }),
+        reader.application.count({ where: { createdAt: { gte: from, lte: to } } }),
+        reader.application.count({
+          where: { createdAt: { gte: from, lte: to }, status: { in: ['APPROVED', 'FUNDED'] } },
+        }),
+        reader.application.count({
+          where: { createdAt: { gte: from, lte: to }, status: 'FUNDED' },
+        }),
+        reader.partner.count({ where: { status: 'ACTIVE', deletedAt: null } }),
+        reader.partner.count({
+          where: { onboardingDate: { gte: from, lte: to }, deletedAt: null },
+        }),
+        reader.pixieMetric.aggregate({
+          where: { period: 'DAILY', periodStart: { gte: from, lte: to } },
+          _sum: { dataPullsThisPeriod: true },
+        }),
+        reader.lenderDecision.aggregate({
+          where: { fundingTimestamp: { gte: from, lte: to }, fundingStatus: 'FUNDED' },
+          _avg: { fundingAmount: true },
+        }),
       ]);
 
       const approvalRate = totalApps === 0 ? '0' : (approvedApps / totalApps).toFixed(4);
