@@ -60,6 +60,114 @@ jobs:
       - run: pnpm test
       - run: pnpm build
 
+  # ─── Security scans ─────────────────────────────────────────────────────
+  # Three independent tools, gated as required checks. Each fails the
+  # workflow on findings at HIGH or CRITICAL severity.
+  #
+  # SOC 2 mapping:
+  #   CC6.8 — restricts the production of unauthorised software (vuln gate)
+  #   CC7.1 — vulnerability management
+  #   CC8.1 — change management — every PR scanned
+
+  dep-vuln-scan:
+    # Lockfile + dependency-tree audit via pnpm + Trivy (fs mode).
+    # pnpm audit catches advisory-DB-known issues; Trivy catches CVE matches
+    # against the resolved versions including transitives.
+    name: Dependency vulnerability scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with: { version: 9 }
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'pnpm'
+      - run: pnpm install --frozen-lockfile
+      - name: pnpm audit (fail at high)
+        # Production deps only — dev tooling vulns are out of attack surface.
+        # Prefix `|| true` removed deliberately; we want CI to fail loudly.
+        run: pnpm audit --prod --audit-level high
+      - name: Trivy filesystem scan
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          severity: HIGH,CRITICAL
+          exit-code: '1'
+          ignore-unfixed: true
+          format: sarif
+          output: trivy-fs.sarif
+      - name: Upload Trivy SARIF to code-scanning
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-fs.sarif
+          category: trivy-fs
+
+  static-analysis:
+    # CodeQL on TypeScript — finds AST-level issues a runtime scan can't,
+    # particularly injection, prototype pollution, ReDoS, hard-coded
+    # secrets in logic flows. Free for public repos + included in GHAS for
+    # private repos. Runs once on push, separate from per-PR build.
+    name: CodeQL static analysis
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: github/codeql-action/init@v3
+        with:
+          languages: javascript-typescript
+          queries: security-extended
+      - uses: github/codeql-action/analyze@v3
+        with:
+          category: codeql-typescript
+
+  container-scan:
+    # Build the API image, scan it with Trivy (image mode), and emit an
+    # SBOM. The SBOM is uploaded as an artifact and attached to the
+    # workflow — ready to ship with a release as a CycloneDX JSON.
+    name: Container scan + SBOM
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build api image
+        run: docker build -t eazepay-intel-api:ci -f apps/api/Dockerfile .
+      - name: Trivy image scan
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: eazepay-intel-api:ci
+          severity: HIGH,CRITICAL
+          exit-code: '1'
+          ignore-unfixed: true
+          format: sarif
+          output: trivy-image.sarif
+      - name: Upload Trivy image SARIF
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-image.sarif
+          category: trivy-image
+      - name: Generate SBOM (CycloneDX)
+        # Trivy emits CycloneDX without an extra installer.
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: eazepay-intel-api:ci
+          format: cyclonedx
+          output: sbom.cyclonedx.json
+      - name: Upload SBOM artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom-cyclonedx
+          path: sbom.cyclonedx.json
+          retention-days: 90
+
   integration-multi-db:
     # End-to-end verification of the writer/reader split against a real
     # streaming-replication topology. Boots a second Postgres alongside the

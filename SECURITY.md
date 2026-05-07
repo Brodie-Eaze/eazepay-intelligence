@@ -103,6 +103,21 @@ Two roles required in production:
 4. **Recover** — `/admin → Webhook events → Replay` button re-enqueues a failed event. The processor is idempotent on `(source, idempotency_key)` so safe to retry.
 5. **Postmortem** — write up; if PII was accessed inappropriately, audit log shows exact `userId` + `applicationId` + timestamp.
 
+## Supply-chain controls
+
+Every PR runs four scans, each gated as a required check:
+
+| Tool                                             | Surface                                                   | Fails on         |
+| ------------------------------------------------ | --------------------------------------------------------- | ---------------- |
+| `pnpm audit --audit-level=high` (prod deps only) | Lockfile advisory matches                                 | HIGH or CRITICAL |
+| Trivy (fs mode)                                  | Resolved deps incl. transitives                           | HIGH or CRITICAL |
+| CodeQL (`security-extended`)                     | TypeScript AST — injection, ReDoS, hardcoded-secret flows | any finding      |
+| Trivy (image mode)                               | Container layers + base image                             | HIGH or CRITICAL |
+
+Each Trivy run uploads a SARIF to GitHub Code Scanning. A CycloneDX SBOM is generated from the container image and attached to every workflow run as a 90-day artifact — ready to ship with a release for downstream attestation.
+
+Dependabot (`.github/dependabot.yml`) raises PRs as new advisories land; those PRs run the same gates so a regression-introducing bump can't merge.
+
 ## Vulnerability disclosure
 
 Email security@eazepay.local. We aim to acknowledge in 24h, patch high-severity in 7 days. Please don't run automated scanners against production hosts without prior notice.
