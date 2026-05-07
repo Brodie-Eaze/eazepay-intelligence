@@ -51,8 +51,33 @@ Per-route, configured via env. Routes that don't override get `BODY_LIMIT_DEFAUL
 
 Two singletons: `getPrismaWriter()` (primary) and `getPrismaReader()` (replica). Reads opt into the replica explicitly; writes always go to primary.
 
-- **Replica configured (`DATABASE_REPLICA_URL` set)**: analytics + dashboard reads route there. Replication lag tolerated up to a few seconds for those views.
+- **Replica configured (`DATABASE_REPLICA_URL` set)**: analytics + dashboard reads route there. Replication lag tolerated up to ~30s for those views.
 - **Replica missing or down**: reader silently falls back to writer. Health probe surfaces `replica: degraded` so ops sees it.
+
+**Routes pinned to the reader** (heavy aggregation, lag-tolerant):
+
+| Domain    | Route prefix                            | Why                                        |
+| --------- | --------------------------------------- | ------------------------------------------ |
+| Analytics | `/analytics/*`                          | Dashboard rollups, materialized views      |
+| Customers | `/customers`, `/customers/:hash*`       | Book reads + stats aggregations            |
+| Admin     | `/audit-logs`, `/admin/webhook-events*` | Log browsing, large historical reads       |
+| Lenders   | `/lenders*`, `/lenders/waterfall`       | Decision aggregates                        |
+| Revenue   | `/revenue/*`                            | Ledger views, by-stream/by-partner rollups |
+| Search    | `/search` (GET only)                    | Cross-domain search                        |
+| Portfolio | `/portfolio/*` (GET)                    | Currently fixture-backed; replica-ready    |
+
+**Routes pinned to the writer** (mutations + read-after-write):
+
+| Domain      | Route prefix                                | Why                                                    |
+| ----------- | ------------------------------------------- | ------------------------------------------------------ |
+| Auth        | `/auth/*`                                   | Login → set cookie + read user must be consistent      |
+| Partners    | `/partners*` (POST/PATCH/DELETE)            | CRUD; create→read response must reflect write          |
+| Saved views | `/saved-views/*` (POST/DELETE)              | Read-then-delete uses writer to avoid replica-lag race |
+| API tokens  | `/api-tokens*` (POST/DELETE)                | Issue → list must show new token immediately           |
+| Ingestion   | `/ingestion/*`, `/portfolio/*` (POST/PATCH) | Writes by definition                                   |
+| Webhooks    | `/webhooks/*`                               | Inbound writes                                         |
+
+**Replication lag visibility**: `/health/ready` runs `SELECT EXTRACT(EPOCH FROM (now() - pg_last_xact_replay_timestamp())) * 1000 AS lag_ms` against the replica and returns `replicaLagMs` in the body. >30s flags `replica: degraded`.
 
 ### Connection pool
 

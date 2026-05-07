@@ -27,26 +27,24 @@ export class AnalyticsService {
     const priorTo = from;
     const priorFrom = new Date(priorTo.getTime() - (to.getTime() - from.getTime()));
 
-    const [
-      totalRevenue,
-      priorRevenue,
-      approval,
-      funding,
-      activePartners,
-      pixie,
-    ] = await Promise.all([
-      this.repo.totalRevenue({ from, to }),
-      this.repo.totalRevenue({ from: priorFrom, to: priorTo }),
-      this.repo.approvalRate({ from, to }),
-      this.repo.fundingRate({ from, to }),
-      this.repo.activePartnerCount({ since: from }),
-      this.repo.pixiePullsLast24h(),
-    ]);
+    const [totalRevenue, priorRevenue, approval, funding, activePartners, pixie] =
+      await Promise.all([
+        this.repo.totalRevenue({ from, to }),
+        this.repo.totalRevenue({ from: priorFrom, to: priorTo }),
+        this.repo.approvalRate({ from, to }),
+        this.repo.fundingRate({ from, to }),
+        this.repo.activePartnerCount({ since: from }),
+        this.repo.pixiePullsLast24h(),
+      ]);
 
     const approvalRate =
-      approval.total === 0 ? '0' : new Prisma.Decimal(approval.approved).div(approval.total).toFixed(4);
+      approval.total === 0
+        ? '0'
+        : new Prisma.Decimal(approval.approved).div(approval.total).toFixed(4);
     const fundingRate =
-      funding.approved === 0 ? '0' : new Prisma.Decimal(funding.funded).div(funding.approved).toFixed(4);
+      funding.approved === 0
+        ? '0'
+        : new Prisma.Decimal(funding.funded).div(funding.approved).toFixed(4);
     const prior = new Prisma.Decimal(priorRevenue);
     const current = new Prisma.Decimal(totalRevenue);
     const momDelta = prior.isZero() ? '0' : current.minus(prior).div(prior).toFixed(4);
@@ -66,12 +64,17 @@ export class AnalyticsService {
     return body;
   }
 
-  async revenueBreakdown(query: { from?: string; to?: string; bucket: 'day' | 'week' | 'month' }): Promise<unknown> {
+  async revenueBreakdown(query: {
+    from?: string;
+    to?: string;
+    bucket: 'day' | 'week' | 'month';
+  }): Promise<unknown> {
     // Delegated to RevenueRepository in revenue.service.ts; here we just shape it.
     // Imported lazily to avoid cycle at module load time.
     const { RevenueRepository } = await import('../revenue/revenue.repository.js');
-    const { getPrisma } = await import('../../config/database.js');
-    const repo = new RevenueRepository(getPrisma());
+    const { getPrismaReader } = await import('../../config/database.js');
+    // Replica is fine — this aggregation tolerates seconds of replication lag.
+    const repo = new RevenueRepository(getPrismaReader());
     const rows = await repo.sumByStream({
       from: query.from ? new Date(query.from) : undefined,
       to: query.to ? new Date(query.to) : undefined,

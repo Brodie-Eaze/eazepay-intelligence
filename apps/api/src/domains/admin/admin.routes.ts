@@ -1,7 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { Prisma } from '@prisma/client';
-import { getPrisma } from '../../config/database.js';
+import { getPrismaReader } from '../../config/database.js';
 import { getRedis } from '../../config/redis.js';
 import { requireAuth } from '../../shared/middleware/auth.middleware.js';
 import { denyInvestorScope, requireRole } from '../../shared/middleware/rbac.middleware.js';
@@ -24,7 +24,7 @@ const ListAuditQuery = z.object({
  * All locked behind ADMIN role + denyInvestorScope.
  */
 export async function registerAdminRoutes(app: FastifyInstance): Promise<void> {
-  const prisma = getPrisma();
+  const prisma = getPrismaReader();
   const redis = getRedis();
 
   // ─── Webhook events ──────────────────────────────────────────────────────
@@ -84,8 +84,9 @@ export async function registerAdminRoutes(app: FastifyInstance): Promise<void> {
             processed,
             failed,
             backlog: received,
-            successRate: total ? (processed / total) : 0,
-            lastReceivedAt: lastReceived.find((l) => l.source === src)?._max.receivedAt?.toISOString() ?? null,
+            successRate: total ? processed / total : 0,
+            lastReceivedAt:
+              lastReceived.find((l) => l.source === src)?._max.receivedAt?.toISOString() ?? null,
           };
         }),
       };
@@ -125,55 +126,58 @@ export async function registerAdminRoutes(app: FastifyInstance): Promise<void> {
   );
 
   // ─── System health (operational telemetry) ───────────────────────────────
-  app.get(
-    '/admin/health',
-    { preHandler: [requireAuth, denyInvestorScope] },
-    async () => {
-      const dbStart = Date.now();
-      const dbCounts = await prisma.$queryRaw<Array<{ relname: string; count: bigint }>>(Prisma.sql`
+  app.get('/admin/health', { preHandler: [requireAuth, denyInvestorScope] }, async () => {
+    const dbStart = Date.now();
+    const dbCounts = await prisma.$queryRaw<Array<{ relname: string; count: bigint }>>(Prisma.sql`
         SELECT relname, n_live_tup AS count
         FROM pg_stat_user_tables
         WHERE relname IN ('partners','applications','lender_decisions','revenue_events','webhook_events','pixie_metrics','users','audit_logs','refresh_tokens')
         ORDER BY relname
       `);
-      const dbLatency = Date.now() - dbStart;
+    const dbLatency = Date.now() - dbStart;
 
-      const redisStart = Date.now();
-      const queueDepth = {
-        webhook: Number(await redis.llen('bull:eazepay.webhook:wait').catch(() => 0)),
-        webhookActive: Number(await redis.llen('bull:eazepay.webhook:active').catch(() => 0)),
-        webhookFailed: Number(await redis.llen('bull:eazepay.webhook:failed').catch(() => 0)),
-        aggregation: Number(await redis.llen('bull:eazepay.aggregation:wait').catch(() => 0)),
-      };
-      const redisLatency = Date.now() - redisStart;
+    const redisStart = Date.now();
+    const queueDepth = {
+      webhook: Number(await redis.llen('bull:eazepay.webhook:wait').catch(() => 0)),
+      webhookActive: Number(await redis.llen('bull:eazepay.webhook:active').catch(() => 0)),
+      webhookFailed: Number(await redis.llen('bull:eazepay.webhook:failed').catch(() => 0)),
+      aggregation: Number(await redis.llen('bull:eazepay.aggregation:wait').catch(() => 0)),
+    };
+    const redisLatency = Date.now() - redisStart;
 
-      const recentLogins = await prisma.auditLog.count({
-        where: { action: 'USER_LOGIN', createdAt: { gte: new Date(Date.now() - 24 * 3600_000) } },
-      });
-      const failedLogins = await prisma.auditLog.count({
-        where: { action: 'USER_LOGIN_FAILED', createdAt: { gte: new Date(Date.now() - 24 * 3600_000) } },
-      });
-      const piiAccess24h = await prisma.auditLog.count({
-        where: { action: 'PII_ACCESSED', createdAt: { gte: new Date(Date.now() - 24 * 3600_000) } },
-      });
+    const recentLogins = await prisma.auditLog.count({
+      where: { action: 'USER_LOGIN', createdAt: { gte: new Date(Date.now() - 24 * 3600_000) } },
+    });
+    const failedLogins = await prisma.auditLog.count({
+      where: {
+        action: 'USER_LOGIN_FAILED',
+        createdAt: { gte: new Date(Date.now() - 24 * 3600_000) },
+      },
+    });
+    const piiAccess24h = await prisma.auditLog.count({
+      where: { action: 'PII_ACCESSED', createdAt: { gte: new Date(Date.now() - 24 * 3600_000) } },
+    });
 
-      const activeSessions = await prisma.refreshToken.count({
-        where: { revokedAt: null, expiresAt: { gt: new Date() } },
-      });
+    const activeSessions = await prisma.refreshToken.count({
+      where: { revokedAt: null, expiresAt: { gt: new Date() } },
+    });
 
-      return {
-        generatedAt: new Date().toISOString(),
-        database: {
-          status: 'ok',
-          latencyMs: dbLatency,
-          rowCounts: dbCounts.map((r) => ({ table: r.relname, rows: Number(r.count) })),
-        },
-        redis: { status: 'ok', latencyMs: redisLatency, queueDepth },
-        sessions: { active: activeSessions, recentLogins24h: recentLogins, failedLogins24h: failedLogins },
-        privacy: { piiAccess24h },
-      };
-    },
-  );
+    return {
+      generatedAt: new Date().toISOString(),
+      database: {
+        status: 'ok',
+        latencyMs: dbLatency,
+        rowCounts: dbCounts.map((r) => ({ table: r.relname, rows: Number(r.count) })),
+      },
+      redis: { status: 'ok', latencyMs: redisLatency, queueDepth },
+      sessions: {
+        active: activeSessions,
+        recentLogins24h: recentLogins,
+        failedLogins24h: failedLogins,
+      },
+      privacy: { piiAccess24h },
+    };
+  });
 
   // ─── Sessions (active refresh tokens) ────────────────────────────────────
   app.get(
@@ -267,11 +271,8 @@ export async function registerAdminRoutes(app: FastifyInstance): Promise<void> {
   );
 
   // ─── Reconciliation: ledger SUM vs aggregation rollup ────────────────────
-  app.get(
-    '/admin/reconciliation',
-    { preHandler: [requireAuth, denyInvestorScope] },
-    async () => {
-      const ledger = await prisma.$queryRaw<Array<{ month: Date; total: string }>>(Prisma.sql`
+  app.get('/admin/reconciliation', { preHandler: [requireAuth, denyInvestorScope] }, async () => {
+    const ledger = await prisma.$queryRaw<Array<{ month: Date; total: string }>>(Prisma.sql`
         SELECT date_trunc('month', effective_at) AS month,
                COALESCE(SUM(amount), 0)::text   AS total
         FROM revenue_events
@@ -279,7 +280,7 @@ export async function registerAdminRoutes(app: FastifyInstance): Promise<void> {
         ORDER BY month DESC
         LIMIT 12
       `);
-      const rollup = await prisma.$queryRaw<Array<{ month: Date; total: string }>>(Prisma.sql`
+    const rollup = await prisma.$queryRaw<Array<{ month: Date; total: string }>>(Prisma.sql`
         SELECT date_trunc('month', period_start) AS month,
                COALESCE(SUM(total_revenue), 0)::text AS total
         FROM revenue_aggregations
@@ -288,37 +289,48 @@ export async function registerAdminRoutes(app: FastifyInstance): Promise<void> {
         ORDER BY month DESC
         LIMIT 12
       `);
-      const ledgerMap = new Map(ledger.map((r) => [r.month.toISOString(), r.total]));
-      const rollupMap = new Map(rollup.map((r) => [r.month.toISOString(), r.total]));
-      const months = Array.from(new Set([...ledgerMap.keys(), ...rollupMap.keys()])).sort().reverse();
-      const rows = months.map((m) => {
-        const ledgerTotal = ledgerMap.get(m) ?? '0';
-        const rollupTotal = rollupMap.get(m) ?? '0';
-        const drift = (Number(rollupTotal) - Number(ledgerTotal)).toFixed(2);
-        return { month: m, ledgerTotal, rollupTotal, drift, drifted: Math.abs(Number(drift)) > 0.005 };
-      });
-      const driftedCount = rows.filter((r) => r.drifted).length;
+    const ledgerMap = new Map(ledger.map((r) => [r.month.toISOString(), r.total]));
+    const rollupMap = new Map(rollup.map((r) => [r.month.toISOString(), r.total]));
+    const months = Array.from(new Set([...ledgerMap.keys(), ...rollupMap.keys()]))
+      .sort()
+      .reverse();
+    const rows = months.map((m) => {
+      const ledgerTotal = ledgerMap.get(m) ?? '0';
+      const rollupTotal = rollupMap.get(m) ?? '0';
+      const drift = (Number(rollupTotal) - Number(ledgerTotal)).toFixed(2);
       return {
-        months: rows,
-        summary: {
-          monthsTracked: rows.length,
-          driftedMonths: driftedCount,
-          allClean: driftedCount === 0,
-        },
-        generatedAt: new Date().toISOString(),
+        month: m,
+        ledgerTotal,
+        rollupTotal,
+        drift,
+        drifted: Math.abs(Number(drift)) > 0.005,
       };
-    },
-  );
+    });
+    const driftedCount = rows.filter((r) => r.drifted).length;
+    return {
+      months: rows,
+      summary: {
+        monthsTracked: rows.length,
+        driftedMonths: driftedCount,
+        allClean: driftedCount === 0,
+      },
+      generatedAt: new Date().toISOString(),
+    };
+  });
 
   // ─── Lender deep-dive (per-month + APR distribution) ─────────────────────
-  app.get(
-    '/lenders/:name/timeline',
-    { preHandler: requireAuth },
-    async (req) => {
-      const params = z.object({ name: z.string().min(1) }).parse(req.params);
-      const monthly = await prisma.$queryRaw<
-        Array<{ bucket: Date; submitted: bigint; approved: bigint; funded: bigint; avg_apr: string | null; funded_amount: string }>
-      >(Prisma.sql`
+  app.get('/lenders/:name/timeline', { preHandler: requireAuth }, async (req) => {
+    const params = z.object({ name: z.string().min(1) }).parse(req.params);
+    const monthly = await prisma.$queryRaw<
+      Array<{
+        bucket: Date;
+        submitted: bigint;
+        approved: bigint;
+        funded: bigint;
+        avg_apr: string | null;
+        funded_amount: string;
+      }>
+    >(Prisma.sql`
         SELECT date_trunc('month', decision_timestamp) AS bucket,
                COUNT(*)::bigint AS submitted,
                COUNT(*) FILTER (WHERE decision='APPROVED')::bigint AS approved,
@@ -331,7 +343,7 @@ export async function registerAdminRoutes(app: FastifyInstance): Promise<void> {
         ORDER BY bucket DESC
         LIMIT 24
       `);
-      const aprBuckets = await prisma.$queryRaw<Array<{ bucket: number; n: bigint }>>(Prisma.sql`
+    const aprBuckets = await prisma.$queryRaw<Array<{ bucket: number; n: bigint }>>(Prisma.sql`
         SELECT CASE
                  WHEN apr < 10 THEN 0
                  WHEN apr < 15 THEN 10
@@ -346,34 +358,36 @@ export async function registerAdminRoutes(app: FastifyInstance): Promise<void> {
         GROUP BY bucket
         ORDER BY bucket
       `);
-      const recent = await prisma.lenderDecision.findMany({
-        where: { lenderName: params.name },
-        orderBy: { decisionTimestamp: 'desc' },
-        take: 50,
-        include: { application: { select: { externalApplicationId: true } } },
-      });
-      return {
-        lenderName: params.name,
-        monthly: monthly.map((m) => ({
-          bucket: m.bucket.toISOString(),
-          submitted: Number(m.submitted),
-          approved: Number(m.approved),
-          funded: Number(m.funded),
-          avgApr: m.avg_apr,
-          fundedAmount: m.funded_amount,
-        })),
-        aprDistribution: aprBuckets.map((b) => ({ bucketLabel: `${b.bucket}–${b.bucket + 5}%`, count: Number(b.n) })),
-        recentDecisions: recent.map((d) => ({
-          id: d.id,
-          externalApplicationId: d.application.externalApplicationId,
-          decision: d.decision,
-          decisionTimestamp: d.decisionTimestamp.toISOString(),
-          apr: d.apr?.toString() ?? null,
-          approvalAmount: d.approvalAmount?.toString() ?? null,
-          fundingStatus: d.fundingStatus,
-          fundingAmount: d.fundingAmount?.toString() ?? null,
-        })),
-      };
-    },
-  );
+    const recent = await prisma.lenderDecision.findMany({
+      where: { lenderName: params.name },
+      orderBy: { decisionTimestamp: 'desc' },
+      take: 50,
+      include: { application: { select: { externalApplicationId: true } } },
+    });
+    return {
+      lenderName: params.name,
+      monthly: monthly.map((m) => ({
+        bucket: m.bucket.toISOString(),
+        submitted: Number(m.submitted),
+        approved: Number(m.approved),
+        funded: Number(m.funded),
+        avgApr: m.avg_apr,
+        fundedAmount: m.funded_amount,
+      })),
+      aprDistribution: aprBuckets.map((b) => ({
+        bucketLabel: `${b.bucket}–${b.bucket + 5}%`,
+        count: Number(b.n),
+      })),
+      recentDecisions: recent.map((d) => ({
+        id: d.id,
+        externalApplicationId: d.application.externalApplicationId,
+        decision: d.decision,
+        decisionTimestamp: d.decisionTimestamp.toISOString(),
+        apr: d.apr?.toString() ?? null,
+        approvalAmount: d.approvalAmount?.toString() ?? null,
+        fundingStatus: d.fundingStatus,
+        fundingAmount: d.fundingAmount?.toString() ?? null,
+      })),
+    };
+  });
 }

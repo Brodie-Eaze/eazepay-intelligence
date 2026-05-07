@@ -200,6 +200,15 @@ Pass-the-pen-test pass. Each change made a specific control evidenceable.
 ### Database (A1.1, A1.2, CC7.2)
 
 - **Writer / reader split** in `apps/api/src/config/database.ts`. `getPrismaWriter()` is the primary; `getPrismaReader()` routes to the replica when `DATABASE_REPLICA_URL` is set, transparently falls back to writer if the replica is unavailable. Soft-failure mode is "primary handles both."
+- **Reader is wired into the actual hot read paths**, not just exposed in config:
+  - `apps/api/src/domains/analytics/analytics.routes.ts` (all `/analytics/*`)
+  - `apps/api/src/domains/customers/customer.routes.ts` (customer book, stats)
+  - `apps/api/src/domains/admin/admin.routes.ts` (audit log views, webhook event lists)
+  - `apps/api/src/domains/lenders/lender.routes.ts` (waterfall, performance)
+  - `apps/api/src/domains/revenue/revenue.routes.ts` (ledger reads, by-stream/by-partner)
+  - `apps/api/src/domains/search/search.routes.ts` (search GET; saved-views CRUD on writer)
+- **Read-after-write hazards explicitly handled**: `saved-views` DELETE reads ownership against the writer (not the replica) to avoid the rare race where the replica hasn't caught up to a recent create from the same user. Pattern documented inline.
+- **Replication lag exposed in `/health/ready`** via `pg_last_xact_replay_timestamp()`. Lag > 30s flags `replica: degraded` without failing readiness (the platform stays available because reads fall back to writer). Surfaces in `replicaLagMs` for ops dashboards.
 - **Role-level connection safety** in `init-timescale.sql`. The `eazepay_app` role inherits `statement_timeout=30s`, `idle_in_transaction_session_timeout=10s`, `lock_timeout=5s`. Application code cannot opt out — every connection inherits these.
 - **Slow-query log** via Prisma `$on('query')`. Anything ≥ `DATABASE_SLOW_QUERY_LOG_MS` (default 500ms) emits at WARN with full query text. Pipe to your log aggregator; alert on sustained increases.
 - **Connection pool bound** via `DATABASE_URL?connection_limit=N`. Documented sizing: total ≤ Postgres `max_connections − 20%`. PgBouncer is the path forward when totals exceed.

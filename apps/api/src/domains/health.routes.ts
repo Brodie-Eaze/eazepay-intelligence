@@ -68,20 +68,45 @@ export function registerHealthRoute(app: FastifyInstance): void {
         redis: redis.status,
         replica: replica.status,
         replicaConfigured: !isReaderUsingFallback(),
+        ...(replica.lagMs !== undefined ? { replicaLagMs: replica.lagMs } : {}),
       },
     });
   });
 }
 
-async function checkReplica(): Promise<DependencyStatus> {
-  // If no replica is configured, we report 'ok' — we're not pretending the
-  // primary is the replica, the readiness handler reflects this in
-  // `replicaConfigured: false`.
+/**
+ * Replica health + replication lag.
+ *
+ * When a replica is configured, we don't just check it can answer SELECT 1 —
+ * we also measure how far it's lagging the primary using
+ * `pg_last_xact_replay_timestamp()`. Lag above 30 seconds is operationally
+ * meaningful: analytics dashboards stop being a fair representation of the
+ * write path. We surface this as `lag: degraded` so ops sees it without
+ * failing readiness (the reader still falls back to the writer transparently,
+ * so the platform stays available).
+ *
+ * SOC 2 mapping:
+ *   - A1.2 (availability) — explicit signal when reads diverge from writes
+ *   - CC7.2 (monitoring)  — replication lag is a leading indicator of
+ *                            replica problems hours before they cascade
+ */
+async function checkReplica(): Promise<DependencyStatus & { lagMs?: number }> {
   if (isReaderUsingFallback()) return { status: 'ok' };
   const t = Date.now();
   try {
     await getPrismaReader().$queryRaw`SELECT 1`;
-    return { status: 'ok', latencyMs: Date.now() - t };
+    // pg_last_xact_replay_timestamp() returns NULL on the primary and the
+    // last replayed-tx timestamp on a standby. Lag = now() - that ts.
+    const rows = await getPrismaReader().$queryRaw<Array<{ lag_ms: number | null }>>`
+      SELECT EXTRACT(EPOCH FROM (now() - pg_last_xact_replay_timestamp())) * 1000 AS lag_ms
+    `;
+    const lagMs = rows[0]?.lag_ms != null ? Math.round(Number(rows[0].lag_ms)) : undefined;
+    const overLagBudget = lagMs !== undefined && lagMs > 30_000;
+    return {
+      status: overLagBudget ? 'degraded' : 'ok',
+      latencyMs: Date.now() - t,
+      ...(lagMs !== undefined ? { lagMs } : {}),
+    };
   } catch (err) {
     return { status: 'degraded', error: (err as Error).message };
   }

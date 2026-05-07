@@ -1,12 +1,12 @@
 import type { FastifyInstance } from 'fastify';
-import { getPrisma } from '../../config/database.js';
+import { getPrismaReader } from '../../config/database.js';
 import { requireAuth } from '../../shared/middleware/auth.middleware.js';
 import { LenderRepository } from './lender.repository.js';
 import { LenderService } from './lender.service.js';
 import { LenderRangeQuerySchema } from './lender.schemas.js';
 
 export async function registerLenderRoutes(app: FastifyInstance): Promise<void> {
-  const repo = new LenderRepository(getPrisma());
+  const repo = new LenderRepository(getPrismaReader());
   const service = new LenderService(repo);
 
   app.get('/lenders/waterfall', { preHandler: requireAuth }, async (req) => {
@@ -15,7 +15,7 @@ export async function registerLenderRoutes(app: FastifyInstance): Promise<void> 
   });
 
   app.get('/lenders', { preHandler: requireAuth }, async () => {
-    const rows = await getPrisma().lenderDecision.findMany({
+    const rows = await getPrismaReader().lenderDecision.findMany({
       distinct: ['lenderName'],
       select: { lenderName: true, lenderTier: true },
       orderBy: { lenderName: 'asc' },
@@ -25,7 +25,7 @@ export async function registerLenderRoutes(app: FastifyInstance): Promise<void> 
 
   app.get('/lenders/:name/performance', { preHandler: requireAuth }, async (req) => {
     const params = req.params as { name: string };
-    const rows = await getPrisma().lenderDecision.findMany({
+    const rows = await getPrismaReader().lenderDecision.findMany({
       where: { lenderName: params.name },
       orderBy: { decisionTimestamp: 'desc' },
       take: 200,

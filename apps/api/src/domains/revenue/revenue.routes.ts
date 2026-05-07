@@ -1,15 +1,12 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import { getPrisma } from '../../config/database.js';
+import { getPrismaReader } from '../../config/database.js';
 import { requireAuth } from '../../shared/middleware/auth.middleware.js';
 import { denyInvestorScope } from '../../shared/middleware/rbac.middleware.js';
 import { partnerLabel } from '../partners/partner.types.js';
 import { RevenueRepository } from './revenue.repository.js';
 import { RevenueService } from './revenue.service.js';
-import {
-  RevenueByStreamQuerySchema,
-  RevenueLedgerQuerySchema,
-} from './revenue.schemas.js';
+import { RevenueByStreamQuerySchema, RevenueLedgerQuerySchema } from './revenue.schemas.js';
 
 const RangeQuery = z.object({
   from: z.string().datetime().optional(),
@@ -18,7 +15,7 @@ const RangeQuery = z.object({
 });
 
 export async function registerRevenueRoutes(app: FastifyInstance): Promise<void> {
-  const service = new RevenueService(new RevenueRepository(getPrisma()));
+  const service = new RevenueService(new RevenueRepository(getPrismaReader()));
 
   app.get('/revenue/ledger', { preHandler: [requireAuth, denyInvestorScope] }, async (req) => {
     const query = RevenueLedgerQuerySchema.parse(req.query);
