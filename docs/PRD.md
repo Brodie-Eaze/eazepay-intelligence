@@ -2,7 +2,7 @@
 
 ## Why this exists
 
-EazePay is composed of three product surfaces — Pixie smart-form (HighSale), BuzzPay's lender decision engine, MiCamp's payment processing — each generating its own data trail in its own vendor dashboard. There is no unified place where the founder or an investor can see what the platform is _actually doing_ in real time, with a credit-aware view of every customer who has flowed through it.
+EazePay is composed of three product surfaces — Pixie smart-form (HighSale), BuzzPay's lender decision engine, MiCamp's payment processing — each generating its own data trail in its own vendor dashboard. There is no unified place where an operator or capital partner can see what the platform is _actually doing_ in real time, with a credit-aware view of every customer who has flowed through it.
 
 EazePay Intelligence is that place.
 
@@ -12,11 +12,11 @@ EazePay Intelligence is that place.
 
 The platform is **internal-use only**. It serves three audiences who all sign in to the same dashboard:
 
-| Audience                                    | What they need                                                                                                                                   |
-| ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **Brodie + ops team** (operator+admin role) | Real-time visibility into every customer, every decision, every dollar. Audit trail. PII reveal flow. Partner onboarding. User & role admin.     |
-| **Engineering on-call**                     | System health, queue depth, webhook failure rate, session inventory, audit log filtering.                                                        |
-| **Capital partners during diligence**       | The same data, with operators driving the demo. (Server-side investor scope is implemented but currently dropped from UI per founder direction.) |
+| Audience                                    | What they need                                                                                                                               |
+| ------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Brodie + ops team** (operator+admin role) | Real-time visibility into every customer, every decision, every dollar. Audit trail. PII reveal flow. Partner onboarding. User & role admin. |
+| **Engineering on-call**                     | System health, queue depth, webhook failure rate, session inventory, audit log filtering.                                                    |
+| **Capital partners during diligence**       | The same data, with operators driving the demo. (Server-side investor scope is implemented but currently dropped from the UI surface.)       |
 
 **No consumer-facing surface.** Consumers only ever interact with Pixie's smart-form on a partner's site.
 

@@ -72,7 +72,7 @@ pnpm --filter api worker:revenue        # cron-driven period closes
 
 In order, for a new engineer who wants the architecture in their head:
 
-1. `HANDOVER.md` — the orientation doc you just opened
+1. `ORIENTATION.md` — the orientation doc you just opened
 2. `ARCHITECTURE.md` — system shape + 12 ADRs explaining every key decision
 3. `apps/api/prisma/schema.prisma` — the data model
 4. `apps/api/src/server.ts` — Fastify bootstrap, plugin order, error envelope
@@ -140,7 +140,7 @@ EazePay Intelligence/
 ├── docker-compose.yml                  # local Postgres + Redis
 ├── turbo.json                          # build pipeline graph
 ├── tsconfig.base.json                  # shared TS config
-├── HANDOVER.md
+├── ORIENTATION.md
 ├── ARCHITECTURE.md
 ├── PRD.md
 ├── SECURITY.md

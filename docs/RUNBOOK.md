@@ -2,7 +2,7 @@
 
 The "what to do when X happens" reference. Each procedure is short, ordered, and copy-pasteable.
 
-> **First-time readers:** start with [HANDOVER.md](HANDOVER.md) and [ONBOARDING.md](ONBOARDING.md). This file assumes you can already get the platform running locally.
+> **First-time readers:** start with [ORIENTATION.md](ORIENTATION.md) and [ONBOARDING.md](ONBOARDING.md). This file assumes you can already get the platform running locally.
 
 ---
 

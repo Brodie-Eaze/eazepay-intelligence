@@ -1,10 +1,8 @@
-# Handover · EazePay Intelligence
+# Orientation · EazePay Intelligence
 
-**For:** incoming engineers
 **Snapshot:** 2026-05-08 · `feat/portfolio-silos` branch · pre-production
-**Author:** Brodie (founder)
 
-The full status breakdown lives in [`STATUS.md`](../STATUS.md). This doc is the orientation pass.
+The full status breakdown lives in [`STATUS.md`](../STATUS.md). This doc is a fast tour of the codebase.
 
 ---
 

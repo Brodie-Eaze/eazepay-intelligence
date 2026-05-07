@@ -17,8 +17,8 @@ This document maps every relevant SOC 2 Trust Services Criterion (TSC) to a conc
 | TSC   | Control                                                    | Status | Evidence                                                                       |
 | ----- | ---------------------------------------------------------- | ------ | ------------------------------------------------------------------------------ |
 | CC1.1 | Demonstrates commitment to integrity and ethical values    | ✅     | `CONTRIBUTING.md` — code of conduct, conventional commits, PR review checklist |
-| CC1.2 | Board oversight (or founder governance)                    | ⏳     | Single-founder stage. Pre-Series A advisory board planned.                     |
-| CC1.3 | Establishes structures, reporting lines, authorities       | 🟡     | `RBAC` matrix in `ARCHITECTURE.md` §14.2; org chart pending CTO hire.          |
+| CC1.2 | Board oversight                                            | ⏳     | Pre-Series A; advisory board planned.                                          |
+| CC1.3 | Establishes structures, reporting lines, authorities       | 🟡     | `RBAC` matrix in `ARCHITECTURE.md` §14.2; org chart pending leadership hires.  |
 | CC1.4 | Demonstrates commitment to competence                      | ⏳     | Hiring plan + role JDs are next-quarter deliverables.                          |
 | CC1.5 | Holds individuals accountable for control responsibilities | ✅     | Audit log records actor for every mutation; `audit_logs` table append-only.    |
 
@@ -152,7 +152,7 @@ For an auditor, here is the line-of-code traceability:
 9. **Risk register** — partial (STRIDE in `SECURITY.md`); needs annual review cadence
 10. **Business continuity / disaster recovery plan** — DR drills + runbook
 
-These map cleanly to the next sprint's compliance work and aren't blockers for engineering handover.
+These map cleanly to the next sprint's compliance work and aren't blockers for engineering execution.
 
 ---
 

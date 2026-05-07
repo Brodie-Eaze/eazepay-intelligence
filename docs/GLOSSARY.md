@@ -126,7 +126,7 @@ The bands map onto the lender tiers but aren't 1:1 (a deep-subprime customer mig
 
 **RBAC roles** — `ADMIN` (everything), `OPERATOR` (everything except user admin), `INVESTOR` (aggregated views only — UI scope dropped, server enforcement remains), `VIEWER` (read-only with PII masked).
 
-**Investor mode / scope** — server-side response projection that anonymizes partner names and strips PII. Implemented but UI toggle removed per founder direction. The scope JWT field still drives server-side gating.
+**Investor mode / scope** — server-side response projection that anonymizes partner names and strips PII. Implemented but UI toggle currently dropped. The scope JWT field still drives server-side gating.
 
 **Partner label** — deterministic anonymized code derived from a partner's UUID for investor-scope rendering: `PARTNER-<first8(SHA-256(uuid))>`.
 

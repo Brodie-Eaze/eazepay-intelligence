@@ -138,7 +138,7 @@ For end-to-end multi-DB integration tests against a real streaming-replication t
 │   ├── ROADMAP.md           # forward plan
 │   ├── RUNBOOK.md           # deploy / rollback / incident response / debug
 │   ├── ONBOARDING.md        # clone-to-running setup
-│   ├── HANDOVER.md          # 30-second / 5-minute orientation
+│   ├── ORIENTATION.md          # 30-second / 5-minute orientation
 │   ├── KNOWN_ISSUES.md      # honest tech-debt list
 │   ├── GLOSSARY.md          # domain terms
 │   ├── INGESTION.md         # dev-facing contract for plugging in data sources
@@ -153,10 +153,10 @@ For end-to-end multi-DB integration tests against a real streaming-replication t
 
 ---
 
-## Reading order for new engineers
+## Documentation index
 
 1. [`STATUS.md`](STATUS.md) — what's done / in progress / not
-2. [`docs/HANDOVER.md`](docs/HANDOVER.md) — 30-second + 5-minute orientation
+2. [`docs/ORIENTATION.md`](docs/ORIENTATION.md) — fast tour of the codebase
 3. [`docs/ONBOARDING.md`](docs/ONBOARDING.md) — clone-to-running setup
 4. [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — system shape + ADRs
 5. [`docs/PRD.md`](docs/PRD.md) — product context, KPIs, data dictionary

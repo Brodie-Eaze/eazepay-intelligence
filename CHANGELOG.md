@@ -120,7 +120,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning: [S
 - New `STATUS.md` — single source of truth for done / in-progress / not-done
 - New `docs/INGESTION.md` — dev-facing contract for plugging in any data source (auth, idempotency, schemas, bulk, failure modes)
 - New `docs/COMPUTE_LIMITS.md` — full scale envelope, failure-mode matrix, capacity math
-- `README.md`, `docs/HANDOVER.md`, `docs/ROADMAP.md`, `docs/KNOWN_ISSUES.md`, `CHANGELOG.md` — refreshed for v0.2
+- `README.md`, `docs/ORIENTATION.md`, `docs/ROADMAP.md`, `docs/KNOWN_ISSUES.md`, `CHANGELOG.md` — refreshed for v0.2
 - `docs/governance/SOC2_CONTROLS.md` — Appendix C (database hardening), D (alert engine), E (distributed tracing); CC4.1, CC6.8, CC7.1, CC7.2 flipped from yellow to green
 - `docs/governance/PRIVACY.md` — Art. 17 (RTBF) flipped from "Not yet implemented" to Implemented; retention rows for refresh tokens + webhook payloads marked Implemented
 - `SECURITY.md` — new "Supply-chain controls" section
@@ -206,7 +206,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning: [S
 ### Added — Documentation (1500+ lines, 14 markdown files)
 
 - `README.md` — entry point with reading order
-- `HANDOVER.md` — 30-second / 5-minute CTO orientation
+- `ORIENTATION.md` — 30-second / 5-minute orientation
 - `ARCHITECTURE.md` — system diagram + 12 ADRs
 - `PRD.md` — product context, 13 KPIs with formulas, page inventory
 - `SECURITY.md` — STRIDE threat model, auth flow, PII handling, IR

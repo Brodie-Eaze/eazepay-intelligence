@@ -105,7 +105,7 @@ The Alert row is durable; channel kinds are defined; IN_APP and WEBHOOK delivery
 
 ### No on-call rotation
 
-Single-founder phase. Production launch needs a documented rotation + runbook. `RUNBOOK.md` covers the _what_; the _who_ needs to be filled in.
+Solo-maintainer phase. Production launch needs a documented rotation + runbook. `RUNBOOK.md` covers the _what_; the _who_ needs to be filled in.
 
 ### Aggregation worker schedule
 
@@ -121,7 +121,7 @@ The `Live event stream` panel that subscribed to the WebSocket and rendered even
 
 ### `Funnel` and `Cohorts` pages exist but aren't in nav
 
-Removed from the sidebar per founder review; `/funnel` and `/cohorts` still resolve. Decide whether to keep the routes or hard-delete the pages.
+Removed from the sidebar during a design pass; `/funnel` and `/cohorts` still resolve. Decide whether to keep the routes or hard-delete the pages.
 
 ### Hand-mirrored types in `apps/web/src/lib/types.ts`
 
@@ -129,7 +129,7 @@ See "OpenAPI codegen pipeline not running" above. Same root cause.
 
 ### Investor mode UI dropped, but `denyInvestorScope` middleware still in code
 
-Per founder direction, investor scope was removed from the operator UI. The server-side `denyInvestorScope` middleware still gates several routes — harmless but dead code if investor mode never returns. Either re-surface investor mode or remove the middleware on a future sweep.
+Investor scope was removed from the operator UI in a design pass. The server-side `denyInvestorScope` middleware still gates several routes — harmless but dead code if investor mode never returns. Either re-surface investor mode or remove the middleware on a future sweep.
 
 ---
 

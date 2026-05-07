@@ -122,7 +122,7 @@ If a doc disagrees with this file, this file is authoritative until the doc is u
 ### Documentation
 
 - `README.md` (this index), `CHANGELOG.md`, `CONTRIBUTING.md`, `SECURITY.md`, `STATUS.md`
-- `docs/ARCHITECTURE.md`, `docs/PRD.md`, `docs/ROADMAP.md`, `docs/RUNBOOK.md`, `docs/ONBOARDING.md`, `docs/HANDOVER.md`, `docs/KNOWN_ISSUES.md`, `docs/GLOSSARY.md`
+- `docs/ARCHITECTURE.md`, `docs/PRD.md`, `docs/ROADMAP.md`, `docs/RUNBOOK.md`, `docs/ONBOARDING.md`, `docs/ORIENTATION.md`, `docs/KNOWN_ISSUES.md`, `docs/GLOSSARY.md`
 - `docs/INGESTION.md` — dev-facing contract for plugging in any data source
 - `docs/COMPUTE_LIMITS.md` — full scale envelope, failure-mode matrix, capacity math
 - `docs/governance/SOC2_CONTROLS.md` — Trust Services Criteria mapping with line-of-code traceability
