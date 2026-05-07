@@ -1,0 +1,94 @@
+# Test stack: Postgres primary + streaming replica + Redis.
+#
+# Used by the integration test suite to verify the writer/reader split
+# end-to-end against real, replicating Postgres instances. Not used in
+# dev; the `docker-compose.yml` single-Postgres setup is enough for that.
+#
+# Bring up:    docker compose -f docker-compose.test.yml up -d
+# Tear down:   docker compose -f docker-compose.test.yml down -v
+# Logs:        docker compose -f docker-compose.test.yml logs -f
+#
+# Primary on :55432, replica on :55433 to avoid clashing with the dev
+# stack on :5432. Redis on :63790.
+services:
+  postgres-primary:
+    image: timescale/timescaledb:2.16.1-pg16
+    container_name: eazepay_test_pg_primary
+    environment:
+      POSTGRES_USER: eazepay
+      POSTGRES_PASSWORD: eazepay
+      POSTGRES_DB: eazepay_intel
+      POSTGRES_REPLICATION_USER: replicator
+      POSTGRES_REPLICATION_PASSWORD: replicator
+    command:
+      - postgres
+      - -c
+      - wal_level=replica
+      - -c
+      - max_wal_senders=10
+      - -c
+      - max_replication_slots=10
+      - -c
+      - hot_standby=on
+      - -c
+      - hot_standby_feedback=on
+      - -c
+      - wal_keep_size=128MB
+      - -c
+      - listen_addresses=*
+    ports:
+      - '55432:5432'
+    volumes:
+      - eazepay_test_pg_primary:/var/lib/postgresql/data
+      - ./docker/postgres-primary/00-replication.sh:/docker-entrypoint-initdb.d/00-replication.sh:ro
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U eazepay -d eazepay_intel']
+      interval: 3s
+      timeout: 5s
+      retries: 30
+
+  postgres-replica:
+    image: timescale/timescaledb:2.16.1-pg16
+    container_name: eazepay_test_pg_replica
+    environment:
+      PRIMARY_HOST: postgres-primary
+      POSTGRES_REPLICATION_USER: replicator
+      POSTGRES_REPLICATION_PASSWORD: replicator
+      REPLICATION_SLOT_NAME: replica_1
+      # Required so the entrypoint doesn't try to re-init.
+      POSTGRES_USER: eazepay
+      POSTGRES_PASSWORD: eazepay
+      POSTGRES_DB: eazepay_intel
+      PGDATA: /var/lib/postgresql/data
+    entrypoint: ['/usr/local/bin/replica-entrypoint.sh']
+    user: postgres
+    ports:
+      - '55433:5432'
+    volumes:
+      - eazepay_test_pg_replica:/var/lib/postgresql/data
+      - ./docker/postgres-replica/entrypoint.sh:/usr/local/bin/replica-entrypoint.sh:ro
+    depends_on:
+      postgres-primary:
+        condition: service_healthy
+    healthcheck:
+      # `pg_isready` returns ok on a hot standby once it's accepting reads.
+      test: ['CMD-SHELL', 'pg_isready -U eazepay -d eazepay_intel']
+      interval: 3s
+      timeout: 5s
+      retries: 30
+
+  redis:
+    image: redis:7-alpine
+    container_name: eazepay_test_redis
+    command: ['redis-server', '--appendonly', 'no']
+    ports:
+      - '63790:6379'
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  eazepay_test_pg_primary:
+  eazepay_test_pg_replica:
