@@ -168,3 +168,25 @@ We've architected the system so that **every control is a code path**, not a pro
 - A leaked refresh token cannot be silently used twice (theft detection).
 
 The work to reach Type 1 readiness is mostly **process and evidence collection**, not architecture. Type 2 then needs the evidence loop running for ≥3 months.
+
+---
+
+## Appendix A — Ingestion control surface (added 2026-05-07)
+
+Every data point that backs a financial number in the platform has an explicit, audited write contract. There are exactly three ways data enters the ledger:
+
+| Channel                                | Auth                                | Idempotency                         | Audit action                                                                      |
+| -------------------------------------- | ----------------------------------- | ----------------------------------- | --------------------------------------------------------------------------------- |
+| Vendor webhook (`/webhooks/...`)       | HMAC SHA-256 + ts tolerance + nonce | Redis SETNX + Postgres unique       | `WEBHOOK_RECEIVED` → `WEBHOOK_PROCESSED` / `WEBHOOK_FAILED` / `WEBHOOK_REPLAYED`  |
+| Generic ingestion (`/ingestion/...`)   | Cookie OR PAT bearer + WRITE scope  | `Idempotency-Key` header (required) | `INGESTION_REQUEST` / `INGESTION_REJECTED`                                        |
+| Portfolio ingestion (`/portfolio/...`) | Cookie OR PAT bearer + ADMIN scope  | Slug-based upsert                   | `PORTFOLIO_DATA_INGESTED` / `PORTFOLIO_BUSINESS_*` / `PORTFOLIO_VERTICAL_CREATED` |
+
+**Why this matters for SOC 2 (CC6.1, CC6.6, CC7.3, CC8.1):** every state change to a financial figure is traceable to an authenticated principal, an idempotency key, and an audit row. The control matrix is exhaustive — there is no fourth write path.
+
+**PAT scope enforcement (`requireScope`):** added a single authorization gate that resolves the request's effective scope from whichever channel produced `req.auth` (cookie role → derived scope, PAT bearer → token's `scopes` column). Same code path for browser users and ETL workers, no role drift between auth modes.
+
+**Liveness/readiness probes (`/health/live`, `/health/ready`):** A1.2 (availability) — explicit endpoints so orchestrators can decide when to restart vs when to drain traffic, rather than relying on the catch-all `/health` for both.
+
+## Appendix B — Plugging in a new data source
+
+For each source, the answer is "POST to one of seven typed endpoints or the generic `/ingestion/events`." See [INGESTION.md](../INGESTION.md) for the dev contract — Idempotency-Key requirements, Zod schemas per data point, bulk-batch shape, and replay semantics.
