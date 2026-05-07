@@ -257,6 +257,82 @@ export function getBusiness(slug: string): Business | null {
   return BUSINESSES.find((b) => b.slug === slug) ?? null;
 }
 
+// ─── Write side: in-memory store for the ingestion contract ─────────────
+// Devs hit the POST/PATCH endpoints to push real silo data; we hold it here
+// until the real persistence layer (Prisma model + ingestion worker) lands.
+// All write paths funnel through these helpers so the swap-out is one file.
+
+const PUSHED_PNL = new Map<string, FinancialPeriod[]>();
+const PUSHED_CHANNELS = new Map<string, RevenueChannelSlice[]>();
+const PUSHED_PRODUCTS = new Map<string, ProductLine[]>();
+const PUSHED_UE = new Map<string, UnitEconomics>();
+const PUSHED_COHORTS = new Map<string, CohortRow[]>();
+const PUSHED_HEADCOUNT = new Map<string, HeadcountRow[]>();
+
+export function upsertVertical(v: Vertical): Vertical {
+  const i = VERTICALS.findIndex((x) => x.slug === v.slug);
+  if (i >= 0) VERTICALS[i] = v;
+  else VERTICALS.push(v);
+  return v;
+}
+
+export function upsertBusiness(b: Business): Business {
+  const i = BUSINESSES.findIndex((x) => x.slug === b.slug);
+  if (i >= 0) BUSINESSES[i] = b;
+  else BUSINESSES.push(b);
+  return b;
+}
+
+export function patchBusiness(slug: string, patch: Partial<Business>): Business | null {
+  const i = BUSINESSES.findIndex((x) => x.slug === slug);
+  if (i < 0) return null;
+  const merged = { ...BUSINESSES[i]!, ...patch, slug } as Business;
+  BUSINESSES[i] = merged;
+  return merged;
+}
+
+export function setPnl(slug: string, periods: FinancialPeriod[]): void {
+  PUSHED_PNL.set(slug, periods);
+}
+export function getPushedPnl(slug: string): FinancialPeriod[] | undefined {
+  return PUSHED_PNL.get(slug);
+}
+
+export function setChannels(slug: string, rows: RevenueChannelSlice[]): void {
+  PUSHED_CHANNELS.set(slug, rows);
+}
+export function getPushedChannels(slug: string): RevenueChannelSlice[] | undefined {
+  return PUSHED_CHANNELS.get(slug);
+}
+
+export function setProducts(slug: string, rows: ProductLine[]): void {
+  PUSHED_PRODUCTS.set(slug, rows);
+}
+export function getPushedProducts(slug: string): ProductLine[] | undefined {
+  return PUSHED_PRODUCTS.get(slug);
+}
+
+export function setUnitEconomics(slug: string, ue: UnitEconomics): void {
+  PUSHED_UE.set(slug, ue);
+}
+export function getPushedUnitEconomics(slug: string): UnitEconomics | undefined {
+  return PUSHED_UE.get(slug);
+}
+
+export function setCohorts(slug: string, rows: CohortRow[]): void {
+  PUSHED_COHORTS.set(slug, rows);
+}
+export function getPushedCohorts(slug: string): CohortRow[] | undefined {
+  return PUSHED_COHORTS.get(slug);
+}
+
+export function setHeadcount(slug: string, rows: HeadcountRow[]): void {
+  PUSHED_HEADCOUNT.set(slug, rows);
+}
+export function getPushedHeadcount(slug: string): HeadcountRow[] | undefined {
+  return PUSHED_HEADCOUNT.get(slug);
+}
+
 /**
  * Deterministic monthly P&L generator. Seeded by business slug so the same
  * business always returns the same series — important so screenshots and
