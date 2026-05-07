@@ -385,7 +385,7 @@ export function buildMonthlyPnl(b: Business, months = 18): FinancialPeriod[] {
 
     out.push({
       periodStart: d.toISOString().slice(0, 10),
-      periodLabel: d.toLocaleDateString('en-AU', { month: 'short', year: '2-digit' }),
+      periodLabel: d.toLocaleDateString('en-US', { month: 'short', year: '2-digit' }),
       revenue,
       cogs,
       grossProfit,
@@ -478,7 +478,7 @@ export function buildCohorts(b: Business): CohortRow[] {
     const m6 = +(0.42 + rand() * 0.18).toFixed(2);
     const m12 = +(0.28 + rand() * 0.14).toFixed(2);
     out.push({
-      cohort: d.toLocaleDateString('en-AU', { month: 'short', year: '2-digit' }),
+      cohort: d.toLocaleDateString('en-US', { month: 'short', year: '2-digit' }),
       customers,
       m0,
       m3,

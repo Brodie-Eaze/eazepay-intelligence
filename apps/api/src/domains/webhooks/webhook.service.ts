@@ -247,6 +247,7 @@ export class WebhookProcessor {
           stream: RevenueStream.BUZZPAY,
           eventType: RevenueEventType.FUNDING,
           amount,
+          ...(data.currency ? { currency: data.currency } : {}),
           effectiveAt: new Date(data.fundingTimestamp),
           idempotencyKey: `buzzpay:funding:${decision.id}`,
           metadata: { decisionId: decision.id },
@@ -286,6 +287,7 @@ export class WebhookProcessor {
       stream: RevenueStream.BUZZPAY,
       eventType: RevenueEventType.CLAWBACK,
       amount,
+      ...(data.currency ? { currency: data.currency } : {}),
       effectiveAt: new Date(data.effectiveAt),
       idempotencyKey: `buzzpay:clawback:${decision.id}:${data.effectiveAt}`,
       metadata: { reason: data.reason },
@@ -401,6 +403,7 @@ export class WebhookProcessor {
           stream: RevenueStream.MICAMP,
           eventType: RevenueEventType.PROCESSING_FEE,
           amount: ours,
+          ...(data.currency ? { currency: data.currency } : {}),
           effectiveAt: new Date(data.effectiveAt),
           idempotencyKey: `micamp:processing:${partner.id}:${data.effectiveAt}`,
           metadata: { txnCount: data.txnCount, gross: data.grossProcessingFee },
@@ -420,6 +423,7 @@ export class WebhookProcessor {
           stream: RevenueStream.MICAMP,
           eventType: RevenueEventType.REVERSAL,
           amount,
+          ...(data.currency ? { currency: data.currency } : {}),
           effectiveAt: new Date(data.effectiveAt),
           idempotencyKey: `micamp:reversal:${partner.id}:${data.effectiveAt}`,
           metadata: { reason: data.reason },
@@ -441,8 +445,16 @@ export class WebhookProcessor {
     effectiveAt: Date;
     idempotencyKey: string;
     metadata: Record<string, unknown>;
+    /**
+     * ISO-4217 currency for this event. Optional — vendors that don't
+     * emit one fall back to the platform's DEFAULT_CURRENCY env var.
+     * Was previously hardcoded to AUD; that hardcode meant every USD
+     * partner was relabelled at ingestion. Multi-currency now respected.
+     */
+    currency?: string;
   }): Promise<void> {
     try {
+      const currency = (args.currency ?? getEnv().DEFAULT_CURRENCY).toUpperCase();
       await this.prisma.revenueEvent.create({
         data: {
           partnerId: args.partnerId,
@@ -451,7 +463,7 @@ export class WebhookProcessor {
           stream: args.stream,
           eventType: args.eventType,
           amount: args.amount,
-          currency: 'AUD',
+          currency,
           effectiveAt: args.effectiveAt,
           idempotencyKey: args.idempotencyKey,
           metadata: args.metadata as Prisma.InputJsonValue,

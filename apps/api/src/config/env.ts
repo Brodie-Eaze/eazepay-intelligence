@@ -83,6 +83,14 @@ const EnvSchema = z.object({
   WORKER_OUTBOX_BATCH: z.coerce.number().int().positive().default(100),
   WORKER_DELIVERY_CONCURRENCY: z.coerce.number().int().positive().default(20),
 
+  // Multi-currency. DEFAULT_CURRENCY is what we tag a RevenueEvent with
+  // when the inbound webhook payload doesn't specify a currency (legacy
+  // BuzzPay payloads). REPORTING_CURRENCY is the rollup currency for
+  // analytics — every cross-portfolio aggregation converts into this via
+  // FxService. Both are ISO-4217 alpha-3.
+  DEFAULT_CURRENCY: z.string().length(3).default('USD'),
+  REPORTING_CURRENCY: z.string().length(3).default('USD'),
+
   PIXIE_VOLUME_BREAKPOINT: z.coerce.number().int().nonnegative().default(25_000),
   PIXIE_COST_PER_PULL: z.coerce.number().nonnegative().default(1),
   PIXIE_CHARGE_PER_PULL: z.coerce.number().nonnegative().default(3),

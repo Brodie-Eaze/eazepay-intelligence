@@ -50,6 +50,13 @@ export const BuzzpayLenderDecisionWebhookSchema = z.object({
 });
 export type BuzzpayLenderDecisionWebhook = z.infer<typeof BuzzpayLenderDecisionWebhookSchema>;
 
+// ISO-4217 alpha-3. Optional on every revenue-bearing schema below; when
+// omitted we tag the event with DEFAULT_CURRENCY at ingestion time.
+const isoCurrency = z
+  .string()
+  .length(3)
+  .regex(/^[A-Z]{3}$/);
+
 export const BuzzpayFundingWebhookSchema = z.object({
   decisionId: z.string(),
   fundingStatus: z.enum(['FUNDED', 'FAILED']),
@@ -57,14 +64,16 @@ export const BuzzpayFundingWebhookSchema = z.object({
   fundingAmount: decimalString.optional(),
   failureReason: z.string().optional(),
   eazepayRevenue: decimalString.optional(), // BuzzPay reports our cut directly
+  currency: isoCurrency.optional(),
 });
 export type BuzzpayFundingWebhook = z.infer<typeof BuzzpayFundingWebhookSchema>;
 
 export const BuzzpayClawbackWebhookSchema = z.object({
   decisionId: z.string(),
   effectiveAt: z.string().datetime(),
-  amount: decimalString,            // positive value; we record as negative event
+  amount: decimalString, // positive value; we record as negative event
   reason: z.string(),
+  currency: isoCurrency.optional(),
 });
 export type BuzzpayClawbackWebhook = z.infer<typeof BuzzpayClawbackWebhookSchema>;
 
@@ -89,13 +98,15 @@ export const MicampProcessingWebhookSchema = z.object({
   effectiveAt: z.string().datetime(),
   grossProcessingFee: decimalString,
   txnCount: z.number().int().nonnegative(),
+  currency: isoCurrency.optional(),
 });
 export type MicampProcessingWebhook = z.infer<typeof MicampProcessingWebhookSchema>;
 
 export const MicampReversalWebhookSchema = z.object({
   partnerExternalId: z.string(),
   effectiveAt: z.string().datetime(),
-  reversalAmount: decimalString,    // positive; recorded as negative event
+  reversalAmount: decimalString, // positive; recorded as negative event
   reason: z.string(),
+  currency: isoCurrency.optional(),
 });
 export type MicampReversalWebhook = z.infer<typeof MicampReversalWebhookSchema>;

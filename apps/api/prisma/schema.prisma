@@ -222,7 +222,7 @@ model RevenueEvent {
   stream            RevenueStream
   eventType         RevenueEventType @map("event_type")
   amount            Decimal          @db.Decimal(14, 2)
-  currency          String           @default("AUD") @db.Char(3)
+  currency          String           @default("USD") @db.Char(3)
   effectiveAt       DateTime         @map("effective_at") @db.Timestamptz(6)
   recordedAt        DateTime         @default(now()) @map("recorded_at") @db.Timestamptz(6)
   idempotencyKey    String           @map("idempotency_key")
@@ -596,6 +596,29 @@ model Alert {
   @@index([state, firedAt(sort: Desc)])
   @@index([ruleId, firedAt(sort: Desc)])
   @@map("alerts")
+}
+
+// ─── FX rates for multi-currency reporting ─────────────────────────────────
+// Stored per (asOf date, base, quote). The FX service picks the latest
+// row at-or-before the requested timestamp to convert revenue amounts into
+// the configured REPORTING_CURRENCY for cross-portfolio rollups.
+//
+// Sources are pluggable: ECB / OpenExchangeRates / Wise / a partner's own
+// rate-of-record. The `source` column captures provenance for audit.
+
+model FxRate {
+  id            String   @id @db.Uuid
+  asOf          DateTime @map("as_of") @db.Date
+  baseCurrency  String   @map("base_currency") @db.Char(3)
+  quoteCurrency String   @map("quote_currency") @db.Char(3)
+  // Multiplier: 1 unit of base = `rate` units of quote.
+  rate          Decimal  @db.Decimal(18, 8)
+  source        String   @default("manual")
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@unique([asOf, baseCurrency, quoteCurrency])
+  @@index([baseCurrency, quoteCurrency, asOf(sort: Desc)])
+  @@map("fx_rates")
 }
 
 // ─── Right-to-be-forgotten (GDPR Art. 17 / APP) ────────────────────────────
