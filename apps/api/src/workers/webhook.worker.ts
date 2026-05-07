@@ -1,3 +1,6 @@
+import { startTelemetry } from '../config/telemetry.js';
+startTelemetry({ serviceName: 'eazepay-intelligence-worker-webhook' });
+
 import { Worker } from 'bullmq';
 import { getRedis } from '../config/redis.js';
 import { getPrisma } from '../config/database.js';

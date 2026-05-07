@@ -1,3 +1,6 @@
+import { startTelemetry } from '../config/telemetry.js';
+startTelemetry({ serviceName: 'eazepay-intelligence-worker-aggregation' });
+
 import { Worker } from 'bullmq';
 import { getLogger } from '../config/logger.js';
 import { getPrisma, getPrismaLong } from '../config/database.js';

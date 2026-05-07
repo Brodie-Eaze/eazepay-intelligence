@@ -15,6 +15,7 @@
  */
 import { z } from 'zod';
 import type { PrismaClient } from '@prisma/client';
+import { withSpan } from '../../shared/utils/tracing.js';
 
 export const Comparator = z.enum(['gt', 'gte', 'lt', 'lte']);
 export type Comparator = z.infer<typeof Comparator>;
@@ -101,6 +102,19 @@ export class AlertEvaluator {
   constructor(private readonly reader: PrismaClient) {}
 
   async evaluate(query: RuleQuery, windowMinutes: number): Promise<EvaluationResult> {
+    return withSpan('alert.evaluate', async (span) => {
+      span.setAttribute('alert.metric', query.metric);
+      span.setAttribute('alert.op', query.op);
+      span.setAttribute('alert.threshold', query.value);
+      span.setAttribute('alert.window_minutes', windowMinutes);
+      const result = await this.evaluateInner(query, windowMinutes);
+      span.setAttribute('alert.observed', result.observed);
+      span.setAttribute('alert.hit', result.hit);
+      return result;
+    });
+  }
+
+  private async evaluateInner(query: RuleQuery, windowMinutes: number): Promise<EvaluationResult> {
     const since = new Date(Date.now() - windowMinutes * 60_000);
     let observed: number;
     const context: Record<string, unknown> = {};

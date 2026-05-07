@@ -1,3 +1,9 @@
+// Telemetry MUST be the first import — auto-instrumentation hooks
+// require() at construction time, so anything imported before this line
+// won't be traced.
+import { startTelemetry } from './config/telemetry.js';
+startTelemetry({ serviceName: 'eazepay-intelligence-api' });
+
 import { buildServer } from './server.js';
 import { getEnv } from './config/env.js';
 import { getLogger } from './config/logger.js';

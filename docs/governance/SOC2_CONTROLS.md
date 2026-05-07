@@ -41,10 +41,10 @@ This document maps every relevant SOC 2 Trust Services Criterion (TSC) to a conc
 
 ## CC4 — Monitoring Activities
 
-| TSC   | Control                                         | Status | Evidence                                                                                                                                         |
-| ----- | ----------------------------------------------- | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------ |
-| CC4.1 | Selects, develops, performs ongoing evaluations | 🟡     | `/ops/health` polls every 10s (DB latency, Redis latency, queue depth, webhook success rate, PII access count). External alerting not wired yet. |
-| CC4.2 | Communicates deficiencies                       | ⏳     | On-call rotation + alert routing pending production deploy                                                                                       |
+| TSC   | Control                                         | Status | Evidence                                                                                                                                                                                                                        |
+| ----- | ----------------------------------------------- | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| CC4.1 | Selects, develops, performs ongoing evaluations | ✅     | Alert engine evaluates every active rule on a 30s cadence (`alert.worker.ts`); `/ops/health` polls every 10s; Prisma metrics at `/metrics`; OTLP traces emitted across HTTP → BullMQ → Postgres → Redis when OTEL_ENABLED=true. |
+| CC4.2 | Communicates deficiencies                       | ⏳     | On-call rotation + alert routing pending production deploy                                                                                                                                                                      |
 
 ## CC5 — Control Activities
 
@@ -252,6 +252,49 @@ The alert rule store has existed since v0.1.0 with a CRUD UI on `/alerts`; until
 **Audit actions added**: `ALERT_FIRED`, `ALERT_RESOLVED`.
 
 This closes one of the deal-blockers from Appendix A — the platform demonstrably does what its UI promises.
+
+---
+
+## Appendix E — Distributed tracing (added 2026-05-07)
+
+OpenTelemetry SDK is now wired into the API process and every worker
+(`webhook`, `webhook-delivery`, `outbox`, `aggregation`, `revenue`,
+`export`, `alert`, `lifecycle`). Auto-instrumentation hooks into HTTP,
+Postgres (via `pg`), Redis (via `ioredis`), Fastify, and BullMQ at
+construction time — every request, query, command, and queue job emits
+a span automatically.
+
+**Initialization** (`apps/api/src/config/telemetry.ts`):
+
+- `startTelemetry({ serviceName })` is the very first import in every
+  entry point — auto-instrumentation wraps `require()` so anything
+  imported earlier won't be traced.
+- Defaults off (`OTEL_ENABLED=false`) for zero overhead in dev/test.
+- Vendor-neutral OTLP/HTTP exporter — accepts any of Datadog,
+  Honeycomb, NewRelic, Grafana Tempo, Jaeger.
+- W3C trace context propagation across HTTP and BullMQ — a webhook
+  ingress trace flows through the outbox sweeper, fan-out worker, and
+  delivery attempt as one continuous trace.
+
+**Manual spans** (`apps/api/src/shared/utils/tracing.ts`):
+
+- `withSpan(name, fn)` wraps a business operation. Used in
+  `alert.evaluate` (records metric, op, threshold, observed, hit) and
+  `rtbf.process` (records request id + applications scrubbed).
+- Falls back to a no-op tracer when telemetry is disabled.
+
+**Tests** (`tests/unit/telemetry.test.ts`):
+
+- SDK init contract: enabled/disabled paths, idempotent start, missing
+  endpoint warns + returns undefined, headers parsing.
+- `withSpan` contract: returns inner result, propagates errors, passes
+  active span to callback — works whether SDK is started or not.
+
+**SOC 2 mapping**:
+
+- CC4.1 — ongoing monitoring across processes
+- CC7.2 — operational anomaly detection via trace + log correlation
+- A1.2 — every request traceable end-to-end across api → worker → DB
 
 - **Role-level connection safety** in `init-timescale.sql`. The `eazepay_app` role inherits `statement_timeout=30s`, `idle_in_transaction_session_timeout=10s`, `lock_timeout=5s`. Application code cannot opt out — every connection inherits these.
 - **Slow-query log** via Prisma `$on('query')`. Anything ≥ `DATABASE_SLOW_QUERY_LOG_MS` (default 500ms) emits at WARN with full query text. Pipe to your log aggregator; alert on sustained increases.

@@ -1,3 +1,6 @@
+import { startTelemetry } from '../config/telemetry.js';
+startTelemetry({ serviceName: 'eazepay-intelligence-worker-outbox' });
+
 /**
  * Outbox sweeper worker.
  *

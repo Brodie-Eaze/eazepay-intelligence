@@ -38,6 +38,7 @@ import { v7 as uuidv7 } from 'uuid';
 import type { PrismaClient, RtbfRequest, RtbfRequestStatus } from '@prisma/client';
 import { writeAuditLog } from '../../shared/middleware/audit-log.middleware.js';
 import { errors } from '../../shared/errors/app-error.js';
+import { withSpan } from '../../shared/utils/tracing.js';
 
 export interface SubmitInput {
   emailHash: Buffer;
@@ -85,6 +86,16 @@ export class RtbfService {
    * matching email hash. Idempotent on completed requests.
    */
   async process(requestId: string): Promise<RtbfRequest> {
+    return withSpan('rtbf.process', async (span) => {
+      span.setAttribute('rtbf.request_id', requestId);
+      return this.processInner(requestId, span);
+    });
+  }
+
+  private async processInner(
+    requestId: string,
+    span: import('@opentelemetry/api').Span,
+  ): Promise<RtbfRequest> {
     const req = await this.prisma.rtbfRequest.findUnique({ where: { id: requestId } });
     if (!req) throw errors.notFound('RtbfRequest', requestId);
     if (req.status === 'COMPLETED') return req;
@@ -129,6 +140,7 @@ export class RtbfService {
           applicationsScrubbed: apps.length,
         },
       });
+      span.setAttribute('rtbf.applications_scrubbed', apps.length);
 
       await writeAuditLog({
         userId: req.requestedById,
