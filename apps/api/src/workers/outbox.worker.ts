@@ -29,6 +29,10 @@ import { enqueueWebhookDelivery } from '../shared/queues/webhook-delivery.queue.
 import { getRedisPublisher } from '../config/redis.js';
 import { WS_CHANNEL } from '../shared/utils/ws-publisher.js';
 
+// Outbox sweep cadence + batch size. Defaults are deliberately conservative —
+// at 100 events / 1s sweep we drain 6,000 events/min per replica, scaling
+// linearly with replica count (FOR UPDATE SKIP LOCKED gives us non-overlapping
+// batches across replicas). See docs/COMPUTE_LIMITS.md for sizing.
 const POLL_INTERVAL_MS = Number(process.env.OUTBOX_POLL_INTERVAL_MS ?? 1_000);
 const BATCH_SIZE = Number(process.env.OUTBOX_BATCH_SIZE ?? 100);
 

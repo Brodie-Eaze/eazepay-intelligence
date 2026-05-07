@@ -190,3 +190,52 @@ Every data point that backs a financial number in the platform has an explicit, 
 ## Appendix B — Plugging in a new data source
 
 For each source, the answer is "POST to one of seven typed endpoints or the generic `/ingestion/events`." See [INGESTION.md](../INGESTION.md) for the dev contract — Idempotency-Key requirements, Zod schemas per data point, bulk-batch shape, and replay semantics.
+
+---
+
+## Appendix C — Scale & resilience hardening (added 2026-05-07)
+
+Pass-the-pen-test pass. Each change made a specific control evidenceable.
+
+### Database (A1.1, A1.2, CC7.2)
+
+- **Writer / reader split** in `apps/api/src/config/database.ts`. `getPrismaWriter()` is the primary; `getPrismaReader()` routes to the replica when `DATABASE_REPLICA_URL` is set, transparently falls back to writer if the replica is unavailable. Soft-failure mode is "primary handles both."
+- **Role-level connection safety** in `init-timescale.sql`. The `eazepay_app` role inherits `statement_timeout=30s`, `idle_in_transaction_session_timeout=10s`, `lock_timeout=5s`. Application code cannot opt out — every connection inherits these.
+- **Slow-query log** via Prisma `$on('query')`. Anything ≥ `DATABASE_SLOW_QUERY_LOG_MS` (default 500ms) emits at WARN with full query text. Pipe to your log aggregator; alert on sustained increases.
+- **Connection pool bound** via `DATABASE_URL?connection_limit=N`. Documented sizing: total ≤ Postgres `max_connections − 20%`. PgBouncer is the path forward when totals exceed.
+
+### Rate limits (CC6.1, A1.1)
+
+Tiered with environment-driven defaults; see [`docs/COMPUTE_LIMITS.md`](../COMPUTE_LIMITS.md).
+
+- **Anonymous**: 100/min by `req.ip` — strict floor
+- **Authenticated**: 1,000/min by `auth.userId` — per-user, not per-IP (NAT-safe)
+- **Ingestion**: 6,000/min — sized for sustained 100/sec ETL
+- **Webhook ingress**: 10,000/min — accommodates vendor retry storms
+- **Login**: composite per-IP + per-email (5/15min + 10/15min)
+
+Redis-backed buckets are cluster-wide. **Fail closed** on Redis outage — that's the correct SOC 2 posture. Per-route bucket overrides via `config: { rateLimit: { … } }`.
+
+### Body limits (CC6.1, A1.1)
+
+Per-route via Fastify `routeOptions.bodyLimit`:
+
+- Default: 1 MiB
+- Bulk ingestion: 8 MiB (caps memory pressure during backfill)
+- Webhook ingress: 2 MiB
+
+### Worker concurrency (CC7.2, A1.1)
+
+Env-driven (`WORKER_*_CONCURRENCY`) so we tune per pod size without code changes. BullMQ fan-out is non-overlapping by construction (Redis-keyed queues), so scaling is "more replicas of the same worker process" — linear.
+
+### Graceful shutdown (A1.2, CC7.5)
+
+Re-entrant guard + 30-second hard timeout in `apps/api/src/index.ts`. Order: stop accepting → drain in-flight (Fastify `app.close()`) → disconnect Prisma → disconnect Redis. Hard exit if drain takes >30s, so we don't hang an orchestrator restart forever.
+
+### Health probes (A1.2)
+
+`/health/live` (process up, no dep checks) + `/health/ready` (primary + Redis required, replica soft-checked) + `/health` (full status with latencies). Orchestrators (K8s, ECS) decide restart vs drain based on the probe choice.
+
+### Failure-mode coverage
+
+Every external dependency (DB primary, DB replica, Redis, vendor webhook subscriber HTTP) has a documented failure mode + mitigation in `COMPUTE_LIMITS.md`. The platform fails closed on Redis outage, soft-degrades on replica failure, and surfaces a meaningful 5xx (not a generic crash) on primary failure.

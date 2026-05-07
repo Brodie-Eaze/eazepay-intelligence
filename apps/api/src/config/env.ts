@@ -11,6 +11,11 @@ const EnvSchema = z.object({
   PORT: z.coerce.number().int().positive().default(3000),
 
   DATABASE_URL: z.string().url(),
+  // Optional read replica. Analytics + dashboard reads route here when set.
+  // Falls back to primary if the replica is unreachable at boot.
+  DATABASE_REPLICA_URL: z.string().url().optional(),
+  // Slow-query threshold for Prisma query logging (CC7.2 monitoring).
+  DATABASE_SLOW_QUERY_LOG_MS: z.coerce.number().int().positive().default(500),
   REDIS_URL: z.string().url(),
 
   JWT_ACCESS_SECRET: z.string().min(32, 'JWT_ACCESS_SECRET must be ≥32 chars'),
@@ -33,10 +38,45 @@ const EnvSchema = z.object({
   CORS_ORIGINS: z
     .string()
     .default('http://localhost:3001')
-    .transform((v) => v.split(',').map((s) => s.trim()).filter(Boolean)),
+    .transform((v) =>
+      v
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean),
+    ),
 
+  // Tiered rate limits — see docs/COMPUTE_LIMITS.md for sizing rationale.
+  // Anonymous: tight; protects /auth/login + public endpoints.
   RATE_LIMIT_PER_IP_PER_MIN: z.coerce.number().int().positive().default(100),
+  // Authenticated session/PAT: per-user (not per-IP) so devs behind a NAT
+  // aren't punished. Falls back to IP if no auth context.
   RATE_LIMIT_PER_USER_PER_MIN: z.coerce.number().int().positive().default(1000),
+  // Ingestion endpoints (PAT-driven ETL). Sized for 1k-row/min sustained.
+  RATE_LIMIT_INGESTION_PER_MIN: z.coerce.number().int().positive().default(6_000),
+  // Vendor webhook ingress per source IP. Sized for vendor retry storms.
+  RATE_LIMIT_WEBHOOK_PER_MIN: z.coerce.number().int().positive().default(10_000),
+
+  // Per-route body limits (bytes). UI requests stay tiny; bulk/webhook bigger.
+  BODY_LIMIT_DEFAULT_BYTES: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(1 * 1024 * 1024),
+  BODY_LIMIT_BULK_BYTES: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(8 * 1024 * 1024),
+  BODY_LIMIT_WEBHOOK_BYTES: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(2 * 1024 * 1024),
+
+  // Worker concurrency (BullMQ). Bound CPU + DB connections per process.
+  WORKER_WEBHOOK_CONCURRENCY: z.coerce.number().int().positive().default(10),
+  WORKER_OUTBOX_BATCH: z.coerce.number().int().positive().default(100),
+  WORKER_DELIVERY_CONCURRENCY: z.coerce.number().int().positive().default(20),
 
   PIXIE_VOLUME_BREAKPOINT: z.coerce.number().int().nonnegative().default(25_000),
   PIXIE_COST_PER_PULL: z.coerce.number().nonnegative().default(1),

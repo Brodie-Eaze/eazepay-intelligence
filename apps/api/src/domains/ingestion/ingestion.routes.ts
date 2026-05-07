@@ -45,6 +45,8 @@ import { getPrisma } from '../../config/database.js';
 import { requireCookieOrBearer } from '../../shared/middleware/bearer-auth.middleware.js';
 import { requireScope } from '../../shared/middleware/scope.middleware.js';
 import { csrfGuard } from '../../shared/middleware/csrf.middleware.js';
+import { ingestionRateLimit } from '../../shared/middleware/rate-limit-tiers.js';
+import { getEnv } from '../../config/env.js';
 import { writeAuditLog } from '../../shared/middleware/audit-log.middleware.js';
 import { errors } from '../../shared/errors/app-error.js';
 import { WebhookProcessor } from '../webhooks/webhook.service.js';
@@ -127,7 +129,11 @@ export async function registerIngestionRoutes(app: FastifyInstance): Promise<voi
   for (const [path, target] of Object.entries(TARGETS)) {
     app.post(
       `/ingestion/${path}`,
-      { preHandler: [requireCookieOrBearer, csrfGuard, requireScope('WRITE')] },
+      {
+        preHandler: [requireCookieOrBearer, csrfGuard, requireScope('WRITE')],
+        config: ingestionRateLimit(),
+        bodyLimit: getEnv().BODY_LIMIT_BULK_BYTES,
+      },
       async (req) => {
         const idempotencyKey = readIdempotencyKey(req.headers[IDEMPOTENCY_HEADER]);
         const payload = target.schema.parse(req.body);
@@ -156,7 +162,11 @@ export async function registerIngestionRoutes(app: FastifyInstance): Promise<voi
   });
   app.post(
     '/ingestion/events',
-    { preHandler: [requireCookieOrBearer, csrfGuard, requireScope('WRITE')] },
+    {
+      preHandler: [requireCookieOrBearer, csrfGuard, requireScope('WRITE')],
+      config: ingestionRateLimit(),
+      bodyLimit: getEnv().BODY_LIMIT_BULK_BYTES,
+    },
     async (req) => {
       const idempotencyKey = readIdempotencyKey(req.headers[IDEMPOTENCY_HEADER]);
       const body = GenericBody.parse(req.body);
@@ -184,7 +194,11 @@ export async function registerIngestionRoutes(app: FastifyInstance): Promise<voi
    */
   app.post(
     '/ingestion/:target/bulk',
-    { preHandler: [requireCookieOrBearer, csrfGuard, requireScope('WRITE')] },
+    {
+      preHandler: [requireCookieOrBearer, csrfGuard, requireScope('WRITE')],
+      config: ingestionRateLimit(),
+      bodyLimit: getEnv().BODY_LIMIT_BULK_BYTES,
+    },
     async (req) => {
       const params = z
         .object({ target: z.enum(Object.keys(TARGETS) as [string, ...string[]]) })

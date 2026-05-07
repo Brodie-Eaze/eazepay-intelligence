@@ -1,5 +1,5 @@
 import type { FastifyInstance } from 'fastify';
-import { getPrisma } from '../config/database.js';
+import { getPrisma, getPrismaReader, isReaderUsingFallback } from '../config/database.js';
 import { getRedis } from '../config/redis.js';
 
 interface DependencyStatus {
@@ -50,16 +50,41 @@ export function registerHealthRoute(app: FastifyInstance): void {
     });
   });
 
-  // /health/ready — readiness. Dependencies must be reachable.
+  // /health/ready — readiness. Primary + Redis must be reachable. The replica
+  // is a soft check: if it's down we degrade to "primary handles both" — still
+  // ready to serve traffic, but operators get a `replica: degraded` signal.
   // K8s / ECS uses this to decide whether to route traffic here.
   app.get('/health/ready', async (_req, reply) => {
-    const [database, redis] = await Promise.all([checkDatabase(), checkRedis()]);
+    const [database, redis, replica] = await Promise.all([
+      checkDatabase(),
+      checkRedis(),
+      checkReplica(),
+    ]);
     const ready = database.status === 'ok' && redis.status === 'ok';
     reply.status(ready ? 200 : 503).send({
       status: ready ? 'ready' : 'not_ready',
-      checks: { database: database.status, redis: redis.status },
+      checks: {
+        database: database.status,
+        redis: redis.status,
+        replica: replica.status,
+        replicaConfigured: !isReaderUsingFallback(),
+      },
     });
   });
+}
+
+async function checkReplica(): Promise<DependencyStatus> {
+  // If no replica is configured, we report 'ok' — we're not pretending the
+  // primary is the replica, the readiness handler reflects this in
+  // `replicaConfigured: false`.
+  if (isReaderUsingFallback()) return { status: 'ok' };
+  const t = Date.now();
+  try {
+    await getPrismaReader().$queryRaw`SELECT 1`;
+    return { status: 'ok', latencyMs: Date.now() - t };
+  } catch (err) {
+    return { status: 'degraded', error: (err as Error).message };
+  }
 }
 
 async function checkDatabase(): Promise<DependencyStatus> {

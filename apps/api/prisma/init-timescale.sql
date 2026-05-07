@@ -99,8 +99,24 @@ REVOKE UPDATE, DELETE ON outbox_events    FROM eazepay_app;
 -- and you'll need a `eazepay_outbox` sub-role instead. Documented as a
 -- v1.1 deployment task.
 
+-- ─── Connection-level safety on the runtime role ─────────────────────────
+-- Prevent any single misbehaving query from pinning a connection or holding
+-- locks for unbounded time. Set at the role level so every connection the
+-- runtime opens inherits these — application code cannot opt out.
+--
+-- statement_timeout                       30s — cancels long-running queries
+-- idle_in_transaction_session_timeout     10s — kills sessions sitting in BEGIN
+-- lock_timeout                             5s — fails fast on contention
+--
+-- Workers that legitimately need longer (export pipelines, aggregation
+-- backfills) connect as a separate role with extended timeouts
+-- (TODO: `eazepay_worker_long`).
+ALTER ROLE eazepay_app SET statement_timeout = '30s';
+ALTER ROLE eazepay_app SET idle_in_transaction_session_timeout = '10s';
+ALTER ROLE eazepay_app SET lock_timeout = '5s';
+
 -- Sanity check the policy.
 DO $$
 BEGIN
-  RAISE NOTICE 'eazepay_app role: SELECT/INSERT granted on all tables; UPDATE/DELETE REVOKED on audit_logs, revenue_events, outbox_events';
+  RAISE NOTICE 'eazepay_app: SELECT/INSERT on all; UPDATE/DELETE REVOKED on audit_logs, revenue_events, outbox_events; statement_timeout=30s idle_in_tx=10s lock=5s';
 END$$;
