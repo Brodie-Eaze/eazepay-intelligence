@@ -18,6 +18,7 @@
     "db:generate": "prisma generate",
     "db:seed": "tsx prisma/seed.ts",
     "db:seed:portfolio": "tsx prisma/seed-portfolio.ts",
+    "db:seed:bootstrap-org": "tsx prisma/seed-bootstrap-org.ts",
     "db:studio": "prisma studio",
     "worker:webhook": "tsx src/workers/webhook.worker.ts",
     "worker:aggregation": "tsx src/workers/aggregation.worker.ts",

@@ -63,6 +63,24 @@ enum UserRole {
   VIEWER
 }
 
+/// Per-organisation role granted via Membership. Same four levels as the
+/// legacy global UserRole, intentionally — same semantics, no retraining.
+/// The rename signals "this is org-scoped" not "global".
+enum OrgRole {
+  ADMIN
+  OPERATOR
+  INVESTOR
+  VIEWER
+}
+
+/// Platform-level capability separate from any org membership.
+/// STAFF: read-only cross-org. SUPER: write across orgs, impersonate.
+/// SUPER satisfies any STAFF check.
+enum PlatformRole {
+  STAFF
+  SUPER
+}
+
 enum AggregationPeriod {
   DAILY
   MONTHLY
@@ -319,6 +337,61 @@ model RevenueAggregation {
   @@map("revenue_aggregations")
 }
 
+// ─── Organization (tenant root) ─────────────────────────────────────────────
+// Each organisation is a logical tenant. Every domain row in the system
+// (with documented exceptions in PLATFORM_V2.md and the multi-tenancy
+// blast-radius doc) carries an `orgId` foreign key to one of these rows.
+//
+// The `slug` is a lowercase kebab identifier used as the URL path component
+// (`/api/v1/o/:orgSlug/...`). It is immutable after creation except via
+// platform staff intervention.
+//
+// `dataRegion` is a forward-compatibility hook for Phase 8 data-residency
+// controls. Today every deployment runs in one region; the column lets us
+// route storage + compute when multi-region lands without another migration.
+
+model Organization {
+  id               String   @id @db.Uuid
+  slug             String   @unique
+  name             String
+  // Two-letter ISO region (e.g. "au"). Phase 8 reads this to pin compute +
+  // storage per-org. Today: informational only.
+  dataRegion       String   @default("au") @map("data_region") @db.VarChar(8)
+  stripeCustomerId String?  @map("stripe_customer_id")
+  deletedAt        DateTime? @map("deleted_at") @db.Timestamptz(6)
+  createdAt        DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt        DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  memberships Membership[]
+  // Reverse relations for tenant-owned domain models populate here as
+  // Phase 1.2 retrofits orgId onto each table (UserInvitation, Partner,
+  // Application, etc.).
+
+  @@map("organizations")
+}
+
+/// User membership in an Organization, with a per-org role.
+/// One user can be in many orgs. Replaces the legacy global User.role
+/// for authorization decisions; User.role is retained during the
+/// migration window for backward compatibility and removed at end of
+/// Phase 1.
+
+model Membership {
+  id        String   @id @db.Uuid
+  userId    String   @map("user_id") @db.Uuid
+  orgId     String   @map("org_id") @db.Uuid
+  role      OrgRole
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  user User         @relation(fields: [userId], references: [id])
+  org  Organization @relation(fields: [orgId], references: [id])
+
+  @@unique([userId, orgId])
+  @@index([orgId, role])
+  @@map("memberships")
+}
+
 // ─── User / Auth ────────────────────────────────────────────────────────────
 
 model User {
@@ -327,7 +400,15 @@ model User {
   // Optional: users created via OAuth (e.g. Google) carry no local password.
   // Local accounts still get a bcrypt hash on accept-invitation / set-password.
   passwordHash String?   @map("password_hash")
+  // Legacy global role. Authorization migrates to Membership.role during
+  // Phase 1.2; this column is retained for backward compat in the
+  // migration window and removed at end of Phase 1. New code must read
+  // role from the active Membership, not from here.
   role         UserRole  @default(VIEWER)
+  // Platform-level capability that crosses org boundaries. Brodie + ops staff.
+  // null = no platform privileges. STAFF = read-only cross-org. SUPER =
+  // unrestricted. Independent from any Membership.
+  platformRole PlatformRole? @map("platform_role")
   mfaEnabled   Boolean   @default(false) @map("mfa_enabled")
   mfaSecret    String?   @map("mfa_secret")
   // Federated identity. Stable Google `sub` claim — emails can change, sub
@@ -338,6 +419,7 @@ model User {
   createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt    DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
 
+  memberships          Membership[]
   refreshTokens        RefreshToken[]
   auditLogs            AuditLog[]
   apiTokens            ApiToken[]
@@ -352,6 +434,7 @@ model User {
   rtbfRequests         RtbfRequest[]         @relation("RtbfRequestedBy")
   invitationsIssued    UserInvitation[]      @relation("InviteIssuedBy")
 
+  @@index([platformRole])
   @@map("users")
 }
 
