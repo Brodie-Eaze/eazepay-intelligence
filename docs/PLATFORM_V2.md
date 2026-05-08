@@ -46,17 +46,17 @@ Sequential dependencies are marked. Phases without dependencies between them can
 
 **Done = true** when all of the following hold:
 
-- [ ] Every domain table has `org_id UUID NOT NULL REFERENCES organizations(id)` (or is explicitly classified GLOBAL_REFERENCE in `docs/architecture/multi-tenancy-blast-radius.md`)
-- [ ] Postgres Row-Level Security policies are active on every TENANT_OWNED table; the runtime DB role cannot SELECT rows belonging to a different `current_setting('app.org_id')`
-- [ ] Every Fastify route resolves the active org from the auth context and propagates it to every Prisma call
-- [ ] Every Redis key, BullMQ queue name, and pub/sub channel includes `${orgId}` in the prefix
-- [ ] AuditLog rows carry `org_id`; cross-tenant audit queries require a separate platform-staff role with its own audit trail
-- [ ] Per-tenant DEK lifecycle implemented; each ciphertext envelope carries `[version][algorithm][keyId][iv][ct][tag]`; KMS abstraction has `LocalKms` (dev) and one production driver (AWS KMS or GCP KMS)
-- [ ] Existing rows (encrypted with v0 global key) decrypt via fallback path; background re-encryption job converts v0 → v1 lazily
-- [ ] Super-admin (Brodie) cross-tenant console exists, gated by `PlatformRole = STAFF`, every cross-tenant read writes a `PLATFORM_CROSS_TENANT_ACCESS` audit row
-- [x] Tenant deletion runbook exists: revoke memberships → cryptoshred DEK → archive metadata → optional Postgres-level row removal after retention period — see [`docs/runbooks/tenant-deletion.md`](./runbooks/tenant-deletion.md) (session 7)
-- [ ] Integration tests prove tenant A cannot read tenant B's data via any API surface (negative tests for every route)
-- [ ] ADR-001 (multi-tenancy) and ADR-002 (envelope encryption) are merged
+- [~] Every domain table has `org_id UUID NOT NULL REFERENCES organizations(id)` — 7 tables done (organizations, memberships, user_invitations, api_tokens, audit_logs, webhook_credentials, tenant_encryption_keys). 22 more tables in `migrations-staged/` (1.2c + 1.2d + 1.2e), pending route retrofit before promotion.
+- [~] Postgres RLS policies on every TENANT_OWNED table — 6 tables live with policies + integration test (`memberships`, `user_invitations`, `api_tokens`, `audit_logs`, `webhook_credentials`, `tenant_encryption_keys`). Remaining tables follow promotion of staged migrations.
+- [~] Every Fastify route resolves the active org — JWT-embedded `org/orgRole/platformRole`; bearer-auth re-validates pinned-org membership on every PAT call; `requireOrgRole` + `requirePlatformRole` gates available. Route prefix migration to `/o/:orgSlug/` + per-handler `where: { orgId }` retrofits pending.
+- [~] Every Redis key includes `orgId` — `tenantKey/tenantChannel` helpers shipped + tested. Rolling adoption across existing call sites pending.
+- [x] AuditLog rows carry `org_id`; cross-tenant audit reads gated by platform-staff role with its own `PLATFORM_CROSS_TENANT_ACCESS` audit trail.
+- [x] Per-tenant DEK lifecycle implemented — envelope `[version:0x02][algorithm:0x01][keyId:16][iv:12][ct:N][tag:16]`; `LocalKmsClient` (dev, HKDF-derived KEK) + `AwsKmsClient` (production, AWS KMS ap-southeast-2) + KMS factory with env-driven selection.
+- [~] Existing rows decrypt via fallback path — `decryptEnvelopeAuto` dispatches v1 (legacy global key) vs v2 (per-org DEK). Wiring into `Application` PII columns + background re-encryption worker pending.
+- [x] Super-admin cross-tenant console — `/platform/orgs` CRUD; `/platform/orgs/:id/rotate-dek`; `/platform/orgs/:id/cryptoshred`; `/platform/health`; `/platform/sessions`. All audited via `PLATFORM_CROSS_TENANT_ACCESS` / `PLATFORM_DEK_ROTATED` / `PLATFORM_ORG_CRYPTOSHRED`.
+- [x] Tenant deletion runbook — see [`docs/runbooks/tenant-deletion.md`](./runbooks/tenant-deletion.md).
+- [~] Integration tests prove tenant A cannot read tenant B's data — RLS isolation test (5 cases) + envelope-v2 cross-org tampering negative test. Per-route negative tests pending route retrofit.
+- [x] ADR-001 + ADR-002 merged — both `Status: ACCEPTED`, see `docs/architecture/adr/`.
 
 **Sub-phases:**
 
