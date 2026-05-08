@@ -112,6 +112,17 @@ const EnvSchema = z.object({
   // is the SaaS norm; matches Linear/Notion/Slack.
   INVITATION_TTL_HOURS: z.coerce.number().int().positive().default(168),
 
+  // ─── KMS (envelope encryption — Phase 1.5) ──────────────────────────────
+  // KMS_DEV_SECRET: HKDF input keying material for LocalKmsClient. Derives
+  // a deterministic 32-byte KEK in dev/test. Min 32 chars. NEVER use a
+  // production value here. Required when LocalKmsClient is registered;
+  // ignored when AwsKmsClient is registered in production.
+  KMS_DEV_SECRET: z.string().min(32).optional(),
+  // AWS_KMS_KEY_ARN: production KMS Customer-Managed Key ARN. Per-org CMKs
+  // recommended (ADR-002 §1 + open question 1). Required in production
+  // when AwsKmsClient is registered.
+  AWS_KMS_KEY_ARN: z.string().optional(),
+
   // ─── OAuth (Google) ──────────────────────────────────────────────────────
   // When all three are set, /auth/oauth/google/* routes activate and the
   // login page surfaces a Google button. Optional: deployments without

@@ -64,21 +64,40 @@ Sequential dependencies are marked. Phases without dependencies between them can
 - [ ] **1.2** `org_id` FK retrofit on every TENANT_OWNED table. Backfill default org for existing rows. Constraint becomes NOT NULL after backfill. **In progress.**
   - [x] **1.2a** `user_invitations`, `api_tokens` — orgId NOT NULL FK + indexes; `UserInvitation.role` enum migrated `UserRole → OrgRole`; service-layer rewired (Membership-on-accept). — **Done** (commit `db6adc4`)
   - [x] **1.2b** `audit_logs` — orgId nullable FK + index; `writeAuditLog` reads orgId from context. — **Done** (commit `db6adc4`)
-  - [ ] **1.2c** Core finance: `partners`, `applications`, `lender_decisions`, `revenue_events` (idempotency unique becomes `(org_id, source, idempotency_key)`), `pixie_metrics`, `revenue_aggregations` (PK changes — coordinate with worker quiet period), `webhook_events`, `outbox_events`.
-  - [ ] **1.2d** Operational: `exports`, `webhook_subscriptions`, `webhook_deliveries`, `notification_channels`, `alert_rules`, `alerts`, `cases`, `notes`, `tags` (unique becomes `(org_id, name)`), `tag_assignments`, `saved_views`, `scheduled_reports`, `report_runs`, `rtbf_requests`.
-  - [ ] **1.2e** Portfolio slug→UUID PK migration. `PortfolioVertical` and `PortfolioBusiness` switch from slug-PK to UUID surrogate + `UNIQUE (org_id, slug)`. All FK references in child tables updated.
-  - [ ] **1.2f** New tables: `webhook_credentials` (vendor→org HMAC mapping), `tenant_encryption_keys` (per ADR-002).
-- [ ] **1.3** Tenant context middleware. Resolves active org from `:orgSlug` URL path; populates `req.auth.orgId` + `orgRole` + `platformRole`; Prisma `$extends` model middleware enforces `where: { orgId }` on every query.
-- [ ] **1.4** Postgres RLS policies. Every tenant-owned table gets `ENABLE ROW LEVEL SECURITY` + policy keyed on `current_setting('app.org_id')`. App sets the GUC at request start. Defence in depth — even a SQL injection or missed `where` cannot leak across tenants.
-- [ ] **1.5** KMS abstraction + per-tenant DEK + envelope-encrypted columns + read-fallback + background re-encryption (per ADR-002).
-- [ ] **1.6** Super-admin cross-tenant console. Separate route prefix (`/api/v1/platform/...`), separate role check (`requirePlatformRole`), separate audit category.
+  - [~] **1.2c** Core finance — migration written, **staged not applied** in `migrations-staged/`. Pending Phase 1.3 code coordination.
+  - [~] **1.2d** Operational tables — migration written, **staged not applied**. Pending Phase 1.3.
+  - [~] **1.2e** Portfolio slug→UUID PK — migration written, **staged not applied**. Highest invasiveness; coordinated with PortfolioRepository updates.
+  - [x] **1.2f** New tables: `webhook_credentials`, `tenant_encryption_keys` (per ADR-002). — **Done** _(this session)_
+- [~] **1.3** Tenant context middleware. **Partially done** _(this session)_: `resolveTenantFromPath`, `requireAuthAndTenant`, `requireOrgRole`, `requirePlatformRole` shipped in `auth.middleware.ts` + `rbac.middleware.ts`; `AuthContext` type extended. Pending: JWT extension to embed `orgId/orgRole`; Prisma `$extends` model middleware; route prefix migration to `/o/:orgSlug/`; ~67 route handlers + raw-SQL retrofits.
+- [ ] **1.4** Postgres RLS policies. Every tenant-owned table gets `ENABLE ROW LEVEL SECURITY` + policy keyed on `current_setting('app.org_id')`.
+- [~] **1.5** KMS scaffold. **Partial** _(this session)_: `KmsClient` interface + `LocalKmsClient` implementation + `KMS_DEV_SECRET` / `AWS_KMS_KEY_ARN` env vars. Pending: `AwsKmsClient`; `EncryptionService` v1 envelope encoder/decoder; per-org DEK provisioning seed; background re-encryption worker.
+- [~] **1.6** Super-admin platform routes. **Partial** _(this session)_: `/platform/orgs` CRUD shipped (list/get/create/update/soft-delete), all gated by `requirePlatformRole` + audited via `PLATFORM_CROSS_TENANT_ACCESS`. Pending: `/platform/health`, `/platform/sessions`, `/platform/reconciliation`, `/platform/orgs/:id/rotate-dek`.
 - [ ] **1.7** Redis/BullMQ tenant-scoped namespacing per blast-radius §4.
 
 ### Phase 1 — current session log
 
-| Session | Date       | Commits              | Sub-phases done |
-| ------- | ---------- | -------------------- | --------------- |
-| 1       | 2026-05-08 | `7b792c0`, `db6adc4` | 1.1, 1.2a, 1.2b |
+| Session | Date       | Commits                         | Sub-phases done                                                                                                                                                                                                                            |
+| ------- | ---------- | ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 1       | 2026-05-08 | `7b792c0`, `db6adc4`, `074105b` | 1.1, 1.2a, 1.2b                                                                                                                                                                                                                            |
+| 2       | 2026-05-08 | _(this session)_                | 1.2f (new tables); KMS scaffold; tenant middleware (`resolveTenantFromPath`, `requireOrgRole`, `requirePlatformRole`); platform routes scaffold (`/platform/orgs` CRUD); 1.2c + 1.2d + 1.2e migrations **staged** in `migrations-staged/`. |
+
+### Migration staging directory
+
+`apps/api/prisma/migrations-staged/` contains migrations that are **written but not applied**:
+
+- `20260508170000_phase1_2c_core_finance_org` — orgId on partners, applications, lender_decisions, revenue_events (idempotency unique swap), pixie_metrics, revenue_aggregations, webhook_events, outbox_events. Hypertable PK constraints respected via non-PK + UNIQUE-index pattern.
+- `20260508180000_phase1_2d_operational_org` — orgId on 14 operational tables.
+- `20260508190000_phase1_2e_portfolio_uuid_pk` — PortfolioVertical/Business slug → UUID PK; `business_id` UUID FK on every child table. Highly invasive.
+
+**Why staged not applied:** these all add `org_id NOT NULL` columns. Applying them without simultaneously updating every Prisma `create()` call site to supply `orgId` would break the running API (NOT NULL constraint violations). Phase 1.3 must land alongside.
+
+To promote a staged migration:
+
+1. Update Prisma schema for affected models (schema-diff docs at `docs/architecture/phase-1-2*-schema-diff.md` describe exact changes).
+2. Update every code path creating rows on those tables to supply `orgId` (transitional helper pattern from Phase 1.2a: resolve issuer's first Membership; long-term: `req.auth.orgId` from tenant middleware).
+3. `mv migrations-staged/<dir> migrations/`.
+4. `pnpm --filter api db:migrate && pnpm --filter api db:generate`.
+5. Run typecheck + tests + integration tests.
 
 ---
 

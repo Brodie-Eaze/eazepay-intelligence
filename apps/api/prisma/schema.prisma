@@ -362,11 +362,13 @@ model Organization {
   createdAt        DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt        DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
 
-  memberships Membership[]
-  invitations UserInvitation[] @relation("OrgInvitations")
-  apiTokens   ApiToken[]       @relation("OrgApiTokens")
-  auditLogs   AuditLog[]       @relation("OrgAuditLogs")
-  // More reverse relations land here as Phase 1.2c–1.2f retrofit
+  memberships         Membership[]
+  invitations         UserInvitation[]      @relation("OrgInvitations")
+  apiTokens           ApiToken[]            @relation("OrgApiTokens")
+  auditLogs           AuditLog[]            @relation("OrgAuditLogs")
+  webhookCredentials  WebhookCredential[]   @relation("OrgWebhookCredentials")
+  encryptionKeys      TenantEncryptionKey[] @relation("OrgEncryptionKeys")
+  // More reverse relations land here as Phase 1.2c–1.2e retrofit
   // orgId onto every TENANT_OWNED table.
 
   @@map("organizations")
@@ -1147,4 +1149,52 @@ model OutboxEvent {
   @@index([publishedAt, createdAt])  // sweeper scans WHERE publishedAt IS NULL ORDER BY createdAt
   @@index([kind, publishedAt])
   @@map("outbox_events")
+}
+
+// ─── Multi-tenant infrastructure (Phase 1.2f) ───────────────────────────────
+
+/// Vendor → org mapping for inbound webhook signature verification.
+/// `signing_secret_hash` stores SHA-256(HMAC_secret), never the plaintext.
+/// Partial unique index (DB-level) on (source, hash) WHERE is_active=true
+/// ensures no two active rows share the same secret across orgs.
+model WebhookCredential {
+  id                String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  orgId             String        @map("org_id") @db.Uuid
+  source            WebhookSource
+  signingSecretHash String        @map("signing_secret_hash")
+  isActive          Boolean       @default(true) @map("is_active")
+  createdAt         DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
+  retiredAt         DateTime?     @map("retired_at") @db.Timestamptz(6)
+  deletedAt         DateTime?     @map("deleted_at") @db.Timestamptz(6)
+
+  org Organization @relation("OrgWebhookCredentials", fields: [orgId], references: [id])
+
+  @@index([source, signingSecretHash])
+  @@index([orgId])
+  @@map("webhook_credentials")
+}
+
+/// Per-tenant Data Encryption Key wrapped by a KMS Key Encryption Key.
+/// The plaintext DEK is never persisted — only the KMS-wrapped ciphertext
+/// is stored in `wrappedDek`. Recovering the plaintext requires a live,
+/// authorised KMS call. See ADR-002 for the full design + rotation runbook.
+model TenantEncryptionKey {
+  id         String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  orgId      String    @map("org_id") @db.Uuid
+  version    Int
+  /// 'PII' | 'AUDIT'. TEXT (not enum) for forward-compat per ADR-002 §3.
+  purpose    String    @default("PII")
+  wrappedDek Bytes     @map("wrapped_dek")
+  /// Production: AWS KMS key ARN. Dev: literal 'local-dev'.
+  kekKeyId   String    @map("kek_key_id")
+  algorithm  String    @default("AES-256-GCM")
+  isActive   Boolean   @default(true) @map("is_active")
+  createdAt  DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  retiredAt  DateTime? @map("retired_at") @db.Timestamptz(6)
+
+  org Organization @relation("OrgEncryptionKeys", fields: [orgId], references: [id])
+
+  @@unique([orgId, purpose, version])
+  @@index([orgId, purpose, isActive])
+  @@map("tenant_encryption_keys")
 }
