@@ -36,7 +36,7 @@ import { csrfGuard } from '../../shared/middleware/csrf.middleware.js';
 import { requirePlatformRole } from '../../shared/middleware/rbac.middleware.js';
 import { writeAuditLog } from '../../shared/middleware/audit-log.middleware.js';
 import { errors } from '../../shared/errors/app-error.js';
-import { rotateDek } from '../../shared/kms/tenant-dek.js';
+import { rotateDek, cryptoshredOrg } from '../../shared/kms/tenant-dek.js';
 import { LOCAL_DEV_KEY_ID } from '../../shared/kms/local-kms-client.js';
 
 const SLUG_RE = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
@@ -267,6 +267,100 @@ export async function registerPlatformRoutes(app: FastifyInstance): Promise<void
         note:
           'New DEK is active. Old DEK rows are isActive=false but readable. ' +
           'Enqueue re-encryption job to convert existing ciphertext, then schedule KMS deletion.',
+      };
+    },
+  );
+
+  /**
+   * Org-level cryptoshred — RTBF Mode B per ADR-002 §9.
+   *
+   * IRREVERSIBLE after the KMS pending-deletion window elapses (default
+   * 7 days). Disables every DEK for the org immediately (decrypts start
+   * failing) and schedules each KMS key for permanent deletion.
+   *
+   * Guards (defence in depth):
+   *   - SUPER platformRole only
+   *   - CSRF guard
+   *   - Confirmation header `X-Cryptoshred-Confirm` MUST be exactly the
+   *     org slug — protects against an admin clicking the wrong org by
+   *     accident in tooling
+   *   - The org row must already be soft-deleted (deletedAt set) — you
+   *     cannot cryptoshred an active org. Workflow: DELETE first, review,
+   *     then cryptoshred when ready.
+   *
+   * Audit trail: PLATFORM_ORG_CRYPTOSHRED row with the full result
+   * payload (DEK count, scheduled KMS keys, any errors). Audit row is
+   * itself protected by Postgres role-level REVOKE UPDATE/DELETE on
+   * audit_logs — the action is permanently traceable.
+   */
+  app.post(
+    '/platform/orgs/:id/cryptoshred',
+    { preHandler: [requireAuth, csrfGuard, requirePlatformRole('SUPER')] },
+    async (req) => {
+      const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
+      const body = z
+        .object({
+          pendingDays: z.coerce.number().int().min(7).max(30).default(7),
+        })
+        .parse(req.body ?? {});
+
+      const org = await prisma.organization.findUnique({
+        where: { id },
+        select: { id: true, slug: true, deletedAt: true },
+      });
+      if (!org) throw errors.notFound('Organization not found');
+      if (!org.deletedAt) {
+        throw errors.badRequest(
+          'Org must be soft-deleted before cryptoshred. Call DELETE /platform/orgs/:id first.',
+        );
+      }
+
+      // Double-confirm: header value must equal the org slug. Stops a
+      // mis-clicked tooling action — accidental cryptoshred is the worst
+      // imaginable incident class for this product.
+      const confirmHeader = req.headers['x-cryptoshred-confirm'];
+      const confirmValue = Array.isArray(confirmHeader) ? confirmHeader[0] : confirmHeader;
+      if (confirmValue !== org.slug) {
+        throw errors.badRequest(
+          `Confirmation header X-Cryptoshred-Confirm must equal the org slug "${org.slug}"`,
+        );
+      }
+
+      const result = await cryptoshredOrg(prisma, org.id, body.pendingDays);
+
+      // Revoke every active session belonging to members of this org.
+      // Don't trust JWT staleness here — once cryptoshredded, no new
+      // requests should succeed regardless of access-token age.
+      await prisma.refreshToken.updateMany({
+        where: {
+          revokedAt: null,
+          user: { memberships: { some: { orgId: org.id } } },
+        },
+        data: { revokedAt: new Date() },
+      });
+
+      await writeAuditLog({
+        req,
+        action: 'PLATFORM_ORG_CRYPTOSHRED',
+        resourceType: 'organization',
+        resourceId: org.id,
+        metadata: {
+          orgSlug: org.slug,
+          pendingDays: body.pendingDays,
+          dekCount: result.dekCount,
+          kmsKeysScheduledForDeletion: result.kmsKeysScheduledForDeletion,
+          errorCount: result.errors.length,
+          errors: result.errors,
+        },
+      });
+
+      return {
+        orgId: org.id,
+        orgSlug: org.slug,
+        ...result,
+        note:
+          `Cryptoshred initiated. KMS keys will be permanently destroyed after ${body.pendingDays} days. ` +
+          'Within that window, an admin with kms:CancelKeyDeletion can reverse this action.',
       };
     },
   );

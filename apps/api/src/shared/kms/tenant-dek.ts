@@ -239,6 +239,124 @@ export async function resolveDekPlaintext(prisma: PrismaClient, keyId: string): 
   return plaintext;
 }
 
+// ─── RTBF Mode B — org-level cryptoshred ───────────────────────────────────
+
+export interface CryptoshredOrgResult {
+  /** Number of DEK rows acted on (covers PII + AUDIT + any other purposes). */
+  dekCount: number;
+  /** KMS keys we successfully scheduled for deletion. */
+  kmsKeysScheduledForDeletion: string[];
+  /** Per-DEK errors keyed by KMS keyId. The DB rows are still deactivated. */
+  errors: Array<{ kekKeyId: string; message: string }>;
+}
+
+/**
+ * Cryptoshred an entire organisation's PII per ADR-002 §9 Mode B.
+ *
+ * What this does:
+ *   1. For every TenantEncryptionKey row owned by the org (across ALL
+ *      purposes — PII, AUDIT, future):
+ *        a. Mark the DB row isActive=false + retiredAt=now.
+ *        b. Call KmsClient.disableKey(kekKeyId) — immediate unreadability.
+ *        c. Call KmsClient.scheduleKeyDeletion(kekKeyId, pendingDays).
+ *   2. Evict all matching keyIds from the in-process DekCache so no
+ *      cached plaintext lingers.
+ *
+ * The org row itself is NOT deleted here — audit logs reference it. The
+ * caller (typically the cryptoshred endpoint) is responsible for the
+ * surrounding workflow:
+ *   - confirm authorisation (SUPER + double-confirm header)
+ *   - revoke active sessions
+ *   - write the audit row
+ *   - optionally soft-delete the org row + memberships
+ *
+ * Effect on existing ciphertext:
+ *   Once `pendingDays` elapses, the KMS keys are destroyed. All
+ *   `wrapped_dek` BYTEAs in the DB become permanently unrecoverable.
+ *   Application PII columns encrypted under those DEKs are then
+ *   provably unreadable — including from any database backup. This is
+ *   the strongest possible erasure guarantee under GDPR Art. 17 +
+ *   APP 11.
+ *
+ * IRREVERSIBILITY:
+ *   Within `pendingDays` an admin can call `kms:CancelKeyDeletion` to
+ *   recover. After the window elapses, recovery is impossible. The
+ *   default 7-day window matches AWS KMS's minimum.
+ *
+ * @param prisma       PrismaClient (the writer; this writes to
+ *                     tenant_encryption_keys).
+ * @param orgId        Organisation to cryptoshred.
+ * @param pendingDays  KMS pending-deletion window. AWS KMS accepts 7..30.
+ *                     LocalKmsClient no-ops the deletion regardless.
+ *                     Default 7 (minimum, fastest erasure).
+ *
+ * @returns CryptoshredOrgResult — the caller decides whether any errors
+ *          warrant an alert. The DB rows are deactivated even if the KMS
+ *          calls partially fail; the caller may retry the KMS calls
+ *          independently against the deactivated rows.
+ */
+export async function cryptoshredOrg(
+  prisma: PrismaClient,
+  orgId: string,
+  pendingDays = 7,
+): Promise<CryptoshredOrgResult> {
+  const kms = getKmsClient();
+  const cache = getDekCache();
+
+  const allKeys = await prisma.tenantEncryptionKey.findMany({
+    where: { orgId },
+    select: { id: true, kekKeyId: true, isActive: true },
+  });
+
+  const result: CryptoshredOrgResult = {
+    dekCount: allKeys.length,
+    kmsKeysScheduledForDeletion: [],
+    errors: [],
+  };
+
+  // Deactivate DB rows in one update — fast, atomic.
+  await prisma.tenantEncryptionKey.updateMany({
+    where: { orgId, isActive: true },
+    data: { isActive: false, retiredAt: new Date() },
+  });
+
+  // Evict cached plaintext DEKs so even an in-flight encrypt observes the
+  // deactivation immediately.
+  for (const k of allKeys) cache.evict(k.id);
+
+  // Per-key KMS operations. Disable first (immediate unreadability), then
+  // schedule deletion (durable destruction). Best-effort — record errors
+  // and continue; the DB-level deactivation already prevents new encrypts.
+  // De-duplicate kekKeyId because multiple DEKs (versions) may share one
+  // CMK in the platform-wide-CMK strategy.
+  const seenKeks = new Set<string>();
+  for (const k of allKeys) {
+    if (seenKeks.has(k.kekKeyId)) continue;
+    seenKeks.add(k.kekKeyId);
+    try {
+      await kms.disableKey(k.kekKeyId);
+    } catch (err) {
+      result.errors.push({
+        kekKeyId: k.kekKeyId,
+        message: `disableKey failed: ${err instanceof Error ? err.message : String(err)}`,
+      });
+      // Continue to scheduleKeyDeletion — it can succeed even when the
+      // disable already failed (key in another state, IAM mismatch, etc).
+    }
+    try {
+      await kms.scheduleKeyDeletion(k.kekKeyId, pendingDays);
+      result.kmsKeysScheduledForDeletion.push(k.kekKeyId);
+    } catch (err) {
+      result.errors.push({
+        kekKeyId: k.kekKeyId,
+        message: `scheduleKeyDeletion failed: ${err instanceof Error ? err.message : String(err)}`,
+      });
+    }
+  }
+
+  return result;
+}
+
 // ─── Envelope v2 encode/decode ──────────────────────────────────────────────
 
 /**

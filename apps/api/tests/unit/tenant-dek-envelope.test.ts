@@ -349,3 +349,148 @@ describe('rotateDek', () => {
     expect(piiOldRow?.isActive).toBe(false);
   });
 });
+
+describe('cryptoshredOrg', () => {
+  function buildShredStubPrisma(
+    rows: Array<{
+      id: string;
+      orgId: string;
+      purpose: string;
+      kekKeyId: string;
+      isActive: boolean;
+      retiredAt: Date | null;
+    }>,
+  ): { prisma: any; updateManyCalls: number } {
+    let updateManyCalls = 0;
+    const prisma: any = {
+      tenantEncryptionKey: {
+        findMany: async (args: { where: { orgId: string } }) =>
+          rows.filter((r) => r.orgId === args.where.orgId),
+        updateMany: async (args: {
+          where: { orgId: string; isActive?: boolean };
+          data: { isActive?: boolean; retiredAt?: Date };
+        }) => {
+          updateManyCalls += 1;
+          let count = 0;
+          for (const r of rows) {
+            if (
+              r.orgId === args.where.orgId &&
+              (args.where.isActive === undefined || r.isActive === args.where.isActive)
+            ) {
+              if (args.data.isActive !== undefined) r.isActive = args.data.isActive;
+              if (args.data.retiredAt !== undefined) r.retiredAt = args.data.retiredAt;
+              count += 1;
+            }
+          }
+          return { count };
+        },
+      },
+    };
+    return { prisma, updateManyCalls };
+  }
+
+  // Tracking KMS calls — wrap LocalKmsClient to record disable/delete
+  function trackingKms() {
+    const disabled: string[] = [];
+    const scheduled: Array<{ kekKeyId: string; pendingDays: number }> = [];
+    setKmsClient({
+      generateDataKey: () => Promise.reject(new Error('not used')),
+      wrapDataKey: () => Promise.reject(new Error('not used')),
+      unwrapDataKey: () => Promise.reject(new Error('not used')),
+      disableKey: async (k) => {
+        disabled.push(k);
+      },
+      scheduleKeyDeletion: async (k, d) => {
+        scheduled.push({ kekKeyId: k, pendingDays: d });
+      },
+    });
+    return { disabled, scheduled };
+  }
+
+  it('deactivates every DEK and schedules KMS deletion for each unique KEK', async () => {
+    const { cryptoshredOrg } = await import('../../src/shared/kms/tenant-dek.js');
+    const orgId = uuidv7();
+    const rows = [
+      {
+        id: uuidv7(),
+        orgId,
+        purpose: 'PII',
+        kekKeyId: 'arn:aws:kms:1',
+        isActive: true,
+        retiredAt: null,
+      },
+      {
+        id: uuidv7(),
+        orgId,
+        purpose: 'AUDIT',
+        kekKeyId: 'arn:aws:kms:2',
+        isActive: true,
+        retiredAt: null,
+      },
+      {
+        id: uuidv7(),
+        orgId,
+        purpose: 'PII',
+        kekKeyId: 'arn:aws:kms:1',
+        isActive: false,
+        retiredAt: null,
+      }, // older version
+    ];
+    const { prisma } = buildShredStubPrisma(rows);
+    const { disabled, scheduled } = trackingKms();
+
+    const result = await cryptoshredOrg(prisma, orgId, 14);
+
+    expect(result.dekCount).toBe(3);
+    expect(result.errors).toHaveLength(0);
+    // Two unique KEK ARNs across the 3 DEK rows.
+    expect(disabled.sort()).toEqual(['arn:aws:kms:1', 'arn:aws:kms:2']);
+    expect(scheduled.map((s) => s.kekKeyId).sort()).toEqual(['arn:aws:kms:1', 'arn:aws:kms:2']);
+    expect(scheduled.every((s) => s.pendingDays === 14)).toBe(true);
+    // All DB rows are now inactive.
+    expect(rows.every((r) => r.isActive === false)).toBe(true);
+  });
+
+  it('records errors when KMS calls fail but still deactivates DB rows', async () => {
+    const { cryptoshredOrg } = await import('../../src/shared/kms/tenant-dek.js');
+    const orgId = uuidv7();
+    const rows = [
+      {
+        id: uuidv7(),
+        orgId,
+        purpose: 'PII',
+        kekKeyId: 'arn:flaky',
+        isActive: true,
+        retiredAt: null,
+      },
+    ];
+    const { prisma } = buildShredStubPrisma(rows);
+    setKmsClient({
+      generateDataKey: () => Promise.reject(new Error('not used')),
+      wrapDataKey: () => Promise.reject(new Error('not used')),
+      unwrapDataKey: () => Promise.reject(new Error('not used')),
+      disableKey: () => Promise.reject(new Error('IAM denied')),
+      scheduleKeyDeletion: () => Promise.reject(new Error('KMS unreachable')),
+    });
+
+    const result = await cryptoshredOrg(prisma, orgId);
+
+    expect(result.dekCount).toBe(1);
+    expect(result.errors.length).toBe(2); // disable + scheduleKeyDeletion both failed
+    expect(result.kmsKeysScheduledForDeletion).toHaveLength(0);
+    // DB row still deactivated despite KMS failures — the app-layer
+    // protection is intact even if KMS retry is needed.
+    expect(rows[0]!.isActive).toBe(false);
+  });
+
+  it('returns empty result for an org with no DEK rows', async () => {
+    const { cryptoshredOrg } = await import('../../src/shared/kms/tenant-dek.js');
+    const orgId = uuidv7();
+    const { prisma } = buildShredStubPrisma([]);
+    trackingKms();
+    const result = await cryptoshredOrg(prisma, orgId);
+    expect(result.dekCount).toBe(0);
+    expect(result.kmsKeysScheduledForDeletion).toHaveLength(0);
+    expect(result.errors).toHaveLength(0);
+  });
+});
