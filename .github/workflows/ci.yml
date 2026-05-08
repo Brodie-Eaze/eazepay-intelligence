@@ -36,13 +36,16 @@ jobs:
       REDIS_URL: redis://localhost:6379
       NODE_ENV: test
       LOG_LEVEL: error
-      PII_ENCRYPTION_KEY: AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=
-      PII_HASH_SECRET: ci-pepper-secret-dont-reuse
+      # CI-only test values. Real secrets land via repo-level secrets.*
+      # Fork PRs without secrets configured fall back to deterministic
+      # placeholders that are never deployed and never used in production.
+      PII_ENCRYPTION_KEY: ${{ secrets.CI_PII_ENCRYPTION_KEY || 'AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=' }}
+      PII_HASH_SECRET: ${{ secrets.CI_PII_HASH_SECRET || 'ci-pepper-secret-dont-reuse' }}
       JWT_ACCESS_SECRET: ${{ secrets.CI_JWT_ACCESS_SECRET || 'a-test-secret-32-chars-minimum-aaaa' }}
       JWT_REFRESH_SECRET: ${{ secrets.CI_JWT_REFRESH_SECRET || 'b-test-secret-32-chars-minimum-bbbb' }}
-      BUZZPAY_WEBHOOK_SECRET: ci-buzzpay-secret-min-16
-      PIXIE_WEBHOOK_SECRET: ci-pixie-secret-min-16___
-      MICAMP_WEBHOOK_SECRET: ci-micamp-secret-min-16__
+      BUZZPAY_WEBHOOK_SECRET: ${{ secrets.CI_BUZZPAY_WEBHOOK_SECRET || 'ci-buzzpay-secret-min-16' }}
+      PIXIE_WEBHOOK_SECRET: ${{ secrets.CI_PIXIE_WEBHOOK_SECRET || 'ci-pixie-secret-min-16___' }}
+      MICAMP_WEBHOOK_SECRET: ${{ secrets.CI_MICAMP_WEBHOOK_SECRET || 'ci-micamp-secret-min-16__' }}
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4

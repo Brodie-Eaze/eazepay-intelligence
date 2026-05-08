@@ -277,28 +277,38 @@ async function ingest(args: {
 }): Promise<{ eventId: string; replayed: boolean }> {
   const prisma = getPrisma();
 
-  // Idempotency check via the WebhookEvent unique constraint on (source, key).
-  // Same row, same response — same guarantee the signed webhook path provides.
-  const existing = await prisma.webhookEvent.findUnique({
-    where: { source_idempotencyKey: { source: args.source, idempotencyKey: args.idempotencyKey } },
-  });
-  if (existing) {
-    return { eventId: existing.id, replayed: true };
+  // Idempotency via the WebhookEvent UNIQUE(source, idempotency_key).
+  // Atomic-create-or-find pattern: attempt create + catch P2002 + load the
+  // colliding row. The previous findUnique → create pair was a TOCTOU race
+  // between two concurrent requests with the same idempotency key — both
+  // would read null, both attempt create, one would 500 with P2002.
+  let event;
+  try {
+    event = await prisma.webhookEvent.create({
+      data: {
+        id: uuidv7(),
+        source: args.source,
+        eventType: args.eventType,
+        idempotencyKey: args.idempotencyKey,
+        // Trust the authenticated request — there's no HMAC, but auth is
+        // the equivalent control. signatureValid=true keeps the column
+        // semantics consistent: "the request was authorised at ingress."
+        signatureValid: true,
+        payload: (args.payload ?? {}) as Prisma.InputJsonValue,
+      },
+    });
+  } catch (err) {
+    if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
+      const existing = await prisma.webhookEvent.findUnique({
+        where: {
+          source_idempotencyKey: { source: args.source, idempotencyKey: args.idempotencyKey },
+        },
+      });
+      if (existing) return { eventId: existing.id, replayed: true };
+      // P2002 without a row should not happen — treat as fatal.
+    }
+    throw err;
   }
-
-  const event = await prisma.webhookEvent.create({
-    data: {
-      id: uuidv7(),
-      source: args.source,
-      eventType: args.eventType,
-      idempotencyKey: args.idempotencyKey,
-      // Trust the authenticated request — there's no HMAC, but auth is the
-      // equivalent control. We mark signatureValid=true to keep the column
-      // semantics consistent ("the request was authorised at ingress").
-      signatureValid: true,
-      payload: (args.payload ?? {}) as Prisma.InputJsonValue,
-    },
-  });
 
   // Process synchronously — devs see the result immediately. If you want
   // async fan-out for high-throughput backfills, call the queue instead.

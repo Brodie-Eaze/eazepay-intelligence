@@ -324,6 +324,54 @@ export class PortfolioRepository {
     });
   }
 
+  /**
+   * Atomic replace of both channels + products for a silo at a single asOf.
+   * Channels and products are a logical unit on the revenue surface — if
+   * one half lands and the other doesn't, the silo's revenue panel shows
+   * mismatched snapshots. The route layer used to call replaceChannels +
+   * replaceProducts via Promise.all, which violated this invariant. This
+   * method wraps both in one transaction so a partial failure rolls back
+   * to the previous snapshot atomically.
+   */
+  async replaceRevenue(
+    slug: string,
+    asOf: Date,
+    channels: RevenueChannelInput[],
+    products: ProductLineInput[],
+  ): Promise<{ channels: number; products: number }> {
+    return this.writer.$transaction(async (tx) => {
+      await tx.portfolioRevenueChannel.deleteMany({ where: { businessSlug: slug, asOf } });
+      await tx.portfolioProductLine.deleteMany({ where: { businessSlug: slug, asOf } });
+      if (channels.length > 0) {
+        await tx.portfolioRevenueChannel.createMany({
+          data: channels.map((c) => ({
+            id: uuidv7(),
+            businessSlug: slug,
+            asOf,
+            channel: c.channel,
+            revenue: c.revenue.toString(),
+            customers: c.customers,
+            share: c.share.toString(),
+          })),
+        });
+      }
+      if (products.length > 0) {
+        await tx.portfolioProductLine.createMany({
+          data: products.map((p) => ({
+            id: uuidv7(),
+            businessSlug: slug,
+            asOf,
+            name: p.name,
+            revenue: p.revenue.toString(),
+            units: p.units,
+            avgPrice: p.avgPrice.toString(),
+          })),
+        });
+      }
+      return { channels: channels.length, products: products.length };
+    });
+  }
+
   // ─── Unit economics ────────────────────────────────────────────────────
 
   getUnitEconomics(slug: string): Promise<PortfolioUnitEconomics | null> {

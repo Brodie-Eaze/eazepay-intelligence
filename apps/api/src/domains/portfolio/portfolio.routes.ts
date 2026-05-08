@@ -456,10 +456,15 @@ export async function registerPortfolioRoutes(app: FastifyInstance): Promise<voi
       if (!(await repo.getBusiness(params.slug))) throw errors.notFound('business');
       const body = RevenuePush.parse(req.body);
       const asOf = body.asOf ? new Date(body.asOf) : todayDate();
-      const [channels, products] = await Promise.all([
-        repo.replaceChannels(params.slug, asOf, body.channels),
-        repo.replaceProducts(params.slug, asOf, body.products),
-      ]);
+      // Atomic replace of both surfaces in one transaction — channels and
+      // products are a logical unit; partial failure must roll back to the
+      // previous snapshot rather than landing one half of the new state.
+      const { channels, products } = await repo.replaceRevenue(
+        params.slug,
+        asOf,
+        body.channels,
+        body.products,
+      );
       await writeAuditLog({
         req,
         action: 'PORTFOLIO_DATA_INGESTED',

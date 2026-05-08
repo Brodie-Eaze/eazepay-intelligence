@@ -88,28 +88,35 @@ describe('RtbfService.process', () => {
   it('cryptoshreds matching applications + stamps COMPLETED', async () => {
     const { RtbfService } = await import('../../src/domains/rtbf/rtbf.service.js');
     const updates: Array<{ where: { id: string }; data: Record<string, Buffer> }> = [];
+    const initial = {
+      id: 'r1',
+      status: 'PENDING',
+      emailHash: Buffer.alloc(32, 9),
+      requestedById: 'user-1',
+    };
     const prisma = {
       rtbfRequest: {
-        findUnique: vi.fn(async () => ({
-          id: 'r1',
-          status: 'PENDING',
-          emailHash: Buffer.alloc(32, 9),
-          requestedById: 'user-1',
-        })),
-        update: vi.fn(async ({ where, data }: { where: { id: string }; data: unknown }) => {
-          return { id: where.id, ...(data as Record<string, unknown>) };
-        }),
-      },
-      application: {
-        findMany: vi.fn(async () => [{ id: 'app-1' }, { id: 'app-2' }, { id: 'app-3' }]),
+        findUnique: vi.fn(async () => initial),
       },
       $transaction: vi.fn(async (fn: (tx: unknown) => Promise<unknown>) => {
+        // The new RTBF flow does everything inside the tx: PROCESSING update,
+        // application.findMany, scrub updates, COMPLETED update, audit log
+        // create. Stub each method on the tx object.
         const tx = {
+          rtbfRequest: {
+            update: vi.fn(async ({ where, data }: { where: { id: string }; data: unknown }) => {
+              return { ...initial, id: where.id, ...(data as Record<string, unknown>) };
+            }),
+          },
           application: {
+            findMany: vi.fn(async () => [{ id: 'app-1' }, { id: 'app-2' }, { id: 'app-3' }]),
             update: vi.fn(async (args: { where: { id: string }; data: Record<string, Buffer> }) => {
               updates.push(args);
               return args;
             }),
+          },
+          auditLog: {
+            create: vi.fn(async () => undefined),
           },
         };
         return fn(tx);

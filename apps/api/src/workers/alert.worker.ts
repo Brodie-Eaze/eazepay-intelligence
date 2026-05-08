@@ -85,10 +85,13 @@ export async function runEvaluationCycle(opts: {
       // here; we surface the error rather than silently skipping so an op
       // sees the bad rule on the next /alerts page load.
       const parsed = RuleQuerySchema.parse(rule.query);
+      // markEvaluated runs BEFORE the eval so a crash mid-eval doesn't
+      // cause back-to-back retries; the cadence floor still bars re-eval
+      // until windowMinutes elapses, which gives operators time to fix
+      // the rule before the worker re-attempts.
+      if (opts.markEvaluated) await opts.markEvaluated(rule, now);
       const result = await opts.evaluator.evaluate(parsed, rule.windowMinutes);
       summary.evaluated += 1;
-
-      if (opts.markEvaluated) await opts.markEvaluated(rule, now);
 
       // Find any existing non-resolved alert for this rule. We treat OPEN
       // and ACKNOWLEDGED as "still active" — only RESOLVED counts as cleared.
@@ -173,16 +176,33 @@ async function main(): Promise<void> {
     if (lastIso) {
       const last = new Date(lastIso);
       const ageMs = now.getTime() - last.getTime();
-      // Cadence floor: re-eval no more often than windowMinutes/2.
-      if (ageMs < (rule.windowMinutes * 60_000) / 2) return false;
+      // Cadence floor: re-eval no more often than the rule's full window.
+      // A 60-minute rule re-evaluates at most every 60 minutes, regardless
+      // of poll interval. Stops the same OPEN alert from being touched
+      // back-to-back; the state machine handles correctness even without
+      // this floor, but the floor prevents N copies of the same alert
+      // payload from being audited within a single window.
+      if (ageMs < rule.windowMinutes * 60_000) return false;
     }
+    // Cross-replica lock: per-rule SETNX with a TTL bounded by the rule's
+    // own window. If a worker crashes mid-eval, the lock expires no later
+    // than the next valid eval cadence — never blocks longer than the
+    // rule's window. The hard cap (LOCK_TTL_SECONDS env, default 5 min)
+    // bounds rules with absurdly long windows.
     const lockKey = `alert:lock:${rule.id}`;
-    const acquired = await redis.set(lockKey, '1', 'EX', LOCK_TTL_SECONDS, 'NX');
+    const lockTtlSec = Math.min(LOCK_TTL_SECONDS, Math.max(60, rule.windowMinutes * 60));
+    const acquired = await redis.set(lockKey, '1', 'EX', lockTtlSec, 'NX');
     return acquired === 'OK';
   };
 
   const markEvaluated = async (rule: AlertRule, now: Date): Promise<void> => {
-    await redis.set(`alert:last:${rule.id}`, now.toISOString(), 'EX', rule.windowMinutes * 120);
+    // Release the lock as soon as eval finishes so a sibling replica can
+    // pick up the next cycle. The cadence floor (alert:last) handles
+    // double-eval prevention; we don't need the lock to outlive the eval.
+    await Promise.all([
+      redis.set(`alert:last:${rule.id}`, now.toISOString(), 'EX', rule.windowMinutes * 120),
+      redis.del(`alert:lock:${rule.id}`),
+    ]);
   };
 
   let running = true;

@@ -24,20 +24,27 @@ SELECT create_hypertable(
 );
 
 -- Continuous aggregate: daily revenue rollup, refresh every 15 minutes.
-CREATE MATERIALIZED VIEW IF NOT EXISTS revenue_daily_cagg
+--
+-- Sources from `revenue_events` (the append-only ledger, source of truth)
+-- rather than from `revenue_aggregations` (which is itself a derivative).
+-- A CAGG over an already-aggregated table is a no-op aggregation; this
+-- one buckets the underlying event stream so dashboard queries hit the
+-- materialised view instead of scanning millions of ledger rows.
+--
+-- We DROP first so re-running this script on an existing deployment
+-- replaces the prior (incorrect) view definition. The script remains
+-- idempotent: a fresh DB drops nothing and creates the new view.
+DROP MATERIALIZED VIEW IF EXISTS revenue_daily_cagg;
+CREATE MATERIALIZED VIEW revenue_daily_cagg
 WITH (timescaledb.continuous) AS
 SELECT
-  time_bucket(INTERVAL '1 day', period_start) AS bucket,
-  SUM(total_revenue)         AS total_revenue,
-  SUM(buzzpay_revshare_total) AS buzzpay_revshare_total,
-  SUM(processing_fees_total)  AS processing_fees_total,
-  SUM(pixie_margin_total)     AS pixie_margin_total,
-  SUM(total_applications)     AS total_applications,
-  SUM(approved_applications)  AS approved_applications,
-  SUM(funded_applications)    AS funded_applications
-FROM revenue_aggregations
-WHERE period = 'DAILY'
-GROUP BY bucket
+  time_bucket(INTERVAL '1 day', effective_at) AS bucket,
+  source,
+  stream,
+  SUM(amount)            AS total_amount,
+  COUNT(*)::bigint       AS event_count
+FROM revenue_events
+GROUP BY bucket, source, stream
 WITH NO DATA;
 
 SELECT add_continuous_aggregate_policy(

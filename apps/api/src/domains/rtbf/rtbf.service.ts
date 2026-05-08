@@ -96,28 +96,39 @@ export class RtbfService {
     requestId: string,
     span: import('@opentelemetry/api').Span,
   ): Promise<RtbfRequest> {
-    const req = await this.prisma.rtbfRequest.findUnique({ where: { id: requestId } });
-    if (!req) throw errors.notFound('RtbfRequest', requestId);
-    if (req.status === 'COMPLETED') return req;
-    if (req.status === 'FAILED')
+    const initial = await this.prisma.rtbfRequest.findUnique({ where: { id: requestId } });
+    if (!initial) throw errors.notFound('RtbfRequest', requestId);
+    if (initial.status === 'COMPLETED') return initial;
+    if (initial.status === 'FAILED')
       throw errors.badRequest('Request previously failed; create a new one to retry');
+    // PROCESSING is treated as resumable — a previous worker crashed mid-tx,
+    // we re-enter the same logic. The transaction below is idempotent under
+    // re-entry: the ciphertext columns are overwritten with zeros, and the
+    // unique constraint on the request prevents double-completion.
 
-    // Mark PROCESSING + capture start time.
-    await this.prisma.rtbfRequest.update({
-      where: { id: req.id },
-      data: { status: 'PROCESSING', startedAt: new Date() },
-    });
+    const zero32 = Buffer.alloc(32, 0); // matches the smallest ciphertext envelope size
 
+    // The PROCESSING status flip, the application scan, the cryptoshred,
+    // the COMPLETED stamp, and the RTBF_PROCESSED audit row all run in a
+    // single transaction. A crash mid-flight rolls back to PENDING (status
+    // never moves) and the lifecycle worker picks the request up again on
+    // its next tick. The application scan is intentionally inside the tx
+    // so a concurrent webhook that creates a new Application matching the
+    // email hash either lands before our scan (will be scrubbed) or after
+    // our commit (will be picked up by the next RTBF cycle, which the
+    // submit() idempotency check turns into a re-evaluation).
     try {
-      const apps = await this.prisma.application.findMany({
-        where: { consumerEmailHash: req.emailHash },
-        select: { id: true },
-      });
+      const result = await this.prisma.$transaction(async (tx) => {
+        await tx.rtbfRequest.update({
+          where: { id: initial.id },
+          data: { status: 'PROCESSING', startedAt: new Date() },
+        });
 
-      const zero32 = Buffer.alloc(32, 0); // matches the smallest ciphertext envelope size
-      // Use a single transaction so a partial scrub doesn't leave the
-      // request "half-erased" if the worker crashes mid-flight.
-      await this.prisma.$transaction(async (tx) => {
+        const apps = await tx.application.findMany({
+          where: { consumerEmailHash: initial.emailHash },
+          select: { id: true },
+        });
+
         for (const a of apps) {
           await tx.application.update({
             where: { id: a.id },
@@ -130,42 +141,54 @@ export class RtbfService {
             },
           });
         }
+
+        const completed = await tx.rtbfRequest.update({
+          where: { id: initial.id },
+          data: {
+            status: 'COMPLETED' satisfies RtbfRequestStatus,
+            completedAt: new Date(),
+            applicationsScrubbed: apps.length,
+          },
+        });
+
+        // Audit row in the same tx so a rolled-back scrub cannot leave a
+        // phantom RTBF_PROCESSED row, and a successful scrub cannot land
+        // without its audit. CC7.3 / APP 13.
+        await tx.auditLog.create({
+          data: {
+            id: uuidv7(),
+            userId: initial.requestedById,
+            action: 'RTBF_PROCESSED',
+            resourceType: 'rtbf_request',
+            resourceId: initial.id,
+            metadata: {
+              applicationsScrubbed: apps.length,
+              emailHashHex: initial.emailHash.toString('hex'),
+            },
+          },
+        });
+
+        return { completed, scrubbed: apps.length };
       });
 
-      const completed = await this.prisma.rtbfRequest.update({
-        where: { id: req.id },
-        data: {
-          status: 'COMPLETED' satisfies RtbfRequestStatus,
-          completedAt: new Date(),
-          applicationsScrubbed: apps.length,
-        },
-      });
-      span.setAttribute('rtbf.applications_scrubbed', apps.length);
-
-      await writeAuditLog({
-        userId: req.requestedById,
-        action: 'RTBF_PROCESSED',
-        resourceType: 'rtbf_request',
-        resourceId: req.id,
-        metadata: {
-          applicationsScrubbed: apps.length,
-          emailHashHex: req.emailHash.toString('hex'),
-        },
-      });
-      return completed;
+      span.setAttribute('rtbf.applications_scrubbed', result.scrubbed);
+      return result.completed;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      const failed = await this.prisma.rtbfRequest.update({
-        where: { id: req.id },
-        data: { status: 'FAILED', completedAt: new Date(), error: msg.slice(0, 1000) },
-      });
+      // Fail-state recording is best-effort outside the rolled-back tx.
+      const failed = await this.prisma.rtbfRequest
+        .update({
+          where: { id: initial.id },
+          data: { status: 'FAILED', completedAt: new Date(), error: msg.slice(0, 1000) },
+        })
+        .catch(() => null);
       await writeAuditLog({
-        userId: req.requestedById,
+        userId: initial.requestedById,
         action: 'RTBF_FAILED',
         resourceType: 'rtbf_request',
-        resourceId: req.id,
+        resourceId: initial.id,
         metadata: { error: msg.slice(0, 200) },
-      });
+      }).catch(() => undefined);
       throw Object.assign(new Error(msg), { failed });
     }
   }

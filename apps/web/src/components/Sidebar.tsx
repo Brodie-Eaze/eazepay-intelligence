@@ -153,7 +153,11 @@ export function Sidebar(): JSX.Element {
   const filtered = GROUPS.map((g) => ({
     ...g,
     items: g.items.filter((item) => {
-      if (item.operatorOnly && user?.role === 'VIEWER') return false;
+      // operatorOnly hides items from VIEWER and INVESTOR. Without the
+      // INVESTOR clause, an investor-scope user sees admin/ops surfaces
+      // they shouldn't reach (the server enforces scope at the API,
+      // but the sidebar should not advertise routes that 403 on click).
+      if (item.operatorOnly && (user?.role === 'VIEWER' || user?.role === 'INVESTOR')) return false;
       if (item.adminOnly && user?.role !== 'ADMIN') return false;
       return true;
     }),
