@@ -12,6 +12,19 @@ import { getPrisma } from '../../config/database.js';
 export async function writeAuditLog(args: {
   req?: FastifyRequest;
   userId?: string | null;
+  /**
+   * Org the audit event took place within. Nullable for platform-level
+   * system events (org creation, FX rate update, system lifecycle jobs).
+   *
+   * Resolution order (first non-null wins):
+   *   1. Explicit `orgId` argument (used by workers, e.g. RTBF processing
+   *      where orgId comes from the request row, not the request context).
+   *   2. `req.auth.orgId` populated by the tenant-resolution middleware
+   *      (lands in Phase 1.3).
+   *   3. null — recorded as a platform-level event, visible only to
+   *      platform-staff cross-tenant audit views.
+   */
+  orgId?: string | null;
   action: AuditAction;
   resourceType: string;
   resourceId?: string;
@@ -24,6 +37,7 @@ export async function writeAuditLog(args: {
     data: {
       id: uuidv7(),
       userId: args.userId ?? args.req?.auth?.userId ?? null,
+      orgId: args.orgId ?? args.req?.auth?.orgId ?? null,
       action: args.action,
       resourceType: args.resourceType,
       resourceId: args.resourceId ?? null,

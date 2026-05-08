@@ -363,9 +363,11 @@ model Organization {
   updatedAt        DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
 
   memberships Membership[]
-  // Reverse relations for tenant-owned domain models populate here as
-  // Phase 1.2 retrofits orgId onto each table (UserInvitation, Partner,
-  // Application, etc.).
+  invitations UserInvitation[] @relation("OrgInvitations")
+  apiTokens   ApiToken[]       @relation("OrgApiTokens")
+  auditLogs   AuditLog[]       @relation("OrgAuditLogs")
+  // More reverse relations land here as Phase 1.2c–1.2f retrofit
+  // orgId onto every TENANT_OWNED table.
 
   @@map("organizations")
 }
@@ -445,19 +447,28 @@ model User {
 model UserInvitation {
   id           String    @id @db.Uuid
   email        String
-  role         UserRole
+  // OrgRole going forward. Legacy rows pre-Phase-1.2 retain their
+  // historic UserRole value (same enum values, different name) — see
+  // migration 20260508150000 for the in-place type swap.
+  role         OrgRole
   tokenHash    String    @unique @map("token_hash")
   invitedById  String    @map("invited_by_id") @db.Uuid
+  // Org the invitation grants access to. Resolved at issue time from
+  // the issuer's active org context. Required: an invitation cannot
+  // exist without an org to belong to.
+  orgId        String    @map("org_id") @db.Uuid
   expiresAt    DateTime  @map("expires_at") @db.Timestamptz(6)
   acceptedAt   DateTime? @map("accepted_at") @db.Timestamptz(6)
   acceptedById String?   @map("accepted_by_id") @db.Uuid
   revokedAt    DateTime? @map("revoked_at") @db.Timestamptz(6)
   createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
 
-  invitedBy User @relation("InviteIssuedBy", fields: [invitedById], references: [id])
+  invitedBy User         @relation("InviteIssuedBy", fields: [invitedById], references: [id])
+  org       Organization @relation("OrgInvitations", fields: [orgId], references: [id])
 
   @@index([email])
   @@index([expiresAt])
+  @@index([orgId])
   @@map("user_invitations")
 }
 
@@ -481,6 +492,11 @@ model RefreshToken {
 model AuditLog {
   id           String   @id @db.Uuid
   userId       String?  @map("user_id") @db.Uuid
+  // Org the action took place within. Nullable: platform-level events
+  // (org creation, FX rate updates, system lifecycle jobs) have no org.
+  // Tenant audit views filter by orgId; platform-staff views can query
+  // across orgs (with their own audit trail). See ADR-001 §9.
+  orgId        String?  @map("org_id") @db.Uuid
   action       String
   resourceType String   @map("resource_type")
   resourceId   String?  @map("resource_id")
@@ -489,9 +505,11 @@ model AuditLog {
   userAgent    String?  @map("user_agent")
   createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
 
-  user User? @relation(fields: [userId], references: [id])
+  user User?         @relation(fields: [userId], references: [id])
+  org  Organization? @relation("OrgAuditLogs", fields: [orgId], references: [id])
 
   @@index([userId, createdAt(sort: Desc)])
+  @@index([orgId, createdAt(sort: Desc)])
   @@index([resourceType, resourceId])
   @@index([action, createdAt(sort: Desc)])
   @@map("audit_logs")
@@ -577,6 +595,11 @@ enum CaseType {
 model ApiToken {
   id           String          @id @db.Uuid
   userId       String          @map("user_id") @db.Uuid
+  // Org this PAT can act within. PATs are pinned to one org by design;
+  // a user with N memberships gets N PATs (one per org), not one PAT
+  // that magically spans orgs. The bearer-auth middleware verifies the
+  // PAT's orgId matches the request's resolved org.
+  orgId        String          @map("org_id") @db.Uuid
   name         String
   prefix       String          @unique // visible part of the token, e.g. "epi_pk_a1b2c3d4"
   hashedSecret String          @map("hashed_secret") // SHA-256 of the secret half
@@ -586,9 +609,11 @@ model ApiToken {
   revokedAt    DateTime?       @map("revoked_at") @db.Timestamptz(6)
   createdAt    DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
 
-  user User @relation(fields: [userId], references: [id])
+  user User         @relation(fields: [userId], references: [id])
+  org  Organization @relation("OrgApiTokens", fields: [orgId], references: [id])
 
   @@index([userId, revokedAt])
+  @@index([orgId])
   @@map("api_tokens")
 }
 

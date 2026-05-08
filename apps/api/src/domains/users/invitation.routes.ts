@@ -53,10 +53,21 @@ export async function registerInvitationRoutes(app: FastifyInstance): Promise<vo
     async (req, reply) => {
       const body = IssueSchema.parse(req.body);
       const auth = req.auth!;
+      // Phase 1.2a transitional: org context is not yet on req.auth (that
+      // arrives in Phase 1.3). Resolve from the issuer's first membership.
+      // Once Phase 1.3 lands, this becomes `auth.orgId`.
+      const issuerMembership = await prisma.membership.findFirst({
+        where: { userId: auth.userId },
+        orderBy: { createdAt: 'asc' },
+      });
+      if (!issuerMembership) {
+        throw new Error('Issuer has no organisation membership');
+      }
       const result = await invites.issue({
         email: body.email,
         role: body.role,
         invitedById: auth.userId,
+        orgId: issuerMembership.orgId,
       });
       await writeAuditLog({
         req,

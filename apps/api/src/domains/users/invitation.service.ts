@@ -23,7 +23,8 @@
  */
 import { createHash, randomBytes } from 'node:crypto';
 import { v7 as uuidv7 } from 'uuid';
-import type { PrismaClient, UserRole } from '@prisma/client';
+import type { PrismaClient } from '@prisma/client';
+import { OrgRole } from '@prisma/client';
 import { errors } from '../../shared/errors/app-error.js';
 import { hashPassword } from '../../shared/utils/password.js';
 import { getEnv } from '../../config/env.js';
@@ -31,14 +32,18 @@ import { sendEmail } from '../../shared/email/email.service.js';
 
 export interface IssueInvitationInput {
   email: string;
-  role: UserRole;
+  role: OrgRole;
   invitedById: string;
+  // Org the invitation grants access to. Resolved from the issuer's
+  // active org context (req.auth.orgId). Required: invitations are
+  // org-scoped by definition (ADR-001).
+  orgId: string;
 }
 
 export interface IssueInvitationResult {
   id: string;
   email: string;
-  role: UserRole;
+  role: OrgRole;
   expiresAt: Date;
   // Returned to the caller (admin UI) so they can hand the link off out-of-
   // band if email delivery fails. Never logged.
@@ -58,11 +63,18 @@ export class InvitationService {
     const email = input.email.toLowerCase().trim();
     if (!email) throw errors.badRequest('Email is required');
 
-    // If the email is already a real user, reject — admins use PATCH /users
-    // to change roles, not re-invite.
-    const existing = await this.prisma.user.findUnique({ where: { email } });
-    if (existing && !existing.deletedAt) {
-      throw errors.conflict('User with this email already exists', { email });
+    // If the email is already a member of THIS org, reject — admins use
+    // PATCH /memberships to change roles, not re-invite. A user can still
+    // be invited into a different org with a different role; the conflict
+    // check is org-scoped, not global.
+    const existingUser = await this.prisma.user.findUnique({
+      where: { email },
+      include: {
+        memberships: { where: { orgId: input.orgId } },
+      },
+    });
+    if (existingUser && !existingUser.deletedAt && existingUser.memberships.length > 0) {
+      throw errors.conflict('User is already a member of this organisation', { email });
     }
 
     const rawToken = randomBytes(32).toString('base64url');
@@ -76,6 +88,7 @@ export class InvitationService {
         role: input.role,
         tokenHash,
         invitedById: input.invitedById,
+        orgId: input.orgId,
         expiresAt,
       },
     });
@@ -99,7 +112,7 @@ export class InvitationService {
   }
 
   /** Preview an invitation by token — no auth required, no side effects. */
-  async preview(rawToken: string): Promise<{ email: string; role: UserRole; expiresAt: Date }> {
+  async preview(rawToken: string): Promise<{ email: string; role: OrgRole; expiresAt: Date }> {
     const invite = await this.findUsable(rawToken);
     return { email: invite.email, role: invite.role, expiresAt: invite.expiresAt };
   }
@@ -108,37 +121,74 @@ export class InvitationService {
    * Accept an invitation. Creates the User row + marks the invite consumed
    * inside one transaction so a partial state is impossible.
    */
-  async accept(args: { rawToken: string; password: string }): Promise<{ userId: string }> {
+  async accept(args: {
+    rawToken: string;
+    password: string;
+  }): Promise<{ userId: string; orgId: string }> {
     const invite = await this.findUsable(args.rawToken);
     const passwordHash = await hashPassword(args.password);
 
     return this.prisma.$transaction(async (tx) => {
-      // Re-check inside the tx — another tab might have accepted in the
-      // window between our find and create. The unique index on email
-      // would catch it too but the explicit check yields a clearer error.
-      const dup = await tx.user.findUnique({ where: { email: invite.email } });
-      if (dup && !dup.deletedAt) {
-        throw errors.conflict('User with this email already exists');
+      // The user might already exist (invited into a second org). In that
+      // case we don't create a new user — we create a Membership for the
+      // existing user. The unique constraint on Membership(userId, orgId)
+      // protects against double-accept of the same invitation.
+      const existing = await tx.user.findUnique({ where: { email: invite.email } });
+
+      let userId: string;
+      if (existing && !existing.deletedAt) {
+        // Existing user joining another org. Don't touch their password —
+        // the password they set during the original sign-up still owns
+        // their identity. Set new password ONLY if the existing user has
+        // no password yet (e.g. came from OAuth flow).
+        userId = existing.id;
+        if (!existing.passwordHash) {
+          await tx.user.update({
+            where: { id: userId },
+            data: { passwordHash },
+          });
+        }
+      } else if (existing && existing.deletedAt) {
+        throw errors.conflict('Account exists but is deleted; contact support');
+      } else {
+        // New user — create them. role on User is the legacy global field
+        // mirrored from invite.role for backward compat in the migration
+        // window. Authorization reads the Membership.role going forward.
+        userId = uuidv7();
+        await tx.user.create({
+          data: {
+            id: userId,
+            email: invite.email,
+            passwordHash,
+            // Cast OrgRole → UserRole: same string values, different enum.
+            role: invite.role as unknown as 'ADMIN' | 'OPERATOR' | 'INVESTOR' | 'VIEWER',
+          },
+        });
       }
-      const userId = uuidv7();
-      await tx.user.create({
-        data: {
-          id: userId,
-          email: invite.email,
-          passwordHash,
+
+      // Create the membership. Unique(userId, orgId) catches concurrent
+      // accept attempts; the catch path returns the existing membership.
+      await tx.membership.upsert({
+        where: { userId_orgId: { userId, orgId: invite.orgId } },
+        update: {}, // never overwrite an existing role
+        create: {
+          id: uuidv7(),
+          userId,
+          orgId: invite.orgId,
           role: invite.role,
         },
       });
+
       await tx.userInvitation.update({
         where: { id: invite.id },
         data: { acceptedAt: new Date(), acceptedById: userId },
       });
-      return { userId };
+      return { userId, orgId: invite.orgId };
     });
   }
 
   async list(): Promise<
-    Array<{ id: string; email: string; role: UserRole; expiresAt: Date; createdAt: Date }>
+    Array<{ id: string; email: string; role: OrgRole; expiresAt: Date; createdAt: Date }>
   > {
     const rows = await this.prisma.userInvitation.findMany({
       where: { acceptedAt: null, revokedAt: null, expiresAt: { gt: new Date() } },
@@ -169,7 +219,8 @@ export class InvitationService {
   private async findUsable(rawToken: string): Promise<{
     id: string;
     email: string;
-    role: UserRole;
+    role: OrgRole;
+    orgId: string;
     expiresAt: Date;
   }> {
     if (!rawToken || rawToken.length < 16) {
@@ -185,7 +236,7 @@ export class InvitationService {
   }
 }
 
-function renderInviteText(args: { acceptUrl: string; role: UserRole; ttlHours: number }): string {
+function renderInviteText(args: { acceptUrl: string; role: OrgRole; ttlHours: number }): string {
   return [
     `You've been invited to EazePay Intelligence as ${args.role}.`,
     '',
@@ -198,7 +249,7 @@ function renderInviteText(args: { acceptUrl: string; role: UserRole; ttlHours: n
   ].join('\n');
 }
 
-function renderInviteHtml(args: { acceptUrl: string; role: UserRole; ttlHours: number }): string {
+function renderInviteHtml(args: { acceptUrl: string; role: OrgRole; ttlHours: number }): string {
   // Inline styles only — most email clients strip <style> tags.
   return `<!DOCTYPE html>
 <html>
