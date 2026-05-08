@@ -31,11 +31,19 @@ export async function requireAuth(req: FastifyRequest, _reply: FastifyReply): Pr
   });
   if (!user) throw errors.unauthorized('User not found or deactivated');
 
+  // Org context comes from the JWT (embedded at login by signAccess). The
+  // user's `platformRole` is re-checked from the DB on every request; the
+  // JWT-embedded `platformRole` is a fast-path hint that we cross-check.
+  // Mismatch (revoked platform role) → trust the DB.
+  const platformRole = user.platformRole;
+
   req.auth = {
     userId: user.id,
     email: user.email,
     role: user.role,
-    platformRole: user.platformRole,
+    orgId: payload.org,
+    orgRole: payload.orgRole,
+    platformRole,
     scope: payload.scope ?? 'standard',
     jti: payload.jti,
   };

@@ -53,21 +53,23 @@ export async function registerInvitationRoutes(app: FastifyInstance): Promise<vo
     async (req, reply) => {
       const body = IssueSchema.parse(req.body);
       const auth = req.auth!;
-      // Phase 1.2a transitional: org context is not yet on req.auth (that
-      // arrives in Phase 1.3). Resolve from the issuer's first membership.
-      // Once Phase 1.3 lands, this becomes `auth.orgId`.
-      const issuerMembership = await prisma.membership.findFirst({
-        where: { userId: auth.userId },
-        orderBy: { createdAt: 'asc' },
-      });
-      if (!issuerMembership) {
-        throw new Error('Issuer has no organisation membership');
+      // Phase 1.3: orgId comes from the JWT (embedded at login). Old tokens
+      // without orgId fall back to a membership lookup until they expire.
+      let orgId = auth.orgId;
+      if (!orgId) {
+        const fallback = await prisma.membership.findFirst({
+          where: { userId: auth.userId },
+          orderBy: { createdAt: 'asc' },
+          select: { orgId: true },
+        });
+        if (!fallback) throw new Error('Issuer has no organisation membership');
+        orgId = fallback.orgId;
       }
       const result = await invites.issue({
         email: body.email,
         role: body.role,
         invitedById: auth.userId,
-        orgId: issuerMembership.orgId,
+        orgId,
       });
       await writeAuditLog({
         req,

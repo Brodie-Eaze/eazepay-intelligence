@@ -74,7 +74,7 @@ export class AuthService {
       familyId: stored.familyId,
       expiresAt: newExpires,
     });
-    const access = this.signAccess(user, 'standard');
+    const access = await this.signAccess(user, 'standard');
     return {
       access,
       refresh: { token: newRaw, expiresAt: newExpires },
@@ -101,7 +101,7 @@ export class AuthService {
       rawToken: refreshRaw,
       expiresAt: refreshExpires,
     });
-    const access = this.signAccess(user, requestedScope);
+    const access = await this.signAccess(user, requestedScope);
     return {
       access,
       refresh: { token: refreshRaw, expiresAt: refreshExpires },
@@ -172,7 +172,7 @@ export class AuthService {
       rawToken: refreshRaw,
       expiresAt: refreshExpires,
     });
-    const access = this.signAccess(user, scope);
+    const access = await this.signAccess(user, scope);
     return {
       access,
       refresh: { token: refreshRaw, expiresAt: refreshExpires },
@@ -182,10 +182,29 @@ export class AuthService {
     };
   }
 
-  private signAccess(user: User, scope: AuthScope): { token: string; expiresAt: Date } {
+  private async signAccess(
+    user: User,
+    scope: AuthScope,
+  ): Promise<{ token: string; expiresAt: Date }> {
     const env = getEnv();
+    // Phase 1.3: embed the user's active organisation + per-org role in the
+    // access token. Resolution: oldest Membership (first org joined) wins
+    // during the migration window; an explicit org-switcher endpoint
+    // (Phase 1.3 expansion) lets the user change active org later.
+    // Platform staff are embedded so requireAuth can short-circuit
+    // platform-route checks without an extra DB hit.
+    const membership = await this.repo.findOldestMembership(user.id);
     const token = signJwt(
-      { sub: user.id, role: user.role, kind: 'access', jti: newJti(), scope },
+      {
+        sub: user.id,
+        role: user.role,
+        org: membership?.orgId,
+        orgRole: membership?.role,
+        platformRole: user.platformRole ?? null,
+        kind: 'access',
+        jti: newJti(),
+        scope,
+      },
       env.JWT_ACCESS_TTL_SECONDS,
     );
     return { token, expiresAt: new Date(Date.now() + env.JWT_ACCESS_TTL_SECONDS * 1000) };

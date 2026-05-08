@@ -1,11 +1,24 @@
 import { createHmac, randomBytes } from 'node:crypto';
-import type { PrismaClient, RefreshToken, User } from '@prisma/client';
+import type { OrgRole, PrismaClient, RefreshToken, User } from '@prisma/client';
 import { v7 as uuidv7 } from 'uuid';
 import { getEnv } from '../../config/env.js';
+
+export interface MembershipRef {
+  orgId: string;
+  role: OrgRole;
+}
 
 export interface IAuthRepository {
   findUserByEmail(email: string): Promise<User | null>;
   findUserById(id: string): Promise<User | null>;
+  /**
+   * Phase 1.3: resolve the user's active organisation context for embedding
+   * into the access token at sign time. Returns the oldest Membership
+   * (first org joined) — that's the user's "default" org during the
+   * migration window. Returns null for users with no memberships
+   * (platform-staff-only accounts, freshly-invited users not yet accepted).
+   */
+  findOldestMembership(userId: string): Promise<MembershipRef | null>;
   recordLogin(userId: string): Promise<void>;
   createRefreshToken(args: {
     userId: string;
@@ -57,6 +70,15 @@ export class AuthRepository implements IAuthRepository {
 
   async findUserById(id: string): Promise<User | null> {
     return this.prisma.user.findFirst({ where: { id, deletedAt: null } });
+  }
+
+  async findOldestMembership(userId: string): Promise<MembershipRef | null> {
+    const m = await this.prisma.membership.findFirst({
+      where: { userId },
+      orderBy: { createdAt: 'asc' },
+      select: { orgId: true, role: true },
+    });
+    return m;
   }
 
   async recordLogin(userId: string): Promise<void> {

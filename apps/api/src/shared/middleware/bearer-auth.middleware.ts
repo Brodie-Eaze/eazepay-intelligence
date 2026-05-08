@@ -27,13 +27,34 @@ export async function requireBearerAuth(req: FastifyRequest, _reply: FastifyRepl
 
   const row = await getPrisma().apiToken.findUnique({
     where: { prefix: parsed.prefix },
-    include: { user: { select: { id: true, email: true, role: true, deletedAt: true } } },
+    include: {
+      user: {
+        select: { id: true, email: true, role: true, deletedAt: true, platformRole: true },
+      },
+      // Resolve the per-org Membership for the token's pinned org. Phase 1.3
+      // enforcement: a PAT carries its orgId, but the user's role IN that
+      // org may have changed since the token was minted — re-check on every
+      // use. If membership has been revoked, the token is unusable.
+      org: { select: { id: true, deletedAt: true } },
+    },
   });
   if (!row || !row.user || row.user.deletedAt) throw errors.unauthorized('Token not recognised');
   if (row.revokedAt) throw errors.unauthorized('Token revoked');
   if (row.expiresAt && row.expiresAt.getTime() < Date.now())
     throw errors.unauthorized('Token expired');
   if (!hashesMatch(row.hashedSecret, parsed.secretHash)) throw errors.unauthorized('Invalid token');
+  if (!row.org || row.org.deletedAt) throw errors.unauthorized('Token org disabled');
+
+  // Phase 1.3: re-check the user's membership in the pinned org. Returns
+  // 401 (not 403) if membership has been revoked since token was minted —
+  // the token is no longer authoritative.
+  const membership = await getPrisma().membership.findUnique({
+    where: { userId_orgId: { userId: row.user.id, orgId: row.orgId } },
+    select: { role: true },
+  });
+  if (!membership && row.user.platformRole !== 'SUPER' && row.user.platformRole !== 'STAFF') {
+    throw errors.unauthorized('Membership revoked for this org');
+  }
 
   // Bump last_used_at (best-effort).
   void getPrisma()
@@ -44,6 +65,9 @@ export async function requireBearerAuth(req: FastifyRequest, _reply: FastifyRepl
     userId: row.user.id,
     email: row.user.email,
     role: row.user.role,
+    orgId: row.orgId,
+    orgRole: membership?.role,
+    platformRole: row.user.platformRole,
     scope: 'standard',
     jti: row.id,
   };

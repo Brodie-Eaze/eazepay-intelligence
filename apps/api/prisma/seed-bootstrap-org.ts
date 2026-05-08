@@ -26,8 +26,11 @@
  *   migrations should not contain operational decisions about specific
  *   user accounts. This script is the right home for both.
  */
+import { createHash } from 'node:crypto';
 import { v7 as uuidv7 } from 'uuid';
-import { PrismaClient, OrgRole, PlatformRole, UserRole } from '@prisma/client';
+import { PrismaClient, OrgRole, PlatformRole, UserRole, WebhookSource } from '@prisma/client';
+import { LocalKmsClient, LOCAL_DEV_KEY_ID } from '../src/shared/kms/local-kms-client.js';
+import { setKmsClient, ensureActiveDek } from '../src/shared/kms/tenant-dek.js';
 
 const DEFAULT_ORG_SLUG = 'default';
 const DEFAULT_ORG_NAME = 'EazePay Intelligence (default)';
@@ -122,6 +125,62 @@ async function main(): Promise<void> {
     if (orgCount !== 1) {
       throw new Error(`[bootstrap-org] FAIL: expected 1 default org, found ${orgCount}`);
     }
+    // ─── Webhook credential bootstrap ──────────────────────────────────────
+    // Replace sentinel hashes (created by the migration) with real
+    // sha256(secret) values derived from the env vars. Idempotent — only
+    // updates rows that still hold the sentinel.
+    const SENTINEL_HASH = 'b7e94be513e96e8c45cd23d162275e5a12ebde9100a425c4ebcdd7fa4dcd897c';
+    const webhookEnv: Record<WebhookSource, string | undefined> = {
+      [WebhookSource.BUZZPAY]: process.env.BUZZPAY_WEBHOOK_SECRET,
+      [WebhookSource.PIXIE]: process.env.PIXIE_WEBHOOK_SECRET,
+      [WebhookSource.MICAMP]: process.env.MICAMP_WEBHOOK_SECRET,
+    };
+    let webhookUpdated = 0;
+    let webhookMissing = 0;
+    for (const [source, secret] of Object.entries(webhookEnv)) {
+      if (!secret) {
+        webhookMissing += 1;
+        console.warn(
+          `[bootstrap-org] no env secret for ${source} — sentinel hash retained (webhook ingress for ${source} will fail signature verification until set)`,
+        );
+        continue;
+      }
+      const hash = createHash('sha256').update(secret).digest('hex');
+      const r = await prisma.webhookCredential.updateMany({
+        where: { orgId: org.id, source: source as WebhookSource, signingSecretHash: SENTINEL_HASH },
+        data: { signingSecretHash: hash },
+      });
+      if (r.count > 0) webhookUpdated += r.count;
+    }
+    console.log(
+      `[bootstrap-org] webhook credentials: updated=${webhookUpdated}, missing=${webhookMissing}`,
+    );
+
+    // ─── DEK provisioning ──────────────────────────────────────────────────
+    // Provision the bootstrap org's PII DEK if absent. Uses LocalKmsClient
+    // for dev/test; production seed runs with AwsKmsClient registered
+    // (Phase 1.5 expansion). The wrapped DEK lives in tenant_encryption_keys;
+    // the plaintext DEK never touches disk.
+    const isProd = process.env.NODE_ENV === 'production';
+    if (isProd) {
+      console.log(
+        '[bootstrap-org] NODE_ENV=production — skipping DEK provisioning. Run a separate seed with AwsKmsClient registered.',
+      );
+    } else {
+      // KMS_DEV_SECRET is required for LocalKmsClient. If unset, generate
+      // a deterministic dev placeholder — the bootstrap script is dev-only
+      // and a deterministic value keeps re-runs idempotent.
+      if (!process.env.KMS_DEV_SECRET) {
+        process.env.KMS_DEV_SECRET = 'eazepay-bootstrap-dev-kms-secret-not-for-prod';
+      }
+      setKmsClient(new LocalKmsClient());
+      const dek = await ensureActiveDek(prisma, org.id, {
+        kekKeyId: LOCAL_DEV_KEY_ID,
+        purpose: 'PII',
+      });
+      console.log(`[bootstrap-org] PII DEK ready: keyId=${dek.id} version=${dek.version}`);
+    }
+
     console.log('[bootstrap-org] invariants OK');
 
     console.log('[bootstrap-org] done');
