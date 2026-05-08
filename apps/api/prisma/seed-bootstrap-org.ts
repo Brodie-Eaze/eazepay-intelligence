@@ -29,8 +29,9 @@
 import { createHash } from 'node:crypto';
 import { v7 as uuidv7 } from 'uuid';
 import { PrismaClient, OrgRole, PlatformRole, UserRole, WebhookSource } from '@prisma/client';
-import { LocalKmsClient, LOCAL_DEV_KEY_ID } from '../src/shared/kms/local-kms-client.js';
-import { setKmsClient, ensureActiveDek } from '../src/shared/kms/tenant-dek.js';
+import { LOCAL_DEV_KEY_ID } from '../src/shared/kms/local-kms-client.js';
+import { ensureActiveDek } from '../src/shared/kms/tenant-dek.js';
+import { bootstrapKms } from '../src/shared/kms/kms-factory.js';
 
 const DEFAULT_ORG_SLUG = 'default';
 const DEFAULT_ORG_NAME = 'EazePay Intelligence (default)';
@@ -157,29 +158,23 @@ async function main(): Promise<void> {
     );
 
     // ─── DEK provisioning ──────────────────────────────────────────────────
-    // Provision the bootstrap org's PII DEK if absent. Uses LocalKmsClient
-    // for dev/test; production seed runs with AwsKmsClient registered
-    // (Phase 1.5 expansion). The wrapped DEK lives in tenant_encryption_keys;
-    // the plaintext DEK never touches disk.
-    const isProd = process.env.NODE_ENV === 'production';
-    if (isProd) {
-      console.log(
-        '[bootstrap-org] NODE_ENV=production — skipping DEK provisioning. Run a separate seed with AwsKmsClient registered.',
-      );
-    } else {
-      // KMS_DEV_SECRET is required for LocalKmsClient. If unset, generate
-      // a deterministic dev placeholder — the bootstrap script is dev-only
-      // and a deterministic value keeps re-runs idempotent.
-      if (!process.env.KMS_DEV_SECRET) {
-        process.env.KMS_DEV_SECRET = 'eazepay-bootstrap-dev-kms-secret-not-for-prod';
-      }
-      setKmsClient(new LocalKmsClient());
-      const dek = await ensureActiveDek(prisma, org.id, {
-        kekKeyId: LOCAL_DEV_KEY_ID,
-        purpose: 'PII',
-      });
-      console.log(`[bootstrap-org] PII DEK ready: keyId=${dek.id} version=${dek.version}`);
+    // Provision the bootstrap org's PII DEK if absent. The KMS factory
+    // picks LocalKmsClient (dev) or AwsKmsClient (prod) per env. Production
+    // requires AWS_KMS_KEY_ARN; the factory throws if missing.
+    if (!process.env.KMS_DEV_SECRET) {
+      // Deterministic dev placeholder. NEVER use this value in prod —
+      // the factory only reads it when picking LocalKmsClient.
+      process.env.KMS_DEV_SECRET = 'eazepay-bootstrap-dev-kms-secret-not-for-prod';
     }
+    const { driver } = await bootstrapKms();
+    const kekKeyId = process.env.AWS_KMS_KEY_ARN ?? LOCAL_DEV_KEY_ID;
+    const dek = await ensureActiveDek(prisma, org.id, {
+      kekKeyId,
+      purpose: 'PII',
+    });
+    console.log(
+      `[bootstrap-org] PII DEK ready: driver=${driver} keyId=${dek.id} version=${dek.version}`,
+    );
 
     console.log('[bootstrap-org] invariants OK');
 
