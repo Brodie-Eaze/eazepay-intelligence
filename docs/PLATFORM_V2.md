@@ -60,13 +60,25 @@ Sequential dependencies are marked. Phases without dependencies between them can
 
 **Sub-phases:**
 
-- **1.1** Organization + Membership + PlatformRole schema + migration. Bootstrap "default org" containing all current data.
-- **1.2** `org_id` FK retrofit on every TENANT_OWNED table. Backfill default org for existing rows. Constraint becomes NOT NULL after backfill.
-- **1.3** Tenant context middleware. Resolves active org from session; injects into request context; Prisma `$extends` model middleware enforces `where: { orgId }` on every query.
-- **1.4** Postgres RLS policies. Every tenant-owned table gets `ENABLE ROW LEVEL SECURITY` + a policy keyed on `current_setting('app.org_id')`. App sets the GUC at the start of every request via `prisma.$executeRaw`. Defence in depth — even a SQL injection bug or a missed `where` clause cannot leak across tenants.
-- **1.5** KMS abstraction + per-tenant DEK + envelope-encrypted columns + read-fallback + background re-encryption.
-- **1.6** Super-admin cross-tenant console. Separate route prefix (`/platform/...`), separate role check, separate audit category.
-- **1.7** Redis/BullMQ tenant-scoped namespacing. Every key gets the org prefix.
+- [x] **1.1** Organization + Membership + PlatformRole schema + migration. Bootstrap "default org" containing all current data. — **Done** (commit `7b792c0`)
+- [ ] **1.2** `org_id` FK retrofit on every TENANT_OWNED table. Backfill default org for existing rows. Constraint becomes NOT NULL after backfill. **In progress.**
+  - [x] **1.2a** `user_invitations`, `api_tokens` — orgId NOT NULL FK + indexes; `UserInvitation.role` enum migrated `UserRole → OrgRole`; service-layer rewired (Membership-on-accept). — **Done** (commit `db6adc4`)
+  - [x] **1.2b** `audit_logs` — orgId nullable FK + index; `writeAuditLog` reads orgId from context. — **Done** (commit `db6adc4`)
+  - [ ] **1.2c** Core finance: `partners`, `applications`, `lender_decisions`, `revenue_events` (idempotency unique becomes `(org_id, source, idempotency_key)`), `pixie_metrics`, `revenue_aggregations` (PK changes — coordinate with worker quiet period), `webhook_events`, `outbox_events`.
+  - [ ] **1.2d** Operational: `exports`, `webhook_subscriptions`, `webhook_deliveries`, `notification_channels`, `alert_rules`, `alerts`, `cases`, `notes`, `tags` (unique becomes `(org_id, name)`), `tag_assignments`, `saved_views`, `scheduled_reports`, `report_runs`, `rtbf_requests`.
+  - [ ] **1.2e** Portfolio slug→UUID PK migration. `PortfolioVertical` and `PortfolioBusiness` switch from slug-PK to UUID surrogate + `UNIQUE (org_id, slug)`. All FK references in child tables updated.
+  - [ ] **1.2f** New tables: `webhook_credentials` (vendor→org HMAC mapping), `tenant_encryption_keys` (per ADR-002).
+- [ ] **1.3** Tenant context middleware. Resolves active org from `:orgSlug` URL path; populates `req.auth.orgId` + `orgRole` + `platformRole`; Prisma `$extends` model middleware enforces `where: { orgId }` on every query.
+- [ ] **1.4** Postgres RLS policies. Every tenant-owned table gets `ENABLE ROW LEVEL SECURITY` + policy keyed on `current_setting('app.org_id')`. App sets the GUC at request start. Defence in depth — even a SQL injection or missed `where` cannot leak across tenants.
+- [ ] **1.5** KMS abstraction + per-tenant DEK + envelope-encrypted columns + read-fallback + background re-encryption (per ADR-002).
+- [ ] **1.6** Super-admin cross-tenant console. Separate route prefix (`/api/v1/platform/...`), separate role check (`requirePlatformRole`), separate audit category.
+- [ ] **1.7** Redis/BullMQ tenant-scoped namespacing per blast-radius §4.
+
+### Phase 1 — current session log
+
+| Session | Date       | Commits              | Sub-phases done |
+| ------- | ---------- | -------------------- | --------------- |
+| 1       | 2026-05-08 | `7b792c0`, `db6adc4` | 1.1, 1.2a, 1.2b |
 
 ---
 
