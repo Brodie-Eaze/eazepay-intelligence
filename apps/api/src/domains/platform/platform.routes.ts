@@ -36,6 +36,8 @@ import { csrfGuard } from '../../shared/middleware/csrf.middleware.js';
 import { requirePlatformRole } from '../../shared/middleware/rbac.middleware.js';
 import { writeAuditLog } from '../../shared/middleware/audit-log.middleware.js';
 import { errors } from '../../shared/errors/app-error.js';
+import { rotateDek } from '../../shared/kms/tenant-dek.js';
+import { LOCAL_DEV_KEY_ID } from '../../shared/kms/local-kms-client.js';
 
 const SLUG_RE = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
 
@@ -208,6 +210,153 @@ export async function registerPlatformRoutes(app: FastifyInstance): Promise<void
         metadata: { mode: 'soft-delete-only', note: 'DEK destruction in Phase 1.5' },
       });
       reply.status(204).send();
+    },
+  );
+
+  /**
+   * Rotate an org's active DEK for a given purpose. Generates a fresh
+   * DEK via KMS, marks it active, deactivates the prior version. Old
+   * ciphertext remains readable; the rotation runbook (ADR-002 §8)
+   * follows up with a background re-encryption job.
+   *
+   * SUPER-only: rotation is irreversible without rolling forward.
+   */
+  app.post(
+    '/platform/orgs/:id/rotate-dek',
+    { preHandler: [requireAuth, csrfGuard, requirePlatformRole('SUPER')] },
+    async (req) => {
+      const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
+      const body = z
+        .object({
+          purpose: z.enum(['PII', 'AUDIT']).default('PII'),
+          // Production callers supply the per-org KMS CMK ARN; dev defaults
+          // to the LocalKmsClient sentinel.
+          kekKeyId: z.string().min(1).optional(),
+        })
+        .parse(req.body ?? {});
+
+      const org = await prisma.organization.findFirst({
+        where: { id, deletedAt: null },
+        select: { id: true, slug: true },
+      });
+      if (!org) throw errors.notFound('Organization not found');
+
+      const result = await rotateDek(prisma, org.id, {
+        purpose: body.purpose,
+        kekKeyId: body.kekKeyId ?? LOCAL_DEV_KEY_ID,
+      });
+
+      await writeAuditLog({
+        req,
+        action: 'PLATFORM_DEK_ROTATED',
+        resourceType: 'tenant_encryption_key',
+        resourceId: result.id,
+        metadata: {
+          orgId: org.id,
+          orgSlug: org.slug,
+          purpose: result.purpose,
+          newVersion: result.version,
+        },
+      });
+
+      return {
+        keyId: result.id,
+        orgId: result.orgId,
+        purpose: result.purpose,
+        version: result.version,
+        note:
+          'New DEK is active. Old DEK rows are isActive=false but readable. ' +
+          'Enqueue re-encryption job to convert existing ciphertext, then schedule KMS deletion.',
+      };
+    },
+  );
+
+  /**
+   * Live refresh-token inventory across all orgs. STAFF-or-above —
+   * platform staff need this for incident response (revoke a stolen
+   * refresh-token family without context-switching). Returns at most 200
+   * rows, newest first; use orgId filter to scope.
+   */
+  app.get(
+    '/platform/sessions',
+    { preHandler: [requireAuth, requirePlatformRole('STAFF')] },
+    async (req) => {
+      const q = z
+        .object({
+          orgId: z.string().uuid().optional(),
+          userId: z.string().uuid().optional(),
+          limit: z.coerce.number().int().min(1).max(500).default(200),
+        })
+        .parse(req.query);
+      const tokens = await prisma.refreshToken.findMany({
+        where: {
+          ...(q.userId ? { userId: q.userId } : {}),
+          revokedAt: null,
+          expiresAt: { gt: new Date() },
+          ...(q.orgId ? { user: { memberships: { some: { orgId: q.orgId } } } } : {}),
+        },
+        orderBy: { createdAt: 'desc' },
+        take: q.limit,
+        select: {
+          id: true,
+          userId: true,
+          familyId: true,
+          expiresAt: true,
+          createdAt: true,
+          user: { select: { email: true } },
+        },
+      });
+      await writeAuditLog({
+        req,
+        action: 'PLATFORM_CROSS_TENANT_ACCESS',
+        resourceType: 'refresh_token',
+        metadata: { route: 'GET /platform/sessions', count: tokens.length },
+      });
+      return tokens.map((t) => ({
+        id: t.id,
+        userId: t.userId,
+        userEmail: t.user.email,
+        familyId: t.familyId,
+        expiresAt: t.expiresAt.toISOString(),
+        createdAt: t.createdAt.toISOString(),
+      }));
+    },
+  );
+
+  /**
+   * Platform health snapshot. Read-only, STAFF-or-above. Cross-tenant
+   * counts (no org filter) so platform staff can see overall pressure
+   * without switching org contexts.
+   */
+  app.get(
+    '/platform/health',
+    { preHandler: [requireAuth, requirePlatformRole('STAFF')] },
+    async (req) => {
+      const [orgs, users, memberships, activeDeks, recentAudit] = await Promise.all([
+        prisma.organization.count({ where: { deletedAt: null } }),
+        prisma.user.count({ where: { deletedAt: null } }),
+        prisma.membership.count(),
+        prisma.tenantEncryptionKey.count({ where: { isActive: true } }),
+        prisma.auditLog.count({
+          where: { createdAt: { gt: new Date(Date.now() - 24 * 60 * 60 * 1000) } },
+        }),
+      ]);
+
+      await writeAuditLog({
+        req,
+        action: 'PLATFORM_CROSS_TENANT_ACCESS',
+        resourceType: 'platform_health',
+        metadata: { route: 'GET /platform/health' },
+      });
+
+      return {
+        timestamp: new Date().toISOString(),
+        orgs,
+        users,
+        memberships,
+        activeDeks,
+        auditEventsLast24h: recentAudit,
+      };
     },
   );
 }

@@ -13,6 +13,7 @@ import {
   decryptEnvelopeAuto,
   decryptEnvelopeV2,
   encryptForOrg,
+  rotateDek,
   setKmsClient,
   __resetKmsClientForTests,
 } from '../../src/shared/kms/tenant-dek.js';
@@ -211,5 +212,140 @@ describe('decryptEnvelopeAuto', () => {
     });
     expect(legacyCalled).toBe(true);
     expect(decrypted).toBe('hello v1');
+  });
+});
+
+describe('rotateDek', () => {
+  // The rotate flow uses prisma.$transaction. We need a richer stub that
+  // returns a tx client with the same nested method shape.
+  function buildTxStubPrisma(
+    rows: Array<{
+      id: string;
+      orgId: string;
+      purpose: string;
+      version: number;
+      wrappedDek: Buffer;
+      kekKeyId: string;
+      isActive: boolean;
+    }>,
+  ): any {
+    const txMethods = {
+      tenantEncryptionKey: {
+        findFirst: async (args: { where: Record<string, unknown>; orderBy?: unknown }) => {
+          const w = args.where;
+          const matches = rows.filter((r) => r.orgId === w.orgId && r.purpose === w.purpose);
+          if (matches.length === 0) return null;
+          // version desc — take the highest version row
+          matches.sort((a, b) => b.version - a.version);
+          return matches[0];
+        },
+        findUnique: async (args: { where: { id: string } }) =>
+          rows.find((r) => r.id === args.where.id) ?? null,
+        create: async (args: { data: Record<string, unknown> }) => {
+          const row = { ...(args.data as any) };
+          rows.push(row);
+          return row;
+        },
+        updateMany: async (args: {
+          where: Record<string, unknown>;
+          data: Record<string, unknown>;
+        }) => {
+          let count = 0;
+          for (const r of rows) {
+            const w = args.where;
+            const notId = (w.NOT as { id: string } | undefined)?.id;
+            if (
+              r.orgId === w.orgId &&
+              r.purpose === w.purpose &&
+              r.isActive === w.isActive &&
+              r.id !== notId
+            ) {
+              Object.assign(r, args.data);
+              count += 1;
+            }
+          }
+          return { count };
+        },
+      },
+    };
+    return {
+      ...txMethods,
+      $transaction: async <T>(fn: (tx: typeof txMethods) => Promise<T>): Promise<T> =>
+        fn(txMethods),
+    };
+  }
+
+  it('inserts a new active DEK with version+1 and deactivates the prior', async () => {
+    const orgId = uuidv7();
+    const oldKeyId = uuidv7();
+    const oldDek = await new LocalKmsClient().generateDataKey('local-dev');
+    const rows: any[] = [
+      {
+        id: oldKeyId,
+        orgId,
+        purpose: 'PII',
+        version: 1,
+        wrappedDek: oldDek.ciphertext,
+        kekKeyId: 'local-dev',
+        isActive: true,
+      },
+    ];
+    const prisma = buildTxStubPrisma(rows);
+
+    const result = await rotateDek(prisma, orgId, { purpose: 'PII' });
+
+    expect(result.version).toBe(2);
+    expect(result.orgId).toBe(orgId);
+    expect(rows).toHaveLength(2);
+    const oldRow = rows.find((r) => r.id === oldKeyId);
+    expect(oldRow?.isActive).toBe(false);
+    const newRow = rows.find((r) => r.id === result.id);
+    expect(newRow?.isActive).toBe(true);
+  });
+
+  it('starts at version 1 when no prior DEK exists', async () => {
+    const orgId = uuidv7();
+    const rows: any[] = [];
+    const prisma = buildTxStubPrisma(rows);
+
+    const result = await rotateDek(prisma, orgId);
+    expect(result.version).toBe(1);
+    expect(rows).toHaveLength(1);
+  });
+
+  it('rotation only affects the (org, purpose) being rotated', async () => {
+    const orgId = uuidv7();
+    const piiKey = uuidv7();
+    const auditKey = uuidv7();
+    const piiDek = await new LocalKmsClient().generateDataKey('local-dev');
+    const auditDek = await new LocalKmsClient().generateDataKey('local-dev');
+    const rows: any[] = [
+      {
+        id: piiKey,
+        orgId,
+        purpose: 'PII',
+        version: 1,
+        wrappedDek: piiDek.ciphertext,
+        kekKeyId: 'local-dev',
+        isActive: true,
+      },
+      {
+        id: auditKey,
+        orgId,
+        purpose: 'AUDIT',
+        version: 1,
+        wrappedDek: auditDek.ciphertext,
+        kekKeyId: 'local-dev',
+        isActive: true,
+      },
+    ];
+    const prisma = buildTxStubPrisma(rows);
+
+    await rotateDek(prisma, orgId, { purpose: 'PII' });
+
+    const auditRow = rows.find((r) => r.id === auditKey);
+    expect(auditRow?.isActive).toBe(true); // AUDIT untouched
+    const piiOldRow = rows.find((r) => r.id === piiKey);
+    expect(piiOldRow?.isActive).toBe(false);
   });
 });

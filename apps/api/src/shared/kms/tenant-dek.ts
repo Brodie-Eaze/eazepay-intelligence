@@ -127,6 +127,80 @@ export async function ensureActiveDek(
 }
 
 /**
+ * Rotate the active DEK for an org+purpose. Per ADR-002 §8:
+ *   1. Generate a fresh DEK via KMS.
+ *   2. Insert a new TenantEncryptionKey row with version+1, isActive=true.
+ *   3. Mark the prior version isActive=false (still readable until
+ *      background re-encryption converts old ciphertext to the new key).
+ *
+ * Returns the NEW DEK row. The old DEK remains readable from
+ * `tenant_encryption_keys` so existing ciphertext keeps decrypting; only
+ * the active-key pointer for new encrypts has moved.
+ *
+ * THIS DOES NOT trigger background re-encryption. The rotation runbook
+ * is: rotate → enqueue re-encryption job → wait for completion → set
+ * old version's retiredAt → schedule KMS deletion. Only the rotate step
+ * is here; the rest lives in the platform routes / worker.
+ */
+export async function rotateDek(
+  prisma: PrismaClient,
+  orgId: string,
+  opts: ProvisionOptions = {},
+): Promise<{ id: string; version: number; orgId: string; purpose: string }> {
+  const purpose = opts.purpose ?? 'PII';
+  const kekKeyId = opts.kekKeyId ?? LOCAL_DEV_KEY_ID;
+
+  return prisma.$transaction(async (tx) => {
+    // Find the current highest version for (orgId, purpose). Don't filter
+    // by isActive — we want the absolute latest version number even if
+    // the active row was somehow deleted, to avoid version collisions.
+    const latest = await tx.tenantEncryptionKey.findFirst({
+      where: { orgId, purpose },
+      orderBy: { version: 'desc' },
+      select: { id: true, version: true, isActive: true },
+    });
+    const nextVersion = (latest?.version ?? 0) + 1;
+
+    // KMS call happens INSIDE the tx — if Postgres rolls back we don't
+    // want a stranded wrapped key in tenant_encryption_keys. The KMS
+    // operation itself is not transactional (a wrapped DEK exists in
+    // the ether) but with no DB row referencing it, it's effectively
+    // unreachable.
+    const kms = getKmsClient();
+    const generated = await kms.generateDataKey(kekKeyId);
+
+    const created = await tx.tenantEncryptionKey.create({
+      data: {
+        id: uuidv7(),
+        orgId,
+        version: nextVersion,
+        purpose,
+        wrappedDek: generated.ciphertext,
+        kekKeyId,
+        algorithm: 'AES-256-GCM',
+        isActive: true,
+      },
+      select: { id: true, version: true, orgId: true, purpose: true },
+    });
+
+    // Deactivate every prior version for this (org, purpose). Keeps the
+    // old DEKs readable (rows still exist) but no new encrypts route to
+    // them. retiredAt remains null until background re-encryption finishes.
+    if (latest) {
+      await tx.tenantEncryptionKey.updateMany({
+        where: { orgId, purpose, isActive: true, NOT: { id: created.id } },
+        data: { isActive: false },
+      });
+    }
+
+    // Pre-warm the cache with the new plaintext so the next encrypt
+    // doesn't pay the KMS unwrap round-trip.
+    getDekCache().set(created.id, generated.plaintext);
+    return created;
+  });
+}
+
+/**
  * Look up the active DEK row for an org+purpose without provisioning.
  * Throws if missing — callers must run `ensureActiveDek` first or
  * accept the error.
