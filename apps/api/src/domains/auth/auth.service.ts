@@ -31,6 +31,11 @@ export class AuthService {
     const user = await this.repo.findUserByEmail(args.email);
     if (!user) throw errors.unauthorized('Invalid credentials');
 
+    // OAuth-only users (no local password) cannot use the password path.
+    // Returning the same generic error keeps the response indistinguishable
+    // from a wrong password — no email-existence enumeration.
+    if (!user.passwordHash) throw errors.unauthorized('Invalid credentials');
+
     const ok = await verifyPassword(user.passwordHash, args.password);
     if (!ok) throw errors.unauthorized('Invalid credentials');
 
@@ -112,7 +117,10 @@ export class AuthService {
     if (stored) await this.repo.revokeFamily(stored.familyId);
   }
 
-  async issueWsTicket(userId: string, scope: AuthScope): Promise<{ ticket: string; expiresInSeconds: number }> {
+  async issueWsTicket(
+    userId: string,
+    scope: AuthScope,
+  ): Promise<{ ticket: string; expiresInSeconds: number }> {
     const ttlSeconds = 30;
     const ticketId = uuidv7();
     const token = signJwt(
@@ -137,9 +145,24 @@ export class AuthService {
     return parsed;
   }
 
+  /**
+   * Public issue-session helper for non-password login paths (invitation
+   * acceptance, OAuth callback). Goes through the same token machinery as
+   * the password login so refresh-token rotation + family revocation behave
+   * identically.
+   */
+  async issueSessionForUser(user: User, scope: AuthScope = 'standard'): Promise<IssuedTokens> {
+    await this.repo.recordLogin(user.id);
+    return this.issueSession(user, scope, newRefreshFamilyId());
+  }
+
   // ─── internal ──────────────────────────────────────────────────────────────
 
-  private async issueSession(user: User, scope: AuthScope, familyId: string): Promise<IssuedTokens> {
+  private async issueSession(
+    user: User,
+    scope: AuthScope,
+    familyId: string,
+  ): Promise<IssuedTokens> {
     const env = getEnv();
     const refreshRaw = AuthRepository.newRawRefreshToken();
     const refreshExpires = new Date(Date.now() + env.JWT_REFRESH_TTL_SECONDS * 1000);

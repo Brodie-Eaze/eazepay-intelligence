@@ -324,10 +324,15 @@ model RevenueAggregation {
 model User {
   id           String    @id @db.Uuid
   email        String    @unique
-  passwordHash String    @map("password_hash")
+  // Optional: users created via OAuth (e.g. Google) carry no local password.
+  // Local accounts still get a bcrypt hash on accept-invitation / set-password.
+  passwordHash String?   @map("password_hash")
   role         UserRole  @default(VIEWER)
   mfaEnabled   Boolean   @default(false) @map("mfa_enabled")
   mfaSecret    String?   @map("mfa_secret")
+  // Federated identity. Stable Google `sub` claim — emails can change, sub
+  // cannot. Unique so two local accounts can't claim the same Google identity.
+  googleSub    String?   @unique @map("google_sub")
   lastLoginAt  DateTime? @map("last_login_at") @db.Timestamptz(6)
   deletedAt    DateTime? @map("deleted_at") @db.Timestamptz(6)
   createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
@@ -336,7 +341,7 @@ model User {
   refreshTokens        RefreshToken[]
   auditLogs            AuditLog[]
   apiTokens            ApiToken[]
-  exports              Export[]
+  exports               Export[]
   webhookSubscriptions WebhookSubscription[]
   notes                Note[]
   tagAssignments       TagAssignment[]
@@ -345,8 +350,32 @@ model User {
   casesOpened          Case[]                @relation("CaseOpenedBy")
   casesAssigned        Case[]                @relation("CaseAssignee")
   rtbfRequests         RtbfRequest[]         @relation("RtbfRequestedBy")
+  invitationsIssued    UserInvitation[]      @relation("InviteIssuedBy")
 
   @@map("users")
+}
+
+/// Email-based invitation flow. An admin issues a UserInvitation; the
+/// invitee receives a one-time link to set their own password. We store
+/// only the SHA-256 of the token — the plaintext lives in the email and
+/// is unrecoverable from a compromised DB.
+model UserInvitation {
+  id           String    @id @db.Uuid
+  email        String
+  role         UserRole
+  tokenHash    String    @unique @map("token_hash")
+  invitedById  String    @map("invited_by_id") @db.Uuid
+  expiresAt    DateTime  @map("expires_at") @db.Timestamptz(6)
+  acceptedAt   DateTime? @map("accepted_at") @db.Timestamptz(6)
+  acceptedById String?   @map("accepted_by_id") @db.Uuid
+  revokedAt    DateTime? @map("revoked_at") @db.Timestamptz(6)
+  createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  invitedBy User @relation("InviteIssuedBy", fields: [invitedById], references: [id])
+
+  @@index([email])
+  @@index([expiresAt])
+  @@map("user_invitations")
 }
 
 model RefreshToken {

@@ -29,6 +29,8 @@ import { AppError, errors, isAppError } from './shared/errors/app-error.js';
 
 import { registerHealthRoute } from './domains/health.routes.js';
 import { registerAuthRoutes } from './domains/auth/auth.routes.js';
+import { registerOAuthRoutes } from './domains/auth/oauth.routes.js';
+import { registerInvitationRoutes } from './domains/users/invitation.routes.js';
 import { registerPartnerRoutes } from './domains/partners/partner.routes.js';
 import { registerApplicationRoutes } from './domains/applications/application.routes.js';
 import { registerLenderRoutes } from './domains/lenders/lender.routes.js';
@@ -234,6 +236,8 @@ export async function buildServer(): Promise<FastifyInstance> {
   await app.register(
     async (instance) => {
       await registerAuthRoutes(instance);
+      await registerOAuthRoutes(instance);
+      await registerInvitationRoutes(instance);
       await registerPartnerRoutes(instance);
       await registerApplicationRoutes(instance);
       await registerLenderRoutes(instance);

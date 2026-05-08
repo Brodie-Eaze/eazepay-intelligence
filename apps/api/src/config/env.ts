@@ -94,6 +94,44 @@ const EnvSchema = z.object({
   PIXIE_VOLUME_BREAKPOINT: z.coerce.number().int().nonnegative().default(25_000),
   PIXIE_COST_PER_PULL: z.coerce.number().nonnegative().default(1),
   PIXIE_CHARGE_PER_PULL: z.coerce.number().nonnegative().default(3),
+
+  // Public-facing app URL — used to build invitation + OAuth callback links
+  // emailed to users. Must match the host the browser uses, not the API host.
+  APP_URL: z.string().url().default('http://localhost:3001'),
+
+  // ─── Email (Resend) ──────────────────────────────────────────────────────
+  // Optional in dev: when RESEND_API_KEY is unset, emails log to console
+  // instead of being sent. Production deployments MUST set both vars; the
+  // service refuses to send if MAIL_FROM is missing.
+  RESEND_API_KEY: z.string().min(1).optional(),
+  // Accepts plain "x@y.z" or RFC 5322 "Display Name <x@y.z>" — Resend
+  // handles both. We don't strict-validate because z.string().email()
+  // rejects the display-name form.
+  MAIL_FROM: z.string().min(3).default('EazePay Intelligence <noreply@eazepay.local>'),
+  // Invitation token TTL. Shorter = safer; longer = friendlier UX. 7 days
+  // is the SaaS norm; matches Linear/Notion/Slack.
+  INVITATION_TTL_HOURS: z.coerce.number().int().positive().default(168),
+
+  // ─── OAuth (Google) ──────────────────────────────────────────────────────
+  // When all three are set, /auth/oauth/google/* routes activate and the
+  // login page surfaces a Google button. Optional: deployments without
+  // OAuth keys remain password-only.
+  GOOGLE_OAUTH_CLIENT_ID: z.string().min(1).optional(),
+  GOOGLE_OAUTH_CLIENT_SECRET: z.string().min(1).optional(),
+  GOOGLE_OAUTH_REDIRECT_URI: z.string().url().optional(),
+  // Comma-separated email domains permitted to sign in via OAuth. Empty =
+  // no domain restriction (any verified Google account can match an
+  // existing User row by email). Recommended for prod: lock to your work
+  // domain so a stray Gmail account can't claim an invited seat.
+  GOOGLE_OAUTH_ALLOWED_DOMAINS: z
+    .string()
+    .default('')
+    .transform((v) =>
+      v
+        .split(',')
+        .map((s) => s.trim().toLowerCase())
+        .filter(Boolean),
+    ),
 });
 
 export type Env = z.infer<typeof EnvSchema>;

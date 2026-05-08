@@ -16,16 +16,26 @@ export const COOKIE = {
 interface SetCookieOpts {
   maxAgeSeconds: number;
   httpOnly: boolean;
+  // Default Strict. OAuth state cookies need Lax so the cookie survives the
+  // top-level redirect back from accounts.google.com.
+  sameSite?: 'strict' | 'lax' | 'none';
 }
 
 function baseCookieAttrs(opts: SetCookieOpts): string {
   const env = getEnv();
   const secure = env.NODE_ENV === 'production' ? '; Secure' : '';
   const httpOnly = opts.httpOnly ? '; HttpOnly' : '';
-  return `; Path=/; Max-Age=${opts.maxAgeSeconds}${httpOnly}${secure}; SameSite=Strict`;
+  const ss = opts.sameSite ?? 'strict';
+  const sameSite = ss.charAt(0).toUpperCase() + ss.slice(1);
+  return `; Path=/; Max-Age=${opts.maxAgeSeconds}${httpOnly}${secure}; SameSite=${sameSite}`;
 }
 
-export function setCookie(reply: FastifyReply, name: string, value: string, opts: SetCookieOpts): void {
+export function setCookie(
+  reply: FastifyReply,
+  name: string,
+  value: string,
+  opts: SetCookieOpts,
+): void {
   const existing = reply.getHeader('Set-Cookie');
   const cookie = `${name}=${encodeURIComponent(value)}${baseCookieAttrs(opts)}`;
   if (Array.isArray(existing)) {

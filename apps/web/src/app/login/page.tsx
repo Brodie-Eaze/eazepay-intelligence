@@ -1,11 +1,22 @@
 'use client';
 
-import { useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { useEffect, useState } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { ArrowRight, Eye, EyeOff, ShieldCheck } from 'lucide-react';
 import { api, ApiError } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import type { SessionResponse } from '@/lib/types';
+
+interface OAuthProviders {
+  google: boolean;
+}
+
+const OAUTH_ERRORS: Record<string, string> = {
+  'no-account':
+    'No EazePay account is linked to that Google address. Ask an admin to invite you first.',
+  'domain-not-allowed': "That Google account is outside your organisation's allowed domains.",
+  cancelled: 'Sign-in was cancelled.',
+};
 
 interface DemoAccount {
   email: string;
@@ -29,6 +40,7 @@ const DEMO_ACCOUNTS: DemoAccount[] = [
 
 export default function LoginPage(): JSX.Element {
   const router = useRouter();
+  const params = useSearchParams();
   const { setSession } = useAuth();
   const [email, setEmail] = useState('admin@eazepay.local');
   const [password, setPassword] = useState('Demo!1234');
@@ -37,6 +49,21 @@ export default function LoginPage(): JSX.Element {
   const [showMfa, setShowMfa] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [providers, setProviders] = useState<OAuthProviders>({ google: false });
+
+  useEffect(() => {
+    const oauthError = params?.get('oauth');
+    if (oauthError && OAUTH_ERRORS[oauthError]) setError(OAUTH_ERRORS[oauthError]);
+    api<OAuthProviders>('/auth/oauth/providers')
+      .then(setProviders)
+      .catch(() => setProviders({ google: false }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const apiBase =
+    typeof process !== 'undefined' && process.env.NEXT_PUBLIC_API_URL
+      ? process.env.NEXT_PUBLIC_API_URL.replace(/\/$/, '')
+      : '';
 
   const submit = async (e: React.FormEvent): Promise<void> => {
     e.preventDefault();
@@ -208,6 +235,23 @@ export default function LoginPage(): JSX.Element {
             </button>
           </form>
 
+          {providers.google && (
+            <>
+              <div className="mt-6 flex items-center gap-3 text-[11px] text-soft">
+                <span className="flex-1 h-px bg-line" />
+                <span>OR</span>
+                <span className="flex-1 h-px bg-line" />
+              </div>
+              <a
+                href={`${apiBase}/api/v1/auth/oauth/google/start`}
+                className="mt-4 w-full h-11 rounded-lg border border-line bg-surface text-ink hover:border-ink2 hover:bg-paper transition flex items-center justify-center gap-3 font-medium text-[14px]"
+              >
+                <GoogleMark />
+                Sign in with Google
+              </a>
+            </>
+          )}
+
           {/* Demo account quick-select */}
           <div className="mt-10 pt-6 border-t border-line2">
             <div className="flex items-baseline justify-between">
@@ -266,6 +310,29 @@ function Field({
       </div>
       {children}
     </label>
+  );
+}
+
+function GoogleMark(): JSX.Element {
+  return (
+    <svg width="16" height="16" viewBox="0 0 48 48" aria-hidden="true">
+      <path
+        fill="#EA4335"
+        d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"
+      />
+      <path
+        fill="#4285F4"
+        d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"
+      />
+      <path
+        fill="#FBBC05"
+        d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"
+      />
+      <path
+        fill="#34A853"
+        d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"
+      />
+    </svg>
   );
 }
 

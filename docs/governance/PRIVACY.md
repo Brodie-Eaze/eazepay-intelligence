@@ -10,12 +10,12 @@
 
 ## Roles under the Privacy Act / GDPR
 
-| Role                       | Party                                                               |
-| -------------------------- | ------------------------------------------------------------------- |
-| **Data subject**           | The consumer applying for a BuzzPay loan via a partner              |
-| **Collector / Controller** | The partner business + Pixie (HighSale) at point of capture         |
-| **Processor**              | EazePay Intelligence (us) — we receive, store, project, and display |
-| **Sub-processors**         | Postgres host, Redis host, deployment platform                      |
+| Role                       | Party                                                                                                |
+| -------------------------- | ---------------------------------------------------------------------------------------------------- |
+| **Data subject**           | The consumer applying for a BuzzPay loan via a partner                                               |
+| **Collector / Controller** | The partner business + Pixie (HighSale) at point of capture                                          |
+| **Processor**              | EazePay Intelligence (us) — we receive, store, project, and display                                  |
+| **Sub-processors**         | Postgres host, Redis host, deployment platform, Resend (transactional email), Google (OAuth sign-in) |
 
 We act as a **processor** under GDPR-style framing (an APP entity under AU law). Our lawful basis for processing depends on the partner-collected consent.
 
@@ -146,6 +146,32 @@ Lifecycle jobs are now implemented in `apps/api/src/workers/lifecycle.worker.ts`
 Each task writes a `LIFECYCLE_PURGE` audit row with `task`, `count`, and `cutoffIso`. RTBF processing writes `RTBF_PROCESSED` / `RTBF_FAILED`.
 
 Application + revenue-event 7-year retention is **not** in this worker; those tables are append-only by Postgres role REVOKE and the regulatory horizon is far enough out that lifecycle deletion is a v1.1+ concern.
+
+---
+
+## Sub-processors
+
+The system entrusts personal data to a small, deliberately bounded set of
+external providers. Each is documented below with the exact data category
+shared, the lawful basis, and the minimisation control we apply.
+
+| Sub-processor       | Data category shared                              | Purpose                            | Lawful basis            | Notes                                                                                                                                                                                                                                                                       |
+| ------------------- | ------------------------------------------------- | ---------------------------------- | ----------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Postgres host       | All persisted data (encrypted at rest)            | Primary durable store              | Performance of contract | Infrastructure provider; under DPA. Region documented per deployment.                                                                                                                                                                                                       |
+| Redis host          | Sessions, rate-limit counters, OAuth state nonces | Cache, rate limit, session         | Performance of contract | No PII; opaque tokens only.                                                                                                                                                                                                                                                 |
+| Deployment platform | App logs (excluding decrypted PII), metrics       | Hosting + observability            | Performance of contract | PII is encrypted/hashed before any operational telemetry leaves the process.                                                                                                                                                                                                |
+| **Resend**          | Operator email address only                       | Transactional email (invitations)  | Legitimate interest     | Used exclusively for admin-issued user invitations. Consumer PII is **never** sent through Resend. Plaintext invitation tokens are NOT stored on our side — only a sha256 hash.                                                                                             |
+| **Google**          | Operator email + Google `sub` (subject id) + name | OAuth federated sign-in (optional) | Consent                 | Activated only when `GOOGLE_OAUTH_*` env is set. We do NOT auto-create accounts: an admin must invite the email first, so Google is a verification layer, not an enrolment one. We persist `google_sub` to bind future logins to the stable Google identity, not the email. |
+
+**Operator data only.** Resend and Google handle exclusively operator-side
+data (the people who use this dashboard). Consumer-side PII (loan
+applicants, BuzzPay customers) never reaches either provider.
+
+**Withdrawal.** A deployment can disable Google OAuth at any time by
+unsetting `GOOGLE_OAUTH_CLIENT_ID`; users with stamped `google_sub` rows
+fall back to password-based login. Resend can be disabled by unsetting
+`RESEND_API_KEY`; invitation links are then surfaced in the admin UI for
+manual delivery.
 
 ---
 
