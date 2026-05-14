@@ -14,22 +14,13 @@ interface LandscapeRow {
   lastAt: string | null;
 }
 
-const GROUP_META: Record<LandscapeRow['group'], { label: string; tint: string; tintRgb: string }> =
-  {
-    application: {
-      label: 'Application plane',
-      tint: 'border-l-[#3B82F6]',
-      tintRgb: 'rgb(59,130,246)',
-    },
-    credit: {
-      label: 'Credit & enrichment',
-      tint: 'border-l-[#A855F7]',
-      tintRgb: 'rgb(168,85,247)',
-    },
-    revenue: { label: 'Revenue ledger', tint: 'border-l-[#10B981]', tintRgb: 'rgb(16,185,129)' },
-    partners: { label: 'Directory', tint: 'border-l-[#F59E0B]', tintRgb: 'rgb(245,158,11)' },
-    audit: { label: 'Audit & event log', tint: 'border-l-[#64748B]', tintRgb: 'rgb(100,116,139)' },
-  };
+const GROUP_META: Record<LandscapeRow['group'], { label: string }> = {
+  application: { label: 'Application plane' },
+  credit: { label: 'Credit & enrichment' },
+  revenue: { label: 'Revenue ledger' },
+  partners: { label: 'Directory' },
+  audit: { label: 'Audit & event log' },
+};
 
 const HREF_FOR_TABLE: Partial<Record<string, string>> = {
   applications: '/applications',
@@ -104,7 +95,7 @@ export function WarehouseLandscape(): JSX.Element {
             8 analytical tables · pulse = fresh in last hour · click to drill into the data
           </p>
         </div>
-        <span className="text-[11px] text-muted numeric">
+        <span className="text-[11px] text-muted tabular-nums">
           {formatNumber(rows.reduce((s, r) => s + r.rows, 0))} total rows
         </span>
       </div>
@@ -120,7 +111,6 @@ export function WarehouseLandscape(): JSX.Element {
             const body = (
               <div
                 className={`bg-surface px-4 py-4 h-full transition group ${href ? 'hover:bg-paper cursor-pointer' : ''}`}
-                style={{ borderLeft: `3px solid ${meta.tintRgb}` }}
               >
                 <div className="flex items-start justify-between gap-2 mb-3">
                   <div className="text-[10px] uppercase tracking-[0.16em] text-muted">
@@ -128,12 +118,14 @@ export function WarehouseLandscape(): JSX.Element {
                   </div>
                   <PulseDot status={status} />
                 </div>
-                <div className="font-mono text-ink text-[20px] font-semibold tracking-tight tabular-nums">
+                <div className="text-ink text-[24px] font-semibold tracking-tight tabular-nums leading-none">
                   {formatNumber(t.rows)}
                 </div>
-                <div className="text-[12px] text-ink2 mt-1">{t.label}</div>
-                <div className="text-[10px] text-muted mt-2 numeric">
-                  <code className="text-[10px]">{t.table}</code> · last {relativeTime(t.lastAt)}
+                <div className="text-[13px] text-ink2 font-medium tracking-tight mt-2">
+                  {t.label}
+                </div>
+                <div className="text-[10px] text-muted mt-1.5 tabular-nums">
+                  {t.table} · last {relativeTime(t.lastAt)}
                 </div>
               </div>
             );
