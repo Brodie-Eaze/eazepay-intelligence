@@ -39,7 +39,9 @@ export function LiveTicker({ events }: Props): JSX.Element {
     return (
       <div className="text-sm text-muted px-5 py-6 text-center">
         Waiting for events…
-        <div className="text-[11px] mt-2 text-muted/70">Webhooks from BuzzPay / Pixie / MiCamp will stream here in real time.</div>
+        <div className="text-[11px] mt-2 text-muted/70">
+          Webhooks from Pixie / MiCamp / EazePay App will stream here in real time.
+        </div>
       </div>
     );
   }
@@ -48,7 +50,9 @@ export function LiveTicker({ events }: Props): JSX.Element {
       {visible.map((evt, idx) => (
         <li key={`${evt.at}-${idx}`} className="flex items-center gap-3 px-5 py-2 text-xs">
           <span className="numeric text-muted w-16 shrink-0">{formatTime(evt.at)}</span>
-          <span className={`pill ${TONE[evt.type] ?? 'pill-muted'} w-20 justify-center shrink-0`}>{KIND_LABEL[evt.type] ?? '·'}</span>
+          <span className={`pill ${TONE[evt.type] ?? 'pill-muted'} w-20 justify-center shrink-0`}>
+            {KIND_LABEL[evt.type] ?? '·'}
+          </span>
           <span className="flex-1 text-ink2">{describe(evt)}</span>
         </li>
       ))}

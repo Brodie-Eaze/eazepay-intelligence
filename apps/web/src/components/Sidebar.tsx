@@ -13,8 +13,6 @@ import {
   Inbox,
   Kanban,
   Landmark,
-  Handshake,
-  Percent,
   Building2,
   DollarSign,
   Layers,
@@ -90,8 +88,7 @@ const GROUPS: NavGroup[] = [
     label: 'Decision engine',
     items: [
       { href: '/lenders', label: 'Lender book', icon: Landmark },
-      { href: '/buzzpay', label: 'BuzzPay deals', icon: Handshake },
-      { href: '/buzzpay/apr', label: 'APR mix', icon: Percent },
+      { href: '/highsale', label: 'HighSale (EZ Check)', icon: Gauge },
     ],
   },
   {

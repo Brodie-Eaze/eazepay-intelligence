@@ -54,13 +54,18 @@ export function RecentActivityTable({ rows }: { rows: ActivityRow[] }): JSX.Elem
                 <span className={`pill ${KIND_TONE[r.kind]}`}>{KIND_LABEL[r.kind]}</span>
               </td>
               <td>
-                <Link href={`/partners/${r.partnerId}`} className="inline-flex items-center gap-2 text-ink hover:text-accent">
+                <Link
+                  href={`/partners/${r.partnerId}`}
+                  className="inline-flex items-center gap-2 text-ink hover:text-accent"
+                >
                   <Monogram label={r.partnerName} />
                   <span>{r.partnerName}</span>
                 </Link>
               </td>
               <td className="text-ink2">{prettify(r.description)}</td>
-              <td className="numeric text-right text-ink">{r.amount ? formatMoney(r.amount) : '—'}</td>
+              <td className="numeric text-right text-ink">
+                {r.amount ? formatMoney(r.amount) : '—'}
+              </td>
             </tr>
           ))}
         </tbody>
@@ -71,7 +76,20 @@ export function RecentActivityTable({ rows }: { rows: ActivityRow[] }): JSX.Elem
 
 function prettify(s: string): React.ReactNode {
   // Wrap UPPER_TOKENS with a status pill if recognized.
-  const known = ['APPROVED', 'DECLINED', 'FUNDED', 'FAILED', 'CLAWBACK', 'REVERSAL', 'PIXIE_MARGIN', 'PROCESSING_FEE', 'BUZZPAY', 'PIXIE', 'MICAMP'];
+  const known = [
+    'APPROVED',
+    'DECLINED',
+    'FUNDED',
+    'FAILED',
+    'CLAWBACK',
+    'REVERSAL',
+    'PIXIE_MARGIN',
+    'PROCESSING_FEE',
+    'PIXIE',
+    'MICAMP',
+  ];
   const parts = s.split(/(\s+|·)/);
-  return parts.map((p, i) => (known.includes(p) ? <StatusPill key={i}>{p}</StatusPill> : <span key={i}>{p}</span>));
+  return parts.map((p, i) =>
+    known.includes(p) ? <StatusPill key={i}>{p}</StatusPill> : <span key={i}>{p}</span>,
+  );
 }

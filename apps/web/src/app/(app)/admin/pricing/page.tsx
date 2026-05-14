@@ -14,7 +14,6 @@ interface PartnerRow {
   externalId: string;
   name: string;
   industry: string;
-  buzzpayRevSharePct: string;
   pixieDataPullCost: string;
   pixieChargeRate: string;
   pixieMargin: string;
@@ -32,22 +31,23 @@ export default function PricingConfigPage(): JSX.Element {
   const avgPixieMargin = rows.length
     ? rows.reduce((s, r) => s + Number(r.pixieMargin), 0) / rows.length
     : 0;
-  const avgRevShare = rows.length
-    ? rows.reduce((s, r) => s + Number(r.buzzpayRevSharePct), 0) / rows.length
-    : 0;
 
   return (
     <div className="space-y-6">
-      <PageHeader
-        title="Pricing"
-        subtitle="Per-partner commercial terms · BuzzPay rev share · Pixie sliding-scale"
-      />
+      <PageHeader title="Pricing" subtitle="Per-partner commercial terms · Pixie sliding-scale" />
 
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <KpiCard label="Pixie breakpoint" value="25,000" hint="env · collective pulls / day" />
-        <KpiCard label="Avg Pixie margin" value={`$${avgPixieMargin.toFixed(2)}`} hint="per partner per pull" />
-        <KpiCard label="Avg rev share" value={`${(avgRevShare * 100).toFixed(2)}%`} hint="BuzzPay funded" />
-        <KpiCard label="Contract value" value={formatMoney(totalContract)} hint="across the network" />
+        <KpiCard
+          label="Avg Pixie margin"
+          value={`$${avgPixieMargin.toFixed(2)}`}
+          hint="per partner per pull"
+        />
+        <KpiCard
+          label="Contract value"
+          value={formatMoney(totalContract)}
+          hint="across the network"
+        />
       </div>
 
       <SectionCard
@@ -63,7 +63,6 @@ export default function PricingConfigPage(): JSX.Element {
                 <th>External ID</th>
                 <th>Industry</th>
                 <th className="text-right">Contract value</th>
-                <th className="text-right">BuzzPay rev share</th>
                 <th className="text-right">Pixie cost / pull</th>
                 <th className="text-right">Pixie charge / pull</th>
                 <th className="text-right">Pixie margin</th>
@@ -73,21 +72,37 @@ export default function PricingConfigPage(): JSX.Element {
               {rows.map((p) => (
                 <tr key={p.id}>
                   <td>
-                    <Link href={`/partners/${p.id}`} className="inline-flex items-center gap-2 text-ink hover:text-accent">
+                    <Link
+                      href={`/partners/${p.id}`}
+                      className="inline-flex items-center gap-2 text-ink hover:text-accent"
+                    >
                       <Monogram label={p.name} />
                       <span className="font-medium tracking-tight">{p.name}</span>
                     </Link>
                   </td>
-                  <td><span className="tag">{p.externalId}</span></td>
+                  <td>
+                    <span className="tag">{p.externalId}</span>
+                  </td>
                   <td className="text-ink2 text-sm">{p.industry}</td>
                   <td className="numeric text-right text-ink">{formatMoney(p.contractValue)}</td>
-                  <td className="numeric text-right text-ink2">{(Number(p.buzzpayRevSharePct) * 100).toFixed(2)}%</td>
-                  <td className="numeric text-right text-ink2">${Number(p.pixieDataPullCost).toFixed(2)}</td>
-                  <td className="numeric text-right text-ink2">${Number(p.pixieChargeRate).toFixed(2)}</td>
-                  <td className="numeric text-right text-success font-medium">${Number(p.pixieMargin).toFixed(2)}</td>
+                  <td className="numeric text-right text-ink2">
+                    ${Number(p.pixieDataPullCost).toFixed(2)}
+                  </td>
+                  <td className="numeric text-right text-ink2">
+                    ${Number(p.pixieChargeRate).toFixed(2)}
+                  </td>
+                  <td className="numeric text-right text-success font-medium">
+                    ${Number(p.pixieMargin).toFixed(2)}
+                  </td>
                 </tr>
               ))}
-              {rows.length === 0 && <tr><td colSpan={8} className="text-muted py-8 text-center">No partners.</td></tr>}
+              {rows.length === 0 && (
+                <tr>
+                  <td colSpan={7} className="text-muted py-8 text-center">
+                    No partners.
+                  </td>
+                </tr>
+              )}
             </tbody>
           </table>
         </div>

@@ -51,10 +51,6 @@ import { writeAuditLog } from '../../shared/middleware/audit-log.middleware.js';
 import { errors } from '../../shared/errors/app-error.js';
 import { WebhookProcessor } from '../webhooks/webhook.service.js';
 import {
-  BuzzpayApplicationWebhookSchema,
-  BuzzpayClawbackWebhookSchema,
-  BuzzpayFundingWebhookSchema,
-  BuzzpayLenderDecisionWebhookSchema,
   MicampProcessingWebhookSchema,
   MicampReversalWebhookSchema,
   PixieUsageWebhookSchema,
@@ -68,27 +64,12 @@ interface IngestionTarget {
   schema: z.ZodTypeAny;
 }
 
+// BUZZPAY-shaped ingestion targets (applications / lender-decisions /
+// funding-status / clawbacks) retired — those events now flow through
+// the EazePay App integration sink at
+// /api/v1/integration/eazepay-app/events. See
+// docs/cuts/buzzpay-removal.md and docs/integration/eazepay-app-contract.md.
 const TARGETS: Record<string, IngestionTarget> = {
-  applications: {
-    source: WebhookSource.BUZZPAY,
-    eventType: 'application',
-    schema: BuzzpayApplicationWebhookSchema,
-  },
-  'lender-decisions': {
-    source: WebhookSource.BUZZPAY,
-    eventType: 'lender-decision',
-    schema: BuzzpayLenderDecisionWebhookSchema,
-  },
-  'funding-status': {
-    source: WebhookSource.BUZZPAY,
-    eventType: 'funding-status',
-    schema: BuzzpayFundingWebhookSchema,
-  },
-  clawbacks: {
-    source: WebhookSource.BUZZPAY,
-    eventType: 'clawback',
-    schema: BuzzpayClawbackWebhookSchema,
-  },
   'pixie-usage': {
     source: WebhookSource.PIXIE,
     eventType: 'usage',

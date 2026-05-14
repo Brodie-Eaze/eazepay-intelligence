@@ -25,7 +25,6 @@ const TONE: Record<string, string> = {
   INACTIVE: 'pill-muted',
   CHURNED: 'pill-danger',
   // Revenue stream
-  BUZZPAY: 'pill-info',
   PIXIE: 'pill-success',
   MICAMP: 'pill-warn',
   // Revenue event types
@@ -39,6 +38,9 @@ const TONE: Record<string, string> = {
 
 export function StatusPill({ children }: { children: string }): JSX.Element {
   const cls = TONE[children] ?? 'pill-muted';
-  const label = children.replace(/_/g, ' ').toLowerCase().replace(/\b\w/g, (c) => c.toUpperCase());
+  const label = children
+    .replace(/_/g, ' ')
+    .toLowerCase()
+    .replace(/\b\w/g, (c) => c.toUpperCase());
   return <span className={`pill ${cls}`}>{label}</span>;
 }
