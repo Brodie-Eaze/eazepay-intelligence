@@ -89,13 +89,21 @@ write-up so we never silently lose data on a vendor schema change.
 - Idempotency key: `(vertical, transaction_id)` — HighSale's own id is
   globally unique; vertical guards against the (rare) cross-vertical
   id collision.
-- Application correlation: the JSON does NOT carry our internal
-  `application_id`. App should pass our id into HighSale's request as
-  a correlation token and HighSale should echo it back in
-  `external_application_id`. Until that's wired the warehouse falls
-  back to fuzzy matching on (email_hash + dob + created_at) — workable
-  for v1, brittle for production. Resolution is queued under
-  PLATFORM_V2 Phase 2.8.
+- **Application correlation (decided 2026-05-14):** option 1 —
+  correlation token threaded through App → HighSale → back.
+  - **App-side requirement:** when EazePay App calls HighSale to pull
+    a snapshot, it MUST pass our internal `application_id` as a
+    correlation token in the HighSale request.
+  - **HighSale-side requirement:** HighSale echoes that id back in
+    the snapshot delivery; the warehouse reads it from
+    `HighsaleSnapshotEnvelope.external_application_id`.
+  - **Fallback during App-side rollout:** the envelope keeps
+    `external_application_id` optional so snapshots that arrive
+    before App is updated still ingest. Those rows surface in a
+    `credit_enrichments_unparented` quality check until App-side
+    wiring completes; reconciliation against `applications` is then
+    a one-shot UPDATE via fuzzy match on
+    (email_hash + dob + created_at-within-N-minutes).
 
 #### Governance — protected-class handling
 

@@ -195,6 +195,16 @@ Once the migration + handlers land, register via `registerEazepayAppIntegrationR
 
 Picked up by a session run from `/Users/Brodie/EazePay App`. Sequence:
 
+0. **HighSale correlation token (decided 2026-05-14):** when App calls
+   HighSale to pull a credit-data snapshot, App MUST pass our internal
+   `application_id` as a correlation token in HighSale's request. The
+   token rides back unchanged in HighSale's snapshot delivery to
+   Intelligence (`HighsaleSnapshotEnvelope.external_application_id`).
+   Without it, snapshot↔application stitching falls back to a fuzzy
+   match on (email_hash + dob + created_at) — workable for v1, fragile
+   at scale. One-line change on the App-side HighSale client. See
+   `docs/architecture/data-warehouse-overview.md` § Plane 2.
+
 1. **Platform-sink subscription** — `WebhookEndpoint` today is scoped per `merchantId`. Add a `kind: PLATFORM_SINK` (or `merchantId: null` with a `subscriberKind` discriminator) so a single "EazePay Intelligence" endpoint receives every event for every merchant.
 2. **`SecretResolver`** — wire the KMS-backed secret resolver so `dispatcher.service.ts` signs with the real secret (`EAZEPAY_INTELLIGENCE_SINK_SECRET`), not the bcrypt hash placeholder. Switch header name from `X-EazePay-Signature-Placeholder` → `X-EazePay-Signature` once live.
 3. **Emit the missing event types** — `merchant.onboarded`, `merchant.status_changed`, `revenue.recorded`. The first two slot into the existing `MerchantService` lifecycle calls; the third is the revenue ledger write moment (likely `RepaymentService` + `LoanService.disburse`).
