@@ -129,6 +129,7 @@ To promote a staged migration:
 - [ ] **2.4** Replica DSN swap — dbt prod profile points at read replica, never primary
 - [ ] **2.5** Per-business contract tests — Zod schemas validating each business's CDC events at the warehouse boundary
 - [ ] **2.6** Reverse-ETL loop (warehouse → app for propensity/segmentation)
+- [ ] **2.7** Lender reporting adapters — one adapter per third-party lender, pulling funded-loan + repayment + arrears + charge-off data via the lender's reporting API. The credit book lives at the lender, not on our balance sheet; Intelligence mirrors it read-only for cross-vertical analytics. See `docs/integration/eazepay-app-contract.md` § Phase 2.7.
 
 ---
 

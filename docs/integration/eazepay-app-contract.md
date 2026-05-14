@@ -100,21 +100,38 @@ Verification target on the Intelligence side (constant-time compare):
 expected = HMAC_SHA256(EAZEPAY_APP_WEBHOOK_SECRET, `${ts}.${rawBody}`)
 ```
 
-## Event-type catalogue (v1)
+## What flows where — App vs. lender API
 
-Reference contract. Intelligence builds normalised rows for each.
+**Important:** EazePay (this group) does **not** carry the credit book.
+Loans are originated by third-party lenders. App orchestrates the
+application + routing flow; once a loan is contracted, ongoing
+repayment / arrears / charge-off data lives with the **lender**, and
+Intelligence pulls it via the lender's reporting API (one adapter per
+lender), not via App webhooks.
 
-| Event type                     | Subject      | Maps to (Intelligence)                                                               |
-| ------------------------------ | ------------ | ------------------------------------------------------------------------------------ |
-| `application.offers_presented` | Application  | `applications` row upsert; status → `OFFERED`                                        |
-| `application.contracted`       | Application  | `applications` row upsert; status → `CONTRACTED`                                     |
-| `application.funded`           | Application  | `applications` upsert + `revenue_events` insert (origination revenue)                |
-| `application.declined`         | Application  | `applications` row upsert; status → `DECLINED`; `lender_decisions` per `LenderRoute` |
-| `loan.repayment.collected`     | Loan         | `revenue_events` insert (servicing revenue)                                          |
-| `loan.repayment.failed`        | Loan         | `alerts` row; `lender_decisions` unaffected                                          |
-| `merchant.onboarded` ★         | Merchant     | `partners` row insert; resolves to launch org via brand                              |
-| `merchant.status_changed` ★    | Merchant     | `partners` row update                                                                |
-| `revenue.recorded` ★           | RevenueEvent | `revenue_events` insert — App must emit at every revenue moment                      |
+Consequence: App's webhook surface is scoped to **application
+lifecycle + commission moments** — the things App actually owns. The
+loan-side feeds are a separate, lender-by-lender integration tracked
+under PLATFORM_V2 Phase 2.7.
+
+## Event-type catalogue (v1) — App webhook surface
+
+Reference contract for the App → Intelligence push.
+
+| Event type                     | Subject     | Maps to (Intelligence)                                                                                                                                                                                                            |
+| ------------------------------ | ----------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `application.offers_presented` | Application | `applications` row upsert; status → `OFFERED`                                                                                                                                                                                     |
+| `application.contracted`       | Application | `applications` row upsert; status → `CONTRACTED`. The actual disbursement happens at the lender; we record the contract moment because that's when commission accrues.                                                            |
+| `application.declined`         | Application | `applications` row upsert; status → `DECLINED`; `lender_decisions` per `LenderRoute`                                                                                                                                              |
+| `merchant.onboarded` ★         | Merchant    | `partners` row insert; resolves to launch org via brand                                                                                                                                                                           |
+| `merchant.status_changed` ★    | Merchant    | `partners` row update                                                                                                                                                                                                             |
+| `commission.recorded` ★        | Application | `revenue_events` insert — App emits this at the contract moment (origination commission) and on any commission true-up. **No clawback flow** — commission is earned at contract; lender-side repayment outcomes don't reverse it. |
+
+**Removed from the v0 draft** (third-party lender owns these — pulled
+via lender reporting adapters, not App webhooks):
+
+- ~~`application.funded`~~ — funding happens at the lender.
+- ~~`loan.repayment.collected` / `loan.repayment.failed`~~ — lender's book.
 
 ★ = **not yet emitted by App**. Filed as App-side TODO in
 [App TODO checklist](#app-side-todo-checklist) below.
@@ -208,14 +225,38 @@ pnpm dev
 # expect mart_per_business_revenue to pick it up on next dbt build.
 ```
 
+## Phase 2.7 — Lender reporting adapters
+
+Loan-side data (funded amount, disbursement timing, repayments, arrears,
+charge-offs) lives with each third-party lender. To bring it into
+Intelligence we build **one adapter per lender** that polls or
+subscribes to the lender's reporting API and emits a canonical event
+shape inside our walls. Lenders we know about today:
+
+- _(TBD — one row per lender once we have signed integrations)_
+
+Each adapter:
+
+1. Authenticates against the lender (OAuth client credentials / API key — per lender).
+2. Pulls deltas on a schedule (default: every 15 min) keyed off the
+   lender's "modified since" cursor.
+3. Joins each lender row to our `applications` table by lender-side
+   reference id (we store the lender's id on `applications` when we
+   route the app via `application.routed_to_lender`).
+4. Writes a `lender_reporting_*` row in Intelligence. These are
+   read-only mirrors of the lender's book — never authoritative.
+
+The lender adapters do NOT use the App webhook contract — they are a
+parallel ingestion plane in `apps/api/src/domains/lender-adapters/`
+(stub forthcoming). Reconciliation between App's `application.contracted`
+event and the lender's funded-loan row is the join point.
+
 ## Open questions
 
 - Does `direct` brand revenue belong in a holdco org, or in its own
   Organization (e.g. `eazepay-direct`)? Product decision needed.
-- For `revenue.recorded`, do we want a single canonical event or
-  one per revenue type (origination, servicing, clawback)? Leaning
-  single + a `category` discriminator in `data`. App-side ergonomics
-  decide.
+- Per-lender adapter format: REST polling vs. webhook subscription
+  where the lender supports it? Probably mix-and-match per lender.
 - Replay tooling: do we want a `POST /integration/eazepay-app/events/replay`
   that re-emits the last N events from App? Useful for cold-starting
   Intelligence after a fresh deploy. Defer to v2.

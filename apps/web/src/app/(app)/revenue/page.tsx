@@ -42,7 +42,7 @@ export default function RevenuePage(): JSX.Element {
     <div className="space-y-6">
       <PageHeader
         title="Revenue"
-        subtitle="Stream breakdown · projected from append-only ledger · clawbacks netted"
+        subtitle="Stream breakdown · projected from append-only commission ledger"
         action={
           <div className="flex gap-1">
             {RANGES.map((r) => (

@@ -558,22 +558,11 @@ function PeAnalytics({ customer }: { customer: CustomerDetail }): JSX.Element {
         subtitle="EazePay's contribution from this customer · gross / net / take rate"
         bodyClassName="p-0"
       >
-        <div className="grid grid-cols-2 md:grid-cols-5 divide-x divide-line2 border-t border-line2">
+        <div className="grid grid-cols-2 md:grid-cols-4 divide-x divide-line2 border-t border-line2">
           <Cell
-            label="Gross revenue"
+            label="Commission revenue"
             value={formatMoney(m.grossRevenue)}
-            hint="all positive events"
-          />
-          <Cell
-            label="Clawback exposure"
-            value={m.clawbacks > 0 ? `−${formatMoney(m.clawbacks)}` : '—'}
-            hint={`${m.clawbackEvents} event${m.clawbackEvents === 1 ? '' : 's'}`}
-          />
-          <Cell
-            label="Net revenue"
-            value={formatMoney(m.netRevenue)}
-            hint="after clawbacks"
-            tone={m.netRevenue >= 0 ? undefined : 'danger'}
+            hint="net commission earned"
           />
           <Cell
             label="Take rate"
@@ -771,8 +760,6 @@ function Cell({
 
 function computeMetrics(c: CustomerDetail): {
   grossRevenue: number;
-  clawbacks: number;
-  clawbackEvents: number;
   netRevenue: number;
   takeRatePct: number | null;
   avgTicket: number | null;
@@ -796,15 +783,13 @@ function computeMetrics(c: CustomerDetail): {
   calibrationDelta: number | null;
   fundingConversion: number | null;
 } {
+  // Third-party lenders carry the credit book; commission events on
+  // our ledger don't claw back on default. Negative events that may
+  // appear (e.g. processing reversals) are netted into the revenue
+  // total — there's no separate "clawback" concept here.
   const events = c.revenueEvents;
-  const grossRevenue = events
-    .filter((e) => Number(e.amount) > 0)
-    .reduce((s, e) => s + Number(e.amount), 0);
-  const clawbacks = Math.abs(
-    events.filter((e) => Number(e.amount) < 0).reduce((s, e) => s + Number(e.amount), 0),
-  );
-  const clawbackEvents = events.filter((e) => Number(e.amount) < 0).length;
-  const netRevenue = grossRevenue - clawbacks;
+  const netRevenue = events.reduce((s, e) => s + Number(e.amount), 0);
+  const grossRevenue = netRevenue; // kept for compat with downstream consumers
   const totalFunded = Number(c.financial.totalFunded);
   const takeRatePct = totalFunded > 0 ? (netRevenue / totalFunded) * 100 : null;
 
@@ -890,8 +875,6 @@ function computeMetrics(c: CustomerDetail): {
 
   return {
     grossRevenue,
-    clawbacks,
-    clawbackEvents,
     netRevenue,
     takeRatePct,
     avgTicket,

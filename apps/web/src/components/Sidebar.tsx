@@ -17,7 +17,6 @@ import {
   DollarSign,
   Layers,
   BookOpen,
-  RotateCcw,
   Gauge,
   CreditCard,
   Activity,
@@ -101,7 +100,10 @@ const GROUPS: NavGroup[] = [
       { href: '/revenue', label: 'Revenue', icon: DollarSign },
       { href: '/revenue/streams', label: 'By stream', icon: Layers },
       { href: '/revenue/ledger', label: 'Ledger', icon: BookOpen, operatorOnly: true },
-      { href: '/revenue/clawbacks', label: 'Clawbacks', icon: RotateCcw, operatorOnly: true },
+      // /revenue/clawbacks retired — third-party lenders carry the credit
+      // book; the warehouse only tracks commission/fee revenue, which
+      // doesn't claw back on default. Lender outcomes pulled via lender
+      // reporting APIs (see docs/integration/eazepay-app-contract.md).
       // /highsale lives in the Decision engine group — don't double-list.
       { href: '/micamp', label: 'MiCamp', icon: CreditCard },
     ],
