@@ -118,7 +118,6 @@ const GROUPS: NavGroup[] = [
     items: [
       { href: '/data-sources', label: 'All sources', icon: Database },
       { href: '/highsale', label: 'HighSale (EZ Check)', icon: Gauge },
-      { href: '/highsale/schema', label: 'HighSale schema · 70 fields', icon: Database },
       { href: '/pixie', label: 'Pixie', icon: Sparkles },
       { href: '/micamp', label: 'MiCamp', icon: CreditCard },
       { href: '/lenders', label: 'Lenders', icon: Landmark },
@@ -143,6 +142,14 @@ const GROUPS: NavGroup[] = [
       { href: '/audit', label: 'Audit log', icon: Scroll, operatorOnly: true },
       { href: '/audit/pii', label: 'PII access log', icon: Eye, adminOnly: true },
       { href: '/audit/logins', label: 'Login log', icon: LogIn, operatorOnly: true },
+    ],
+  },
+  {
+    label: 'Reference',
+    items: [
+      // Per-source schema dictionaries — engineering / analyst lookup.
+      // Add new schemas here as we wire more data planes.
+      { href: '/highsale/schema', label: 'HighSale schema · 70 fields', icon: Database },
     ],
   },
   {

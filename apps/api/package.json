@@ -22,6 +22,7 @@
     "db:seed:bootstrap-org": "tsx prisma/seed-bootstrap-org.ts",
     "db:seed:portfolio-orgs": "tsx prisma/seed-portfolio-orgs.ts",
     "db:seed:portfolio-businesses": "tsx prisma/seed-portfolio-businesses.ts",
+    "db:seed:highsale-mock": "tsx prisma/seed-highsale-mock.ts",
     "db:studio": "prisma studio",
     "worker:webhook": "tsx src/workers/webhook.worker.ts",
     "worker:aggregation": "tsx src/workers/aggregation.worker.ts",
