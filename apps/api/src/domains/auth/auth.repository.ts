@@ -8,37 +8,7 @@ export interface MembershipRef {
   role: OrgRole;
 }
 
-export interface IAuthRepository {
-  findUserByEmail(email: string): Promise<User | null>;
-  findUserById(id: string): Promise<User | null>;
-  /**
-   * Phase 1.3: resolve the user's active organisation context for embedding
-   * into the access token at sign time. Returns the oldest Membership
-   * (first org joined) — that's the user's "default" org during the
-   * migration window. Returns null for users with no memberships
-   * (platform-staff-only accounts, freshly-invited users not yet accepted).
-   */
-  findOldestMembership(userId: string): Promise<MembershipRef | null>;
-  recordLogin(userId: string): Promise<void>;
-  createRefreshToken(args: {
-    userId: string;
-    familyId: string;
-    rawToken: string;
-    expiresAt: Date;
-  }): Promise<RefreshToken>;
-  findRefreshTokenByRaw(raw: string): Promise<RefreshToken | null>;
-  rotateRefreshToken(args: {
-    oldId: string;
-    newRaw: string;
-    userId: string;
-    familyId: string;
-    expiresAt: Date;
-  }): Promise<RefreshToken>;
-  revokeFamily(familyId: string): Promise<number>;
-  revokeAllForUser(userId: string): Promise<number>;
-}
-
-export class AuthRepository implements IAuthRepository {
+export class AuthRepository {
   constructor(private readonly prisma: PrismaClient) {}
 
   /**

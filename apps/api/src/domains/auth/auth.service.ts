@@ -8,7 +8,6 @@ import { getEnv } from '../../config/env.js';
 import { errors } from '../../shared/errors/app-error.js';
 import { verifyPassword } from '../../shared/utils/password.js';
 import { newJti, newRefreshFamilyId, signJwt, verifyJwt } from '../../shared/utils/jwt.js';
-import type { IAuthRepository } from './auth.repository.js';
 import { AuthRepository } from './auth.repository.js';
 
 export type AuthScope = 'standard' | 'investor';
@@ -23,7 +22,7 @@ export interface IssuedTokens {
 
 export class AuthService {
   constructor(
-    private readonly repo: IAuthRepository,
+    private readonly repo: AuthRepository,
     private readonly redis: Redis,
   ) {}
 

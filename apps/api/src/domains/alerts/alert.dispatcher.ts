@@ -79,12 +79,14 @@ export class AlertDispatcher {
           delivered = true;
           break;
         case 'WEBHOOK':
-          // Real delivery (HMAC-signed, retried) is owned by
-          // OutboundWebhookService. We mark dispatched=true here; the
-          // delivery worker handles the retry contract.
-          // TODO: enqueue OUTBOUND_DELIVERY job pointing at the channel URL.
-          delivered = true;
-          reason = 'queued';
+          // Real delivery (HMAC-signed, retried) will be owned by
+          // OutboundWebhookService. Until the OUTBOUND_DELIVERY job is
+          // enqueued from here, treat WEBHOOK as undelivered with an
+          // explicit reason — never silently succeed. Monitoring on
+          // reason='webhook_dispatch_not_implemented' surfaces the gap
+          // immediately rather than after a compliance audit.
+          delivered = false;
+          reason = 'webhook_dispatch_not_implemented';
           break;
         case 'EMAIL':
         case 'SLACK':

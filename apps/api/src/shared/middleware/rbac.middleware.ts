@@ -81,13 +81,3 @@ export const denyInvestorScope: preHandlerHookHandler = async (req) => {
     throw errors.forbidden('Endpoint not available in investor scope');
   }
 };
-
-/** Compose multiple preHandlers in order. */
-export function compose(...handlers: preHandlerHookHandler[]): preHandlerHookHandler {
-  return async (req, reply) => {
-    for (const h of handlers) {
-      await h.call(reply.server, req, reply, () => undefined);
-      if (reply.sent) return;
-    }
-  };
-}

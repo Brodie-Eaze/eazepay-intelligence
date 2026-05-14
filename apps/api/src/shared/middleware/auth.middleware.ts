@@ -123,15 +123,3 @@ export const requireAuthAndTenant: preHandlerHookHandler = async (req, reply) =>
   await requireAuth(req, reply);
   await resolveTenantFromPath(req, reply);
 };
-
-/**
- * Optional auth — populates `req.auth` if present, never throws.
- * Used for endpoints that vary their response by scope but don't require login.
- */
-export async function optionalAuth(req: FastifyRequest): Promise<void> {
-  try {
-    await requireAuth(req, {} as FastifyReply);
-  } catch {
-    // intentionally swallowed
-  }
-}

@@ -1,6 +1,7 @@
 import type { Application } from '@prisma/client';
 import type { ApplicationResponse } from './application.schemas.js';
 import { decryptPII } from '../../shared/utils/encryption.js';
+import { getLogger } from '../../config/logger.js';
 
 function maskEmail(email: string): string {
   const [user, domain] = email.split('@');
@@ -18,7 +19,9 @@ function maskPhone(phone: string): string {
 function maskName(name: string): string {
   return name
     .split(/\s+/)
-    .map((part) => (part.length === 0 ? part : `${part[0]}${'*'.repeat(Math.max(0, part.length - 1))}`))
+    .map((part) =>
+      part.length === 0 ? part : `${part[0]}${'*'.repeat(Math.max(0, part.length - 1))}`,
+    )
     .join(' ');
 }
 
@@ -31,9 +34,23 @@ export function toApplicationResponse(a: Application): ApplicationResponse {
     nameMasked = maskName(decryptPII(a.consumerNameCiphertext));
     emailMasked = maskEmail(decryptPII(a.consumerEmailCiphertext));
     phoneMasked = maskPhone(decryptPII(a.consumerPhoneCiphertext));
-  } catch {
-    // If decryption fails (rotation gap, corruption), surface masked placeholders;
-    // never throw — the dashboard's read path must remain available.
+  } catch (err) {
+    // Decryption failure on the dashboard hot path. Surface masked
+    // placeholders so the read path stays available — but ALWAYS log,
+    // because "all customers show *****" with no signal is the
+    // worst-class incident (KMS outage, DEK rotation regression,
+    // ciphertext corruption). A per-org rate on this errorId in alerting
+    // surfaces tenant-wide decrypt failures within minutes instead of
+    // via customer ticket.
+    getLogger().error(
+      {
+        err,
+        errorId: 'PII_DECRYPT_FAILURE',
+        applicationId: a.id,
+        partnerId: a.partnerId,
+      },
+      'application.pii.decrypt_failed',
+    );
   }
   return {
     id: a.id,
@@ -60,7 +77,11 @@ export function toApplicationResponse(a: Application): ApplicationResponse {
   };
 }
 
-export function decryptApplicationPii(a: Application): { name: string; email: string; phone: string } {
+export function decryptApplicationPii(a: Application): {
+  name: string;
+  email: string;
+  phone: string;
+} {
   return {
     name: decryptPII(a.consumerNameCiphertext),
     email: decryptPII(a.consumerEmailCiphertext),
