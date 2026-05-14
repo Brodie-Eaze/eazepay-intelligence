@@ -40,6 +40,11 @@ const EnvSchema = z.object({
   PIXIE_WEBHOOK_SECRET: z.string().min(16),
   MICAMP_WEBHOOK_SECRET: z.string().min(16),
 
+  // Shared with EazePay App's WebhookDispatcher. Verifies HMAC-SHA-256
+  // over `${timestamp}.${rawBody}` for POST /integration/eazepay-app/events.
+  // See docs/integration/eazepay-app-contract.md.
+  EAZEPAY_APP_WEBHOOK_SECRET: z.string().min(32),
+
   CORS_ORIGINS: z
     .string()
     .default('http://localhost:3011')

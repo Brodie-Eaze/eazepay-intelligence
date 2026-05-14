@@ -122,6 +122,7 @@ To promote a staged migration:
 
 **Sub-phases:**
 
+- [~] **2.0** EazePay App integration contract (push-based webhooks). **Design + Intelligence-side scaffold done** _(this session)_: `docs/integration/eazepay-app-contract.md`, `apps/api/src/domains/integration/eazepay-app/` (envelope + event-types + brand→org mapping + stub route). `EAZEPAY_APP_WEBHOOK_SECRET` added to env. **Pending:** `WebhookSource.EAZEPAY_APP` Prisma enum migration; route registration in `server.ts`; drain handlers per event type. **App-side TODO** (separate session in `/Users/Brodie/EazePay App`): platform-sink subscription, KMS-backed `SecretResolver`, three new event types (`merchant.onboarded`, `merchant.status_changed`, `revenue.recorded`).
 - [~] **2.1** dbt scaffold (staging + marts + tests + README) — **Done** _(this session)_
 - [ ] **2.2** dbt build wired into CI (nightly + PR validation on touched models)
 - [ ] **2.3** Logical replication / Debezium → object storage (Parquet/Iceberg)
