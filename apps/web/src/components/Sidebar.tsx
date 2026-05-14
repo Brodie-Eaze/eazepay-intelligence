@@ -12,13 +12,16 @@ import {
   Target,
   Inbox,
   Kanban,
+  Filter,
   Landmark,
   Building2,
   DollarSign,
   Layers,
   BookOpen,
+  Scale,
   Gauge,
   CreditCard,
+  Sparkles,
   Activity,
   Webhook,
   ListOrdered,
@@ -33,11 +36,11 @@ import {
   Bell,
   FileDown,
   CalendarClock,
-  StickyNote,
   Tag,
   Webhook as WebhookIcon,
   Key,
   Briefcase,
+  Database,
   type LucideIcon,
 } from 'lucide-react';
 
@@ -53,94 +56,114 @@ interface NavGroup {
   items: NavItem[];
 }
 
+/**
+ * Sidebar groups for a data-warehouse-first IA.
+ *
+ * Top-half (groups 1–4) is the analytical surface the team uses daily:
+ *   what's happening, in which business, across which customers, for
+ *   how much revenue.
+ *
+ * Middle (group 5) is provenance — "where does this data come from?"
+ *   Each upstream system gets its own landing.
+ *
+ * Bottom-half (groups 6–8) is operations + governance + admin. Still
+ *   in the nav (the team needs to find these), just visually demoted.
+ *
+ * Every route under apps/web/src/app/(app)/ that isn't a dynamic-param
+ * detail page appears below. If you add a new top-level route, add a
+ * line here too.
+ */
 const GROUPS: NavGroup[] = [
   {
-    label: 'Today',
+    label: 'Overview',
     items: [
-      { href: '/overview', label: 'Overview', icon: LayoutDashboard },
+      { href: '/overview', label: 'Holdco overview', icon: LayoutDashboard },
       { href: '/live', label: 'Live activity', icon: Radio },
-      { href: '/search', label: 'Search', icon: Search },
-      { href: '/alerts', label: 'Alerts', icon: Bell, operatorOnly: true },
     ],
   },
   {
-    label: 'Portfolio',
-    items: [{ href: '/portfolio', label: 'Holdco view', icon: Briefcase }],
+    label: 'Businesses',
+    items: [
+      { href: '/portfolio', label: 'Holdco rollup', icon: Briefcase },
+      // Per-business drill-down lives at /portfolio/[vertical]/[business];
+      // click a row in the rollup to drill in. We don't fan out the 7
+      // direct links here because every onboarding adds another row to
+      // the rollup automatically (no nav maintenance).
+    ],
   },
   {
-    label: 'People',
+    label: 'Customers & applications',
     items: [
       { href: '/customers', label: 'Customer book', icon: Users, operatorOnly: true },
+      { href: '/applications', label: 'All applications', icon: Inbox, operatorOnly: true },
+      { href: '/applications/by-status', label: 'By status', icon: Kanban, operatorOnly: true },
+      { href: '/funnel', label: 'Funnel', icon: Filter },
       { href: '/risk', label: 'Risk profiles', icon: ShieldAlert },
       { href: '/income', label: 'Income & affordability', icon: Wallet },
       { href: '/propensity', label: 'Propensity calibration', icon: Target },
     ],
   },
   {
-    label: 'Applications',
+    label: 'Revenue',
     items: [
-      { href: '/applications', label: 'All applications', icon: Inbox, operatorOnly: true },
-      { href: '/applications/by-status', label: 'By status', icon: Kanban, operatorOnly: true },
-    ],
-  },
-  {
-    label: 'Decision engine',
-    items: [
-      { href: '/lenders', label: 'Lender book', icon: Landmark },
-      { href: '/highsale', label: 'HighSale (EZ Check)', icon: Gauge },
-    ],
-  },
-  {
-    label: 'Network',
-    items: [{ href: '/partners', label: 'Partners', icon: Building2 }],
-  },
-  {
-    label: 'Money',
-    items: [
-      { href: '/revenue', label: 'Revenue', icon: DollarSign },
+      { href: '/revenue', label: 'Revenue overview', icon: DollarSign },
       { href: '/revenue/streams', label: 'By stream', icon: Layers },
-      { href: '/revenue/ledger', label: 'Ledger', icon: BookOpen, operatorOnly: true },
-      // /revenue/clawbacks retired — third-party lenders carry the credit
-      // book; the warehouse only tracks commission/fee revenue, which
-      // doesn't claw back on default. Lender outcomes pulled via lender
-      // reporting APIs (see docs/integration/eazepay-app-contract.md).
-      // /highsale lives in the Decision engine group — don't double-list.
+      { href: '/revenue/ledger', label: 'Append-only ledger', icon: BookOpen, operatorOnly: true },
+      {
+        href: '/revenue/reconciliation',
+        label: 'Reconciliation',
+        icon: Scale,
+        operatorOnly: true,
+      },
+    ],
+  },
+  {
+    label: 'Data sources',
+    items: [
+      { href: '/data-sources', label: 'All sources', icon: Database },
+      { href: '/highsale', label: 'HighSale (EZ Check)', icon: Gauge },
+      { href: '/pixie', label: 'Pixie', icon: Sparkles },
+      { href: '/pixie/pricing', label: 'Pixie pricing', icon: Tags },
       { href: '/micamp', label: 'MiCamp', icon: CreditCard },
+      { href: '/lenders', label: 'Lenders', icon: Landmark },
+      { href: '/partners', label: 'Partners', icon: Building2 },
+      { href: '/ops/webhooks', label: 'Webhook events log', icon: Webhook, operatorOnly: true },
     ],
   },
   {
     label: 'Operations',
     items: [
+      { href: '/alerts', label: 'Alerts', icon: Bell, operatorOnly: true },
+      { href: '/search', label: 'Global search', icon: Search },
       { href: '/ops/health', label: 'System health', icon: Activity, operatorOnly: true },
-      { href: '/ops/webhooks', label: 'Webhook events', icon: Webhook, operatorOnly: true },
-      { href: '/ops/queues', label: 'Queues', icon: ListOrdered, operatorOnly: true },
+      { href: '/ops/queues', label: 'Job queues', icon: ListOrdered, operatorOnly: true },
       { href: '/ops/sessions', label: 'Sessions', icon: Monitor, adminOnly: true },
+      { href: '/tags', label: 'Tags', icon: Tag, operatorOnly: true },
     ],
   },
   {
     label: 'Governance',
     items: [
       { href: '/audit', label: 'Audit log', icon: Scroll, operatorOnly: true },
-      { href: '/audit/pii', label: 'PII access', icon: Eye, adminOnly: true },
-      { href: '/audit/logins', label: 'Logins', icon: LogIn, operatorOnly: true },
+      { href: '/audit/pii', label: 'PII access log', icon: Eye, adminOnly: true },
+      { href: '/audit/logins', label: 'Login log', icon: LogIn, operatorOnly: true },
     ],
   },
   {
-    label: 'Admin',
+    label: 'Admin & workspace',
     items: [
       { href: '/admin', label: 'Users & roles', icon: ShieldCheck, adminOnly: true },
-      { href: '/admin/pricing', label: 'Pricing', icon: Tags, adminOnly: true },
-      { href: '/admin/secrets', label: 'Secrets', icon: KeyRound, adminOnly: true },
-    ],
-  },
-  {
-    label: 'Workspace',
-    items: [
+      { href: '/admin/pricing', label: 'Pricing config', icon: Tags, adminOnly: true },
+      { href: '/admin/secrets', label: 'Secrets inventory', icon: KeyRound, adminOnly: true },
       { href: '/tokens', label: 'API tokens', icon: Key },
       { href: '/exports', label: 'Data exports', icon: FileDown },
       { href: '/reports', label: 'Scheduled reports', icon: CalendarClock },
-      { href: '/subscriptions', label: 'Outbound webhooks', icon: WebhookIcon, operatorOnly: true },
-      { href: '/tags', label: 'Tags', icon: Tag, operatorOnly: true },
+      {
+        href: '/subscriptions',
+        label: 'Outbound webhooks',
+        icon: WebhookIcon,
+        operatorOnly: true,
+      },
     ],
   },
 ];

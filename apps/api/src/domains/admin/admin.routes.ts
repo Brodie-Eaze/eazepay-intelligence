@@ -125,6 +125,133 @@ export async function registerAdminRoutes(app: FastifyInstance): Promise<void> {
     },
   );
 
+  // ─── Data-source ingestion stats ────────────────────────────────────────
+  //
+  // Powers the /data-sources hub: one row per inbound plane with last-24h
+  // event count, last-received timestamp, and a HEALTHY/STALE/IDLE pill.
+  //
+  //   HEALTHY = received an event in the last hour
+  //   STALE   = received an event in the last 24h but not the last hour
+  //   IDLE    = no events in the last 24h (or never)
+  app.get('/data-sources/stats', { preHandler: requireAuth }, async () => {
+    const now = Date.now();
+    const HOUR = 3600_000;
+    const DAY = 24 * HOUR;
+    const since24h = new Date(now - DAY);
+
+    // Webhook-sourced planes (HighSale, MiCamp, Pixie, etc.) — every row
+    // lands in webhook_events.
+    const webhookCounts = await prisma.webhookEvent.groupBy({
+      by: ['source'],
+      where: { receivedAt: { gte: since24h } },
+      _count: { _all: true },
+      _max: { receivedAt: true },
+    });
+
+    // HighSale also writes a typed row to credit_enrichments — count that
+    // separately since some snapshots may pre-date the webhook_events row
+    // when the route is called by clients without HMAC headers.
+    const highsaleCount = await prisma.creditEnrichment.count({
+      where: { pulledAt: { gte: since24h }, deletedAt: null },
+    });
+    const highsaleLast = await prisma.creditEnrichment.findFirst({
+      where: { deletedAt: null },
+      orderBy: { pulledAt: 'desc' },
+      select: { pulledAt: true },
+    });
+
+    const partnerCount = await prisma.partner.count({ where: { deletedAt: null } });
+    const partnerLast = await prisma.partner.findFirst({
+      where: { deletedAt: null },
+      orderBy: { createdAt: 'desc' },
+      select: { createdAt: true },
+    });
+
+    const lenderCount = await prisma.lenderDecision.count({
+      where: { createdAt: { gte: since24h } },
+    });
+    const lenderLast = await prisma.lenderDecision.findFirst({
+      orderBy: { createdAt: 'desc' },
+      select: { createdAt: true },
+    });
+
+    const classify = (lastReceivedAt: Date | null): 'HEALTHY' | 'STALE' | 'IDLE' => {
+      if (!lastReceivedAt) return 'IDLE';
+      const age = now - lastReceivedAt.getTime();
+      if (age < HOUR) return 'HEALTHY';
+      if (age < DAY) return 'STALE';
+      return 'IDLE';
+    };
+
+    type StatRow = {
+      source: string;
+      last24h: number;
+      lastReceivedAt: string | null;
+      status: 'HEALTHY' | 'STALE' | 'IDLE';
+    };
+
+    const byWebhookSource = new Map<string, (typeof webhookCounts)[number]>(
+      webhookCounts.map((r) => [r.source.toLowerCase(), r]),
+    );
+    const out: StatRow[] = [];
+
+    // HighSale — prefer typed-table counts; fall back to webhook counts.
+    out.push({
+      source: 'highsale',
+      last24h:
+        highsaleCount > 0 ? highsaleCount : (byWebhookSource.get('highsale')?._count._all ?? 0),
+      lastReceivedAt: highsaleLast?.pulledAt.toISOString() ?? null,
+      status: classify(highsaleLast?.pulledAt ?? null),
+    });
+
+    for (const src of ['micamp', 'pixie'] as const) {
+      const row = byWebhookSource.get(src);
+      const last = row?._max.receivedAt ?? null;
+      out.push({
+        source: src,
+        last24h: row?._count._all ?? 0,
+        lastReceivedAt: last?.toISOString() ?? null,
+        status: classify(last),
+      });
+    }
+
+    out.push({
+      source: 'lenders',
+      last24h: lenderCount,
+      lastReceivedAt: lenderLast?.createdAt.toISOString() ?? null,
+      status: classify(lenderLast?.createdAt ?? null),
+    });
+
+    out.push({
+      source: 'partners',
+      last24h: partnerCount, // partner directory grows slowly; render the total
+      lastReceivedAt: partnerLast?.createdAt.toISOString() ?? null,
+      status: classify(partnerLast?.createdAt ?? null),
+    });
+
+    out.push({
+      source: 'webhooks',
+      last24h: webhookCounts.reduce((s, r) => s + r._count._all, 0),
+      lastReceivedAt:
+        webhookCounts
+          .reduce<Date | null>((max, r) => {
+            if (!r._max.receivedAt) return max;
+            if (!max || r._max.receivedAt > max) return r._max.receivedAt;
+            return max;
+          }, null)
+          ?.toISOString() ?? null,
+      status: classify(
+        webhookCounts.reduce<Date | null>((max, r) => {
+          if (!r._max.receivedAt) return max;
+          if (!max || r._max.receivedAt > max) return r._max.receivedAt;
+          return max;
+        }, null),
+      ),
+    });
+
+    return { data: out };
+  });
+
   // ─── System health (operational telemetry) ───────────────────────────────
   app.get('/admin/health', { preHandler: [requireAuth, denyInvestorScope] }, async () => {
     const dbStart = Date.now();
