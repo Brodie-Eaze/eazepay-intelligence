@@ -194,7 +194,11 @@ export default function BusinessDeepDive(): JSX.Element {
         />
       </div>
 
-      <SectionCard title="Silo profile" subtitle="ownership, segment, scale" bodyClassName="p-0">
+      <SectionCard
+        title="Business profile"
+        subtitle="ownership, segment, scale"
+        bodyClassName="p-0"
+      >
         <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 divide-x divide-line2">
           <Cell label="Vertical" value={v?.name ?? '—'} />
           <Cell label="Status" value={b?.status ?? '—'} />
