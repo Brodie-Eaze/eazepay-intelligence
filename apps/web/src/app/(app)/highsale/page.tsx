@@ -319,12 +319,18 @@ export default function HighSalePage(): JSX.Element {
                     <td className="numeric text-right text-ink2">
                       {(Number(r.saleConfidenceScore) * 100).toFixed(0)}%
                     </td>
-                    <td className="text-right">
+                    <td className="text-right whitespace-nowrap">
+                      <Link
+                        href={`/highsale/${r.id}`}
+                        className="text-accent text-xs hover:underline mr-3"
+                      >
+                        all 70 fields →
+                      </Link>
                       <Link
                         href={`/customers/${r.consumerEmailHash}`}
-                        className="text-accent text-xs hover:underline"
+                        className="text-muted text-xs hover:text-ink2 hover:underline"
                       >
-                        view →
+                        customer
                       </Link>
                     </td>
                   </tr>

@@ -450,4 +450,177 @@ export async function registerHighsaleIntegrationRoutes(app: FastifyInstance): P
       },
     };
   });
+
+  // ─── Single snapshot detail — the full 70-field mapping ─────────────
+  //
+  // GET /highsale/snapshots/:id  → every field HighSale sent for one
+  // snapshot, grouped by logical block. Drives the /highsale/[id]
+  // mapping view. PII fields (request_body.*) are NOT decrypted here;
+  // we surface the hash + a placeholder. Use GET /customers/:hash/pii
+  // for the auditable reveal.
+  app.get('/highsale/snapshots/:id', { preHandler: requireAuth }, async (req) => {
+    const prisma = getPrisma();
+    const params = z.object({ id: z.string().uuid() }).parse(req.params);
+    const row = await prisma.creditEnrichment.findUnique({
+      where: { id: params.id },
+    });
+    if (!row || row.deletedAt) throw errors.notFound('CreditEnrichment', params.id);
+
+    // Re-shape into the same logical blocks the JSON spec uses. The UI
+    // renders one card per block.
+    return {
+      id: row.id,
+      orgId: row.orgId,
+      vertical: row.vertical,
+      pulledAt: row.pulledAt.toISOString(),
+      receivedAt: row.receivedAt.toISOString(),
+      highsaleTransactionId: row.highsaleTransactionId,
+      applicationId: row.applicationId,
+      externalApplicationId: row.externalApplicationId,
+      consumerEmailHash: row.consumerEmailHash.toString('hex'),
+      consumerPhoneHash: row.consumerPhoneHash.toString('hex'),
+      dateOfBirthHash: row.dateOfBirthHash.toString('hex'),
+
+      blocks: {
+        pii: {
+          // PII is encrypted at rest. Surface metadata only — no plaintext.
+          first_name: null,
+          last_name: null,
+          email: null,
+          phone: null,
+          date_of_birth: null,
+          street_address_1: null,
+          street_address_2: null,
+          city: null,
+          state: null,
+          zip_code: null,
+          verifiable_income: row.verifiableIncomeCents,
+          rent_payment: row.rentPaymentCents,
+          _note:
+            'PII fields encrypted under per-org DEK. Reveal via GET /customers/:hash/pii (audited).',
+        },
+        lookup_flags: {
+          is_frozen: row.isFrozen,
+          is_no_hit: row.isNoHit,
+          is_address_append: row.isAddressAppend,
+          is_address_no_hit: row.isAddressNoHit,
+          is_insufficient_credit_data: row.isInsufficientCreditData,
+        },
+        grades: {
+          score: row.score,
+          credit_line_grade: row.creditLineGrade,
+          revolving_lines_grade: row.revolvingLinesGrade,
+          oldest_account_grade: row.oldestAccountGrade,
+          late_payments_grade: row.latePaymentsGrade,
+          collections_grade: row.collectionsGrade,
+          new_lines_grade: row.newLinesGrade,
+          utilization_grade: row.utilizationGrade,
+          recent_inquiries_grade: row.recentInquiriesGrade,
+          average_grade: row.averageGrade,
+        },
+        decision_rates: {
+          decline_rate: row.declineRate.toString(),
+          approval_rate: row.approvalRate.toString(),
+        },
+        inquiry_quotas: {
+          personal_remaining_inquiries: row.personalRemainingInquiries,
+          personal_loan_remaining_inquiries: row.personalLoanRemainingInquiries,
+          business_remaining_inquiries: row.businessRemainingInquiries,
+        },
+        credit_profile: {
+          total_lines: row.totalLines,
+          total_revolving_lines: row.totalRevolvingLines,
+          available_credit_cents: row.availableCreditCents,
+          average_credit_limit_cents: row.averageCreditLimitCents,
+          total_credit_limit_cents: row.totalCreditLimitCents,
+          oldest_credit_age: row.oldestCreditAge,
+          average_credit_age: row.averageCreditAge,
+          total_inquiries: row.totalInquiries,
+          utilization: row.utilization.toString(),
+          late_payments: row.latePayments,
+          collections: row.collections,
+          trended_income_cents: row.trendedIncomeCents,
+          trended_debt_cents: row.trendedDebtCents,
+        },
+        qualification: {
+          is_qualified: row.isQualified,
+          dq_reasons: row.dqReasons,
+          confidence_score: row.confidenceScore.toString(),
+          funding_estimate_cents: row.fundingEstimateCents,
+          is_qualified_bnpl: row.isQualifiedBnpl,
+          confidence_score_bnpl: row.confidenceScoreBnpl.toString(),
+          funding_estimate_bnpl_cents: row.fundingEstimateBnplCents,
+          is_qualified_consumer_loan: row.isQualifiedConsumerLoan,
+          funding_estimate_consumer_loan_cents: row.fundingEstimateConsumerLoanCents,
+        },
+        tradeline_detail: {
+          num_satisfactory_trade_lines: row.numSatisfactoryTradeLines,
+          num_trade_lines_opened_in_last_6_months: row.numTradeLinesOpenedInLast6Months,
+          months_since_most_recent_delinquency: row.monthsSinceMostRecentDelinquency,
+          num_pr_bankruptcies_in_last_24_months: row.numPrBankruptciesInLast24Months,
+          total_monthly_obligation_cents: row.totalMonthlyObligationCents,
+          num_third_party_collections_with_balance: row.numThirdPartyCollectionsWithBalance,
+          num_open_home_equity_loan_trades: row.numOpenHomeEquityLoanTrades,
+          total_credit_union_credit_lines_in_last_12_months:
+            row.totalCreditUnionCreditLinesInLast12Months,
+          total_balance_of_open_credit_union_trade_lines_in_last_12_months_cents:
+            row.totalBalanceOfOpenCreditUnionTradeLinesInLast12MonthsCents,
+          months_since_most_recent_credit_union_trade_opened:
+            row.monthsSinceMostRecentCreditUnionTradeOpened,
+          total_balance_of_open_revolving_trades_in_last_12_months_cents:
+            row.totalBalanceOfOpenRevolvingTradesInLast12MonthsCents,
+          utilization_of_open_revolving_trades_in_last_12_months:
+            row.utilizationOfOpenRevolvingTradesInLast12Months.toString(),
+          num_of_repo_trades: row.numOfRepoTrades,
+          total_balance_of_repo_trades_cents: row.totalBalanceOfRepoTradesCents,
+          num_of_retail_trades: row.numOfRetailTrades,
+          num_of_open_retail_trades: row.numOfOpenRetailTrades,
+          num_of_third_party_collections: row.numOfThirdPartyCollections,
+          num_of_non_medical_third_party_collections: row.numOfNonMedicalThirdPartyCollections,
+          num_of_third_party_collections_in_the_last_36_months:
+            row.numOfThirdPartyCollectionsInTheLast36Months,
+          num_of_student_loan_trades: row.numOfStudentLoanTrades,
+          num_of_open_student_loan_trades: row.numOfOpenStudentLoanTrades,
+          num_of_satisfactory_open_student_loan_trades: row.numOfSatisfactoryOpenStudentLoanTrades,
+          num_of_90_plus_days_past_due_student_loans: row.numOf90PlusDaysPastDueStudentLoans,
+          num_of_auth_user_trades: row.numOfAuthUserTrades,
+          num_open_unsecured_installment_trades: row.numOpenUnsecuredInstallmentTrades,
+          total_open_unsecured_installment_trades_in_last_12_months:
+            row.totalOpenUnsecuredInstallmentTradesInLast12Months,
+          percent_of_open_unsecured_installment_trades_gt_75_in_last_12_months:
+            row.percentOfOpenUnsecuredInstallmentTradesGt75InLast12Months.toString(),
+          utilization_of_open_unsecured_verified_installment_trades_in_last_12_months:
+            row.utilizationOfOpenUnsecuredVerifiedInstallmentTradesInLast12Months.toString(),
+        },
+        adverse_events: {
+          num_of_charge_offs: row.numOfChargeOffs,
+          num_of_repos: row.numOfRepos,
+          num_of_foreclosures: row.numOfForeclosures,
+        },
+        ml_score: {
+          sale_confidence_score: row.saleConfidenceScore.toString(),
+        },
+        demographics_protected: {
+          // FCRA / fair-lending protected-class fields. Surfaced here for
+          // audit / disparate-impact monitoring only — see the
+          // protected-class governance policy in the architecture doc.
+          estimated_income: row.estimatedIncomeBand,
+          number_of_children: row.numberOfChildren,
+          marital_status: row.maritalStatus,
+          occupation_group: row.occupationGroup,
+          occupation: row.occupation,
+          education: row.education,
+          business_owner: row.businessOwner,
+          gender: row.gender,
+          net_worth: row.netWorth,
+          estimated_current_home_value: row.estimatedCurrentHomeValue,
+          ethnicity: row.ethnicity,
+          ethnic_group: row.ethnicGroup,
+          language: row.language,
+        },
+      },
+
+      rawPayload: row.rawPayload,
+    };
+  });
 }

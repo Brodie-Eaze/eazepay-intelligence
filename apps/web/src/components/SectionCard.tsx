@@ -4,8 +4,8 @@ import { ReactNode, useState } from 'react';
 import { ChevronDown } from 'lucide-react';
 
 interface Props {
-  title: string;
-  subtitle?: string;
+  title: ReactNode;
+  subtitle?: ReactNode;
   action?: ReactNode;
   className?: string;
   bodyClassName?: string;
@@ -53,7 +53,12 @@ export function SectionCard({
           tabIndex={0}
           aria-expanded={open}
           onClick={() => setOpen((o) => !o)}
-          onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setOpen((o) => !o); } }}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault();
+              setOpen((o) => !o);
+            }
+          }}
           className="section-head w-full hover:bg-paper/50 transition cursor-pointer select-none"
         >
           {headerInner}
@@ -61,9 +66,7 @@ export function SectionCard({
       ) : (
         <header className="section-head">{headerInner}</header>
       )}
-      {(!collapsible || open) && (
-        <div className={bodyClassName ?? 'section-body'}>{children}</div>
-      )}
+      {(!collapsible || open) && <div className={bodyClassName ?? 'section-body'}>{children}</div>}
     </section>
   );
 }
