@@ -1,0 +1,25 @@
+# Keep the Docker build context small.
+node_modules
+**/node_modules
+.next
+**/.next
+dist
+**/dist
+*.tsbuildinfo
+**/*.tsbuildinfo
+.turbo
+**/.turbo
+coverage
+**/coverage
+.git
+.github
+.vscode
+.idea
+.env
+.env.*
+!.env.example
+docs
+test-results
+playwright-report
+*.log
+.DS_Store
