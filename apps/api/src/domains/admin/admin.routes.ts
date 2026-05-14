@@ -252,6 +252,124 @@ export async function registerAdminRoutes(app: FastifyInstance): Promise<void> {
     return { data: out };
   });
 
+  // ─── Warehouse landscape: tables, row counts, last-row timestamps ───────
+  //
+  // Powers the "Warehouse landscape" panel on /overview: every analytical
+  // table at a glance, sized and freshness-coloured. Driven by pg_stat
+  // (cheap — no full scans) for counts and a per-table MAX(timestamp)
+  // for freshness.
+  app.get('/warehouse/landscape', { preHandler: requireAuth }, async () => {
+    type LandscapeRow = {
+      table: string;
+      label: string;
+      group: 'application' | 'credit' | 'revenue' | 'partners' | 'audit';
+      rows: number;
+      lastAt: string | null;
+    };
+
+    // pg_stat_user_tables gives us approximate row counts without a
+    // full scan. n_live_tup is sufficient for "landscape" sizing.
+    const rowCounts = await prisma.$queryRaw<Array<{ relname: string; count: bigint }>>(Prisma.sql`
+      SELECT relname, n_live_tup AS count
+      FROM pg_stat_user_tables
+      WHERE relname IN (
+        'applications', 'lender_decisions', 'credit_enrichments',
+        'revenue_events', 'partners', 'pixie_metrics', 'webhook_events',
+        'audit_logs', 'merchants', 'organizations'
+      )
+    `);
+    const countMap = new Map(rowCounts.map((r) => [r.relname, Number(r.count)]));
+
+    // Freshness — one MAX(timestamp) per table. Cheap because each
+    // table has an index on the timestamp column.
+    const [lastApp, lastDec, lastEnr, lastRev, lastPxm, lastWeh, lastAud] = await Promise.all([
+      prisma.application.findFirst({ orderBy: { createdAt: 'desc' }, select: { createdAt: true } }),
+      prisma.lenderDecision.findFirst({
+        orderBy: { createdAt: 'desc' },
+        select: { createdAt: true },
+      }),
+      prisma.creditEnrichment.findFirst({
+        where: { deletedAt: null },
+        orderBy: { pulledAt: 'desc' },
+        select: { pulledAt: true },
+      }),
+      prisma.revenueEvent.findFirst({
+        orderBy: { effectiveAt: 'desc' },
+        select: { effectiveAt: true },
+      }),
+      prisma.pixieMetric.findFirst({
+        orderBy: { periodStart: 'desc' },
+        select: { periodStart: true },
+      }),
+      prisma.webhookEvent.findFirst({
+        orderBy: { receivedAt: 'desc' },
+        select: { receivedAt: true },
+      }),
+      prisma.auditLog.findFirst({ orderBy: { createdAt: 'desc' }, select: { createdAt: true } }),
+    ]);
+
+    const out: LandscapeRow[] = [
+      {
+        table: 'applications',
+        label: 'Applications',
+        group: 'application',
+        rows: countMap.get('applications') ?? 0,
+        lastAt: lastApp?.createdAt.toISOString() ?? null,
+      },
+      {
+        table: 'lender_decisions',
+        label: 'Lender decisions',
+        group: 'application',
+        rows: countMap.get('lender_decisions') ?? 0,
+        lastAt: lastDec?.createdAt.toISOString() ?? null,
+      },
+      {
+        table: 'credit_enrichments',
+        label: 'Credit enrichments',
+        group: 'credit',
+        rows: countMap.get('credit_enrichments') ?? 0,
+        lastAt: lastEnr?.pulledAt.toISOString() ?? null,
+      },
+      {
+        table: 'pixie_metrics',
+        label: 'Pixie metrics',
+        group: 'credit',
+        rows: countMap.get('pixie_metrics') ?? 0,
+        lastAt: lastPxm?.periodStart.toISOString() ?? null,
+      },
+      {
+        table: 'revenue_events',
+        label: 'Revenue events',
+        group: 'revenue',
+        rows: countMap.get('revenue_events') ?? 0,
+        lastAt: lastRev?.effectiveAt.toISOString() ?? null,
+      },
+      {
+        table: 'partners',
+        label: 'Partners',
+        group: 'partners',
+        rows: countMap.get('partners') ?? 0,
+        lastAt: null,
+      },
+      {
+        table: 'webhook_events',
+        label: 'Webhook events',
+        group: 'audit',
+        rows: countMap.get('webhook_events') ?? 0,
+        lastAt: lastWeh?.receivedAt.toISOString() ?? null,
+      },
+      {
+        table: 'audit_logs',
+        label: 'Audit logs',
+        group: 'audit',
+        rows: countMap.get('audit_logs') ?? 0,
+        lastAt: lastAud?.createdAt.toISOString() ?? null,
+      },
+    ];
+
+    return { data: out };
+  });
+
   // ─── System health (operational telemetry) ───────────────────────────────
   app.get('/admin/health', { preHandler: [requireAuth, denyInvestorScope] }, async () => {
     const dbStart = Date.now();
