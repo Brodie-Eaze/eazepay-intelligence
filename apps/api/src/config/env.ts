@@ -45,6 +45,11 @@ const EnvSchema = z.object({
   // See docs/integration/eazepay-app-contract.md.
   EAZEPAY_APP_WEBHOOK_SECRET: z.string().min(32),
 
+  // Shared with HighSale (EZ Check). Verifies HMAC-SHA-256 over
+  // `${timestamp}.${rawBody}` for POST /integration/highsale/snapshots.
+  // See docs/architecture/data-warehouse-overview.md § Plane 2.
+  HIGHSALE_WEBHOOK_SECRET: z.string().min(32),
+
   CORS_ORIGINS: z
     .string()
     .default('http://localhost:3011')
