@@ -85,24 +85,30 @@ export async function registerHighsaleIntegrationRoutes(app: FastifyInstance): P
         issues: parsed.error.issues,
       };
     }
-    const snap = parsed.data;
+    const env_ = parsed.data;
+    const snap = env_.snapshot;
 
-    // TODO(next session): once HighSale JSON spec is pinned + the
-    // HighsaleSnapshot Prisma model migration lands, replace this stub
-    // with the durable persistence path:
-    //   - dedupe on (snapshotId, externalApplicationId)
-    //   - encrypt sensitive fields under the per-org DEK (ADR-002)
-    //   - emit a `credit_enrichment.captured` row to webhook_events
+    // TODO(next session): once the HighsaleSnapshot Prisma model
+    // migration lands, replace this stub with the durable persistence
+    // path:
+    //   - dedupe on (vertical, transaction_id)
+    //   - encrypt request_body.* under the per-org DEK (ADR-002)
+    //   - hash email + phone for analytical join
+    //   - write the demographics block to a separately-gated table
+    //   - keep the full raw payload for forensic completeness
     //   - audit (CREDIT_SNAPSHOT_RECEIVED)
     reply.status(202);
     return {
       accepted: true,
-      snapshotId: snap.snapshotId,
-      externalApplicationId: snap.externalApplicationId,
-      vertical: snap.vertical,
+      transactionId: snap.transaction_id,
+      externalApplicationId: env_.external_application_id ?? null,
+      vertical: env_.vertical,
       idempotencyKey,
+      isQualified: snap.is_qualified,
+      isQualifiedBnpl: snap.is_qualified_bnpl,
+      score: snap.score,
       persisted: false,
-      note: 'Stub — persistence pending HighsaleSnapshot Prisma model + JSON-spec lock-in.',
+      note: 'Stub — persistence pending HighsaleSnapshot Prisma model migration.',
     };
   });
 }

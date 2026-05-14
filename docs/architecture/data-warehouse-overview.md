@@ -61,26 +61,81 @@ producing a credit-data snapshot per applicant. We need every snapshot
 captured in the warehouse so operator / investor / analytics surfaces
 can see who's coming through the funnel and on what credit profile.
 
-Twelve data points are pulled per applicant. Confirmed today (4):
+The full HighSale payload (~70 fields, JSON sample 2026-05-14) is
+faithfully typed in
+`apps/api/src/domains/integration/highsale/highsale-snapshot.schema.ts`
+and falls into seven logical blocks:
 
-- credit score
-- available credit
-- trade lines
-- income
+| Block                 | Fields                                                                                                                                                                                                | Sensitivity                                   |
+| --------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------- |
+| `request_body`        | name, DOB, email, phone, address, stated income, rent                                                                                                                                                 | **PII** — encrypted under per-org DEK         |
+| lookup flags          | is_frozen, is_no_hit, is_address_append…                                                                                                                                                              | non-sensitive                                 |
+| grades (10)           | score + 9 per-axis grades                                                                                                                                                                             | non-sensitive                                 |
+| decision rates        | decline_rate, approval_rate                                                                                                                                                                           | non-sensitive                                 |
+| inquiry quotas        | personal, personal-loan, business remaining                                                                                                                                                           | non-sensitive                                 |
+| credit profile (13)   | total_lines, utilization, late_payments, trended_income…                                                                                                                                              | non-sensitive                                 |
+| qualification (9)     | is_qualified, dq_reasons, funding_estimate_bnpl…                                                                                                                                                      | non-sensitive                                 |
+| tradeline detail (28) | granular line counts + balances + windows                                                                                                                                                             | non-sensitive                                 |
+| adverse events (3)    | charge_offs, repos, foreclosures                                                                                                                                                                      | non-sensitive                                 |
+| ML score              | sale_confidence_score                                                                                                                                                                                 | non-sensitive (HighSale proprietary)          |
+| **demographics (13)** | **ethnicity, ethnic_group, gender, marital_status, language, estimated_income, number_of_children, education, occupation, occupation_group, business_owner, net_worth, estimated_current_home_value** | **🛑 protected-class — see governance below** |
 
-The other 8 fields will be pinned once the HighSale JSON spec is in the
-repo. Until then the route accepts the four confirmed fields as typed
-and the rest as a passthrough `rawPayload` JSON object so we don't lose
-anything.
+The schema also `.passthrough()`s any field HighSale adds after this
+write-up so we never silently lose data on a vendor schema change.
 
 - Transport: HMAC-signed push to `POST /api/v1/integration/highsale/snapshots`
-  (stub landed; field shapes tighten when JSON spec arrives)
+  (stub landed; persistence pending the `HighsaleSnapshot` Prisma model)
 - Auth: shared HMAC secret `HIGHSALE_WEBHOOK_SECRET`
-- Contract: [`docs/integration/highsale-snapshot-contract.md`](../integration/highsale-snapshot-contract.md)
-  (forthcoming alongside the JSON spec)
-- PII classification: **sensitive**. Snapshot rows encrypt under the
-  per-org DEK once Phase 1.5 wiring lands. Until then they sit
-  alongside `applications` and inherit the bootstrap-org DEK.
+- Idempotency key: `(vertical, transaction_id)` — HighSale's own id is
+  globally unique; vertical guards against the (rare) cross-vertical
+  id collision.
+- Application correlation: the JSON does NOT carry our internal
+  `application_id`. App should pass our id into HighSale's request as
+  a correlation token and HighSale should echo it back in
+  `external_application_id`. Until that's wired the warehouse falls
+  back to fuzzy matching on (email_hash + dob + created_at) — workable
+  for v1, brittle for production. Resolution is queued under
+  PLATFORM_V2 Phase 2.8.
+
+#### Governance — protected-class handling
+
+HighSale's demographics block contains FCRA / fair-lending **protected
+classes** (ethnicity, ethnic_group, gender, marital_status, language)
+and proxies (estimated_income band, education, occupation). The
+warehouse policy:
+
+1. **Faithful capture.** We store every field HighSale sends. Dropping
+   data unilaterally weakens our compliance posture (we'd be deciding
+   what's "ok to keep" instead of HighSale + our DPO).
+2. **Segregated read surface.** The standard staging model
+   (`stg_credit_enrichments`) EXCLUDES the demographics block.
+   A separate, separately-tagged model
+   (`stg_credit_enrichments_protected`) is the only path to read these
+   fields downstream. Both live in `data-warehouse/models/staging/`.
+3. **Permission gate.** Operator UI that surfaces protected-class
+   fields requires the `protected_class_read` permission, granted per
+   role + reviewed quarterly. Default-deny.
+4. **No decisioning.** These fields MUST NOT feed any underwriting /
+   approval-rate-optimization / lender-routing analytics. Permitted
+   use cases:
+   - Disparate-impact monitoring (proving the lender pool is NOT
+     biased), output reviewed by compliance before publication.
+   - Aggregate market-sizing per vertical (n ≥ 50 cells only).
+5. **Audit trail.** Every protected-class read writes an audit row
+   tagged `PROTECTED_CLASS_READ` with the principal, the snapshot id,
+   and the use case (free-text). Compliance reviews the log quarterly.
+
+#### PII handling (request_body block)
+
+Every field under `request_body` (name, DOB, email, phone, address,
+income, rent) is PII. Storage policy mirrors how `applications`
+handles the same data points today (ADR-002):
+
+- Encrypted at rest under the per-org DEK; only resolvable via the
+  operational API with the right scope.
+- Hashed copies of email + phone surface as `consumer_email_hash` /
+  `consumer_phone_hash` for analytical join.
+- The standard staging model exposes the hashes; never the plaintext.
 
 ### Plane 3 — Lender reporting adapters
 

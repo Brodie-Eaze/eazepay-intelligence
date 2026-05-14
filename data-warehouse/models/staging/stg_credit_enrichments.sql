@@ -1,38 +1,137 @@
 -- Per-application credit-data snapshots pulled by HighSale (EZ Check).
--- One row per (application, snapshot_pull). The warehouse keeps every
--- pull so calibration analytics ("did Pixie's pre-qual line up with
--- what the lender actually did?") can join against the exact data the
--- decision was made on.
+-- One row per HighSale transaction_id. The warehouse stores every pull
+-- so calibration analytics — "did HighSale's pre-qual match what the
+-- lender actually did?" — can join against the exact data the decision
+-- was made on.
 --
--- DISABLED until the source table (`credit_enrichments`) is created
--- by the migration that lands alongside the HighSale JSON spec. See
--- docs/architecture/data-warehouse-overview.md § Plane 2 and
--- docs/integration/highsale-snapshot-contract.md (forthcoming).
+-- DISABLED until the source table (`credit_enrichments`) lands in the
+-- migration that follows the HighSale Prisma model. See
+--   docs/architecture/data-warehouse-overview.md § Plane 2
+--   apps/api/src/domains/integration/highsale/highsale-snapshot.schema.ts
 --
--- Field list below is the v0.1 contract: the 4 fields confirmed today
--- + a passthrough JSON column for the remaining 8 of HighSale's 12
--- data points. Each promoted column is one line here + one column in
--- the migration; do them in lockstep.
+-- GOVERNANCE — the demographics block (ethnicity, ethnic_group, gender,
+-- marital_status, language, etc.) is FCRA / fair-lending protected
+-- class. It is captured faithfully but is NOT exposed in this staging
+-- model. Use `stg_credit_enrichments_protected` (forthcoming) — a
+-- separately-gated model — when an explicit analytical use case needs
+-- the demographics, and never feed them into any decisioning mart.
+--
+-- PII — request_body fields are encrypted at rest under the per-org DEK
+-- and don't surface here. Hashed copies of email + phone (for
+-- analytical join) DO surface as `consumer_email_hash` /
+-- `consumer_phone_hash`, mirroring how `stg_applications` handles them.
 
 {{ config(materialized='view', enabled=false) }}
 
 select
-  id                       as snapshot_id,
+  -- Identity + linkage
+  id                                      as snapshot_id,
+  transaction_id                          as highsale_transaction_id,
+  external_application_id                 as application_external_id,
   application_id,
   org_id,
-  external_application_id,
-  vertical,                          -- medpay | tradepay | coachpay
-  pulled_at,
-  -- The 4 confirmed fields. Promote the remaining 8 here as the JSON
-  -- spec lands.
-  credit_score,
+  vertical,
+  created_at                              as pulled_at,
+
+  -- PII hashes (no plaintext PII here)
+  consumer_email_hash,
+  consumer_phone_hash,
+  date_of_birth_hash,
+
+  -- Stated income (echoed back from the application form)
+  verifiable_income_cents,
+  rent_payment_cents,
+
+  -- Lookup outcome flags
+  is_frozen,
+  is_no_hit,
+  is_address_append,
+  is_address_no_hit,
+  is_insufficient_credit_data,
+
+  -- HighSale grades
+  score,
+  credit_line_grade,
+  revolving_lines_grade,
+  oldest_account_grade,
+  late_payments_grade,
+  collections_grade,
+  new_lines_grade,
+  utilization_grade,
+  recent_inquiries_grade,
+  average_grade,
+
+  -- Decision rates
+  decline_rate,
+  approval_rate,
+
+  -- Inquiry quotas
+  personal_remaining_inquiries,
+  personal_loan_remaining_inquiries,
+  business_remaining_inquiries,
+
+  -- Aggregate credit profile
+  total_lines,
+  total_revolving_lines,
   available_credit_cents,
-  tradeline_count,
-  annual_income_cents,
-  -- Raw passthrough of every field HighSale sends. Until the schema is
-  -- locked we keep the original bytes so no information is lost.
-  raw_payload,
-  created_at,
-  updated_at
+  average_credit_limit_cents,
+  total_credit_limit_cents,
+  oldest_credit_age,
+  average_credit_age,
+  total_inquiries,
+  utilization,
+  late_payments,
+  collections,
+  trended_income_cents,
+  trended_debt_cents,
+
+  -- Qualification outputs
+  is_qualified,
+  dq_reasons,
+  confidence_score,
+  funding_estimate_cents,
+  is_qualified_bnpl,
+  confidence_score_bnpl,
+  funding_estimate_bnpl_cents,
+  is_qualified_consumer_loan,
+  funding_estimate_consumer_loan_cents,
+
+  -- Tradeline detail (the deep credit picture)
+  num_satisfactory_trade_lines,
+  num_trade_lines_opened_in_last_6_months,
+  months_since_most_recent_delinquency,
+  num_pr_bankruptcies_in_last_24_months,
+  total_monthly_obligation_cents,
+  num_third_party_collections_with_balance,
+  num_open_home_equity_loan_trades,
+  total_credit_union_credit_lines_in_last_12_months,
+  total_balance_of_open_credit_union_trade_lines_in_last_12_months_cents,
+  months_since_most_recent_credit_union_trade_opened,
+  total_balance_of_open_revolving_trades_in_last_12_months_cents,
+  utilization_of_open_revolving_trades_in_last_12_months,
+  num_of_repo_trades,
+  total_balance_of_repo_trades_cents,
+  num_of_retail_trades,
+  num_of_open_retail_trades,
+  num_of_third_party_collections,
+  num_of_non_medical_third_party_collections,
+  num_of_third_party_collections_in_the_last_36_months,
+  num_of_student_loan_trades,
+  num_of_open_student_loan_trades,
+  num_of_satisfactory_open_student_loan_trades,
+  num_of_90_plus_days_past_due_student_loans,
+  num_of_auth_user_trades,
+  num_open_unsecured_installment_trades,
+  total_open_unsecured_installment_trades_in_last_12_months,
+  percent_of_open_unsecured_installment_trades_gt_75_in_last_12_months,
+  utilization_of_open_unsecured_verified_installment_trades_in_last_12_months,
+
+  -- Adverse events
+  num_of_charge_offs,
+  num_of_repos,
+  num_of_foreclosures,
+
+  -- HighSale ML output
+  sale_confidence_score
 from {{ source('platform', 'credit_enrichments') }}
 where deleted_at is null
