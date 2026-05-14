@@ -25,7 +25,7 @@ import { z } from 'zod';
 import { getEnv } from '../../../config/env.js';
 import { getPrisma } from '../../../config/database.js';
 import { errors } from '../../../shared/errors/app-error.js';
-import { encryptPII, hashPII } from '../../../shared/utils/encryption.js';
+import { encryptPII, hashPII, decryptPII } from '../../../shared/utils/encryption.js';
 import { writeAuditLog } from '../../../shared/middleware/audit-log.middleware.js';
 import { requireAuth } from '../../../shared/middleware/auth.middleware.js';
 import { rowsToCsv, attachmentHeader } from '../../../shared/utils/csv.js';
@@ -361,6 +361,8 @@ export async function registerHighsaleIntegrationRoutes(app: FastifyInstance): P
       if (q.scoreMax !== undefined) where.score.lte = q.scoreMax;
     }
 
+    const canRevealPii = req.auth?.role === 'ADMIN' || req.auth?.role === 'OPERATOR';
+
     const [rows, byVertical, byQualification, scoreAgg, recent24h] = await Promise.all([
       prisma.creditEnrichment.findMany({
         where,
@@ -374,6 +376,10 @@ export async function registerHighsaleIntegrationRoutes(app: FastifyInstance): P
           externalApplicationId: true,
           applicationId: true,
           consumerEmailHash: true,
+          // PII ciphertext — decrypted server-side for ADMIN/OPERATOR only
+          consumerNameCiphertext: true,
+          consumerEmailCiphertext: true,
+          consumerPhoneCiphertext: true,
           score: true,
           averageGrade: true,
           isQualified: true,
@@ -425,11 +431,86 @@ export async function registerHighsaleIntegrationRoutes(app: FastifyInstance): P
       .slice(0, 10)
       .map(([reason, count]) => ({ reason, count }));
 
+    // ─── PII reveal (gated) ───────────────────────────────────────────────
+    // ADMIN + OPERATOR see decrypted consumer name / email / phone inline
+    // so the internal team can scan the funnel without one-click reveals
+    // per row. The access is batched-audited (one PII_ACCESSED row per
+    // list call, with row count + filter context). Viewer/investor roles
+    // get masks only.
+    if (canRevealPii && rows.length > 0) {
+      await writeAuditLog({
+        req,
+        action: 'PII_ACCESSED',
+        resourceType: 'credit_enrichment',
+        metadata: {
+          via: 'highsale_list',
+          rowCount: rows.length,
+          fields: ['name', 'email', 'phone'],
+          filters: {
+            vertical: q.vertical ?? null,
+            isQualified: q.isQualified ?? null,
+            isQualifiedBnpl: q.isQualifiedBnpl ?? null,
+            scoreMin: q.scoreMin ?? null,
+            scoreMax: q.scoreMax ?? null,
+          },
+        },
+      });
+    }
+
+    const safeDecrypt = (cipher: Buffer): string | null => {
+      try {
+        return decryptPII(cipher);
+      } catch {
+        return null;
+      }
+    };
+
+    const maskEmail = (email: string): string => {
+      const [local, domain] = email.split('@');
+      if (!local || !domain) return '****';
+      const visible = local.slice(0, 1);
+      return `${visible}${'*'.repeat(Math.max(2, local.length - 1))}@${domain}`;
+    };
+
+    const maskPhone = (phone: string): string => {
+      if (phone.length <= 4) return '****';
+      return `${'*'.repeat(phone.length - 4)}${phone.slice(-4)}`;
+    };
+
     return {
-      data: rows.map((r) => ({
-        ...r,
-        consumerEmailHash: r.consumerEmailHash.toString('hex'),
-      })),
+      data: rows.map((r) => {
+        const nameClear = canRevealPii ? safeDecrypt(r.consumerNameCiphertext) : null;
+        const emailClear = canRevealPii ? safeDecrypt(r.consumerEmailCiphertext) : null;
+        const phoneClear = canRevealPii ? safeDecrypt(r.consumerPhoneCiphertext) : null;
+        return {
+          id: r.id,
+          vertical: r.vertical,
+          pulledAt: r.pulledAt,
+          highsaleTransactionId: r.highsaleTransactionId,
+          externalApplicationId: r.externalApplicationId,
+          applicationId: r.applicationId,
+          consumerEmailHash: r.consumerEmailHash.toString('hex'),
+          consumerName: nameClear,
+          consumerEmail: emailClear,
+          consumerEmailMasked: emailClear ? maskEmail(emailClear) : null,
+          consumerPhone: phoneClear,
+          consumerPhoneMasked: phoneClear ? maskPhone(phoneClear) : null,
+          score: r.score,
+          averageGrade: r.averageGrade,
+          isQualified: r.isQualified,
+          isQualifiedBnpl: r.isQualifiedBnpl,
+          isQualifiedConsumerLoan: r.isQualifiedConsumerLoan,
+          dqReasons: r.dqReasons,
+          confidenceScoreBnpl: r.confidenceScoreBnpl,
+          fundingEstimateBnplCents: r.fundingEstimateBnplCents,
+          availableCreditCents: r.availableCreditCents,
+          utilization: r.utilization,
+          numOfChargeOffs: r.numOfChargeOffs,
+          numOfRepos: r.numOfRepos,
+          numOfForeclosures: r.numOfForeclosures,
+          saleConfidenceScore: r.saleConfidenceScore,
+        };
+      }),
       aggregates: {
         total: scoreAgg._count._all,
         last24h: recent24h,

@@ -34,6 +34,14 @@ interface SnapshotRow {
   externalApplicationId: string | null;
   applicationId: string | null;
   consumerEmailHash: string;
+  // PII — present for ADMIN/OPERATOR roles only. VIEWER/INVESTOR get null
+  // here and the masked versions below. Every list call writes a single
+  // PII_ACCESSED audit row server-side covering the whole batch.
+  consumerName: string | null;
+  consumerEmail: string | null;
+  consumerEmailMasked: string | null;
+  consumerPhone: string | null;
+  consumerPhoneMasked: string | null;
   score: number;
   averageGrade: number;
   isQualified: boolean;
@@ -293,6 +301,9 @@ export default function HighSalePage(): JSX.Element {
             <thead>
               <tr>
                 <th>Pulled</th>
+                <th>Applicant</th>
+                <th>Email</th>
+                <th>Phone</th>
                 <th>Vertical</th>
                 <th className="text-right">Score</th>
                 <th>BNPL</th>
@@ -311,6 +322,39 @@ export default function HighSalePage(): JSX.Element {
                   <tr key={r.id}>
                     <td className="numeric text-muted whitespace-nowrap">
                       {formatDateTime(r.pulledAt)}
+                    </td>
+                    <td className="whitespace-nowrap">
+                      {r.consumerName ? (
+                        <span className="text-ink font-medium">{r.consumerName}</span>
+                      ) : (
+                        <span className="text-soft text-xs">— masked —</span>
+                      )}
+                    </td>
+                    <td className="whitespace-nowrap">
+                      {r.consumerEmail ? (
+                        <a
+                          href={`mailto:${r.consumerEmail}`}
+                          className="text-ink2 text-xs hover:text-accent hover:underline"
+                        >
+                          {r.consumerEmail}
+                        </a>
+                      ) : (
+                        <span className="text-soft text-xs">{r.consumerEmailMasked ?? '—'}</span>
+                      )}
+                    </td>
+                    <td className="whitespace-nowrap">
+                      {r.consumerPhone ? (
+                        <a
+                          href={`tel:${r.consumerPhone}`}
+                          className="text-ink2 text-xs hover:text-accent hover:underline numeric"
+                        >
+                          {r.consumerPhone}
+                        </a>
+                      ) : (
+                        <span className="text-soft text-xs numeric">
+                          {r.consumerPhoneMasked ?? '—'}
+                        </span>
+                      )}
                     </td>
                     <td>
                       <span className="tag capitalize">{r.vertical}</span>
@@ -367,7 +411,7 @@ export default function HighSalePage(): JSX.Element {
               })}
               {rows.length === 0 && (
                 <tr>
-                  <td colSpan={10} className="text-muted py-12 text-center text-sm">
+                  <td colSpan={13} className="text-muted py-12 text-center text-sm">
                     No HighSale snapshots match these filters yet. POST to{' '}
                     <code className="kbd">/api/v1/integration/highsale/snapshots</code> with a
                     signed payload to seed one.
