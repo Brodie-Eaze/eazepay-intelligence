@@ -1,0 +1,61 @@
+# dbt project for the EazePay data warehouse layer.
+#
+# Purpose: transform raw operational rows (Prisma-managed tables in the
+# `public` schema) into curated, tested, documented analytical models in
+# the `analytics_staging` and `analytics_marts` schemas. The dashboard
+# reads from marts; the operational app reads from `public`. Reporting
+# load never affects the API's p99.
+#
+# Layered architecture:
+#
+#   sources (raw)  →  staging (one model per source table, lightly cleaned)
+#                  →  intermediate (joins / derivations, optional)
+#                  →  marts (business-facing rollups consumed by the UI)
+#
+# Each business gets its own staging namespace so per-business data
+# contracts (per Phase 11 of PLATFORM_V2) are visible at the file level.
+
+name: 'eazepay_warehouse'
+version: '0.1.0'
+config-version: 2
+
+profile: 'eazepay_warehouse'
+
+model-paths: ['models']
+seed-paths: ['seeds']
+test-paths: ['tests']
+macro-paths: ['macros']
+snapshot-paths: ['snapshots']
+
+clean-targets:
+  - 'target'
+  - 'dbt_packages'
+
+models:
+  eazepay_warehouse:
+    # All models materialise to the `analytics_*` schemas, NEVER `public`.
+    # That keeps operational + analytical strictly separated; nothing in
+    # the API touches these.
+    staging:
+      +materialized: view
+      +schema: staging
+      +tags: ['staging']
+    marts:
+      +materialized: table
+      +schema: marts
+      +tags: ['marts']
+
+vars:
+  # Each org slug listed here gets staging models that scope their data.
+  # Add a new slug when onboarding a new business; the staging template
+  # in macros/stg_business.sql picks it up automatically.
+  active_org_slugs:
+    - aurean-os
+    - aurean-recruitment
+    - coachpay
+    - tradepay
+    - medpay
+
+  # Reporting currency for the marts layer. Per-business amounts are
+  # converted (when fx_rates are populated) — until then assumed AUD.
+  reporting_currency: 'AUD'

@@ -25,18 +25,19 @@ These are not aspirational. Every PR is held against them.
 
 Sequential dependencies are marked. Phases without dependencies between them can run in parallel later, but Phase 1 blocks everything.
 
-| Phase  | Theme                                                         | Status            | Depends on                                |
-| ------ | ------------------------------------------------------------- | ----------------- | ----------------------------------------- |
-| **1**  | Multi-tenancy retrofit + envelope encryption                  | **In progress**   | —                                         |
-| **2**  | CDC + warehouse + dbt (analytical plane)                      | Pending           | Phase 1 (org_id on every row)             |
-| **3**  | Enterprise auth — WorkOS SSO + SCIM                           | Pending           | Phase 1 (Org model exists)                |
-| **4**  | Identity graph + consent ledger + PII vault                   | Pending           | Phase 1, Phase 2                          |
-| **5**  | Data catalog + lineage + quality (DataHub + Soda + dbt tests) | Pending           | Phase 2                                   |
-| **6**  | Vault for secrets + KMS for keys (replace env vars)           | Pending           | Phase 1 (KMS abstraction in place)        |
-| **7**  | Multi-region active-passive + DR drills                       | Pending           | Phase 1, Phase 6                          |
-| **8**  | SOC 2 + ISO 27001 evidence automation (Vanta/Drata)           | Parallel from now | — (begins immediately, deepens per phase) |
-| **9**  | SLOs + synthetics + per-tenant cost observability             | Pending           | Phase 1                                   |
-| **10** | Event mesh (Kafka/JetStream) + connector library              | Pending           | Phase 2, Phase 4                          |
+| Phase  | Theme                                                         | Status            | Depends on                                    |
+| ------ | ------------------------------------------------------------- | ----------------- | --------------------------------------------- |
+| **1**  | Multi-tenancy retrofit + envelope encryption                  | **In progress**   | —                                             |
+| **2**  | CDC + warehouse + dbt (analytical plane)                      | Pending           | Phase 1 (org_id on every row)                 |
+| **3**  | Enterprise auth — WorkOS SSO + SCIM                           | Pending           | Phase 1 (Org model exists)                    |
+| **4**  | Identity graph + consent ledger + PII vault                   | Pending           | Phase 1, Phase 2                              |
+| **5**  | Data catalog + lineage + quality (DataHub + Soda + dbt tests) | Pending           | Phase 2                                       |
+| **6**  | Vault for secrets + KMS for keys (replace env vars)           | Pending           | Phase 1 (KMS abstraction in place)            |
+| **7**  | Multi-region active-passive + DR drills                       | Pending           | Phase 1, Phase 6                              |
+| **8**  | SOC 2 + ISO 27001 evidence automation (Vanta/Drata)           | Parallel from now | — (begins immediately, deepens per phase)     |
+| **9**  | SLOs + synthetics + per-tenant cost observability             | Pending           | Phase 1                                       |
+| **10** | Event mesh (Kafka/JetStream) + connector library              | Pending           | Phase 2, Phase 4                              |
+| **11** | Commercial readiness (metering, audit export, status, SDK)    | Pending           | Phase 9 (observability), Phase 8 (compliance) |
 
 ---
 
@@ -112,12 +113,21 @@ To promote a staged migration:
 
 **Done = true** when:
 
+- [~] **dbt project exists**; every transformation has a test (unique, not*null, accepted_values, custom assertions for money invariants) — \*\*scaffold landed *(this session)\_\*\* at `data-warehouse/`: 4 staging models (orgs, partners, applications, lender_decisions) + 1 ledger view (revenue_events) + 2 marts (group revenue MTD/TTM, per-business monthly) + schema tests + `is_launch_business` flag + AUD reporting currency. Funnel mart disabled until 1.2b promotes `partners.org_id`. README explains local + replica targets. Pending: read-replica DSN, dbt build in CI, Iceberg/CH backend.
 - [ ] Postgres logical replication or Debezium emits CDC events for every TENANT_OWNED table
 - [ ] Events land in object storage (S3/GCS) as Parquet via Iceberg or Delta Lake (ACID on a lake)
-- [ ] dbt project exists; every transformation has a test (unique, not_null, accepted_values, custom assertions for money invariants)
 - [ ] Query engine (ClickHouse or Snowflake or DuckDB-on-Iceberg) is wired into the dashboard for analytical queries
 - [ ] Reverse ETL pushes warehouse-derived insights back to the operational app (e.g., propensity scores)
 - [ ] Lineage from raw → staging → mart → dashboard is visible in DataHub (Phase 5 begins here)
+
+**Sub-phases:**
+
+- [~] **2.1** dbt scaffold (staging + marts + tests + README) — **Done** _(this session)_
+- [ ] **2.2** dbt build wired into CI (nightly + PR validation on touched models)
+- [ ] **2.3** Logical replication / Debezium → object storage (Parquet/Iceberg)
+- [ ] **2.4** Replica DSN swap — dbt prod profile points at read replica, never primary
+- [ ] **2.5** Per-business contract tests — Zod schemas validating each business's CDC events at the warehouse boundary
+- [ ] **2.6** Reverse-ETL loop (warehouse → app for propensity/segmentation)
 
 ---
 
@@ -219,6 +229,22 @@ To promote a staged migration:
 - [ ] Schema registry (Confluent / Buf) with versioned event schemas; breaking-change linter in CI
 - [ ] Connector library: Salesforce, HubSpot, Stripe, QuickBooks, Xero, Zendesk via Merge.dev or Nango (buy) plus 2-3 in-house for tighter integration
 - [ ] Generic outbound webhook framework already exists — extend for connector use
+
+---
+
+## Phase 11 — Commercial readiness
+
+**Why:** Phases 1–10 build the platform. Phase 11 is what makes it a sellable, billable, supportable product — the gap between "we run it for ourselves" and "we run it for paying customers."
+
+**Done = true** when:
+
+- [ ] Stripe (or equivalent) wired for per-business metering (revenue events × Pixie pulls × API calls)
+- [ ] Self-serve plan upgrade / downgrade flow with proration
+- [ ] Customer-facing audit log export (CSV / API) — auditors can pull their own evidence
+- [ ] Public status page (statuspage.io / Cachet) wired to the alert engine
+- [ ] DPA + Privacy Impact Assessment templates in `docs/legal/` ready for enterprise paper
+- [ ] Generated OpenAPI 3.1 spec + typed SDK published to a per-tenant package registry
+- [ ] Pricing page in the marketing site quotes a real number; sales can transact without engineering on the call
 
 ---
 

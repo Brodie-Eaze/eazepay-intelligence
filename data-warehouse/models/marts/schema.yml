@@ -1,0 +1,32 @@
+version: 2
+
+models:
+  - name: mart_group_revenue
+    description: |
+      Holdco-level revenue rollup (MTD / TTM / lifetime) across all
+      launch businesses, in `vars.reporting_currency`. Single-row table.
+    columns:
+      - name: reporting_currency
+        tests: [not_null]
+      - name: mtd_amount
+        tests: [not_null]
+      - name: ttm_amount
+        tests: [not_null]
+
+  - name: mart_per_business_revenue
+    description: 'Per-launch-business monthly revenue, trailing 24 months.'
+    columns:
+      - name: org_id
+        tests:
+          - not_null
+          - relationships:
+              to: ref('stg_organizations')
+              field: org_id
+      - name: month
+        tests: [not_null]
+      - name: monthly_amount
+        tests: [not_null]
+
+  # mart_business_funnel is disabled until Phase 1.2b promotes
+  # partners.org_id — see the model header. Re-enable in this file when
+  # the model's `enabled` flag flips.

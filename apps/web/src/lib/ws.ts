@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import { api } from './api';
 import type { WsEvent } from './types';
 
-const WS_BASE = process.env.NEXT_PUBLIC_WS_URL ?? 'ws://localhost:3000';
+const WS_BASE = process.env.NEXT_PUBLIC_WS_URL ?? 'ws://localhost:3010';
 
 interface WsState {
   connected: boolean;
@@ -28,7 +28,10 @@ export function useAnalyticsWebSocket(): WsState {
     const connect = async (): Promise<void> => {
       if (!aliveRef.current) return;
       try {
-        const { ticket } = await api<{ ticket: string }>('/auth/ws/ticket', { method: 'POST', body: '{}' });
+        const { ticket } = await api<{ ticket: string }>('/auth/ws/ticket', {
+          method: 'POST',
+          body: '{}',
+        });
         const ws = new WebSocket(`${WS_BASE}/ws/analytics?ticket=${encodeURIComponent(ticket)}`);
         wsRef.current = ws;
 

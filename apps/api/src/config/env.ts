@@ -42,7 +42,7 @@ const EnvSchema = z.object({
 
   CORS_ORIGINS: z
     .string()
-    .default('http://localhost:3001')
+    .default('http://localhost:3011')
     .transform((v) =>
       v
         .split(',')
@@ -97,7 +97,7 @@ const EnvSchema = z.object({
 
   // Public-facing app URL — used to build invitation + OAuth callback links
   // emailed to users. Must match the host the browser uses, not the API host.
-  APP_URL: z.string().url().default('http://localhost:3001'),
+  APP_URL: z.string().url().default('http://localhost:3011'),
 
   // ─── Email (Resend) ──────────────────────────────────────────────────────
   // Optional in dev: when RESEND_API_KEY is unset, emails log to console

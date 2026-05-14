@@ -2,6 +2,7 @@
   "name": "eazepay-intelligence",
   "version": "0.1.0",
   "private": true,
+  "license": "UNLICENSED",
   "description": "EazePay Intelligence — unified analytics + investor reporting plane for the EazePay platform",
   "packageManager": "pnpm@9.12.0",
   "engines": {
@@ -9,8 +10,7 @@
     "pnpm": ">=9.0.0"
   },
   "workspaces": [
-    "apps/*",
-    "packages/*"
+    "apps/*"
   ],
   "scripts": {
     "dev": "turbo run dev",
@@ -22,8 +22,6 @@
     "db:migrate": "pnpm --filter api db:migrate",
     "db:seed": "pnpm --filter api db:seed",
     "db:studio": "pnpm --filter api db:studio",
-    "openapi:generate": "pnpm --filter api openapi:generate",
-    "openapi:types": "pnpm --filter shared-types openapi:types",
     "format": "prettier --write \"**/*.{ts,tsx,js,json,md}\"",
     "prepare": "husky"
   },
