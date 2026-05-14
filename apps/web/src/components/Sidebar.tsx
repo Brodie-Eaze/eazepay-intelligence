@@ -102,7 +102,7 @@ const GROUPS: NavGroup[] = [
       { href: '/revenue/streams', label: 'By stream', icon: Layers },
       { href: '/revenue/ledger', label: 'Ledger', icon: BookOpen, operatorOnly: true },
       { href: '/revenue/clawbacks', label: 'Clawbacks', icon: RotateCcw, operatorOnly: true },
-      { href: '/highsale', label: 'HighSale', icon: Gauge },
+      // /highsale lives in the Decision engine group — don't double-list.
       { href: '/micamp', label: 'MiCamp', icon: CreditCard },
     ],
   },
@@ -160,6 +160,30 @@ export function Sidebar(): JSX.Element {
     }),
   })).filter((g) => g.items.length > 0);
 
+  // Single active route per render. Naive prefix matching ("does the
+  // path start with this href?") double-highlights when one item's
+  // href is a prefix of another (`/revenue` + `/revenue/streams`,
+  // `/applications` + `/applications/by-status`, `/admin` + `/admin/pricing`,
+  // etc.). We pick the longest-matching href so only the most-specific
+  // item lights up.
+  const activeHref = ((): string | null => {
+    if (!path) return null;
+    let bestHref: string | null = null;
+    let bestLen = -1;
+    for (const group of filtered) {
+      for (const item of group.items) {
+        if (path === item.href) return item.href; // exact wins
+        if (item.href !== '/overview' && path.startsWith(`${item.href}/`)) {
+          if (item.href.length > bestLen) {
+            bestLen = item.href.length;
+            bestHref = item.href;
+          }
+        }
+      }
+    }
+    return bestHref;
+  })();
+
   return (
     <aside className="w-64 shrink-0 border-r border-line2 bg-surface px-3 py-6 flex flex-col overflow-y-auto">
       <Link href="/overview" className="block mb-7 px-3">
@@ -178,9 +202,7 @@ export function Sidebar(): JSX.Element {
           </div>
           <nav className="space-y-0.5">
             {group.items.map((item) => {
-              const active =
-                path === item.href ||
-                (item.href !== '/overview' && path?.startsWith(`${item.href}/`));
+              const active = item.href === activeHref;
               const Icon = item.icon;
               return (
                 <Link
