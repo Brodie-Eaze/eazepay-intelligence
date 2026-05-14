@@ -2,7 +2,7 @@ import { defineConfig, devices } from '@playwright/test';
 
 /**
  * E2E config. Ports must match:
- *   - API dev script   → :3000 (apps/api/src/config/env.ts PORT default)
+ *   - API dev script   → :3010 (apps/api/src/config/env.ts PORT default + .env)
  *   - Web dev script   → :3011 (apps/web/package.json `dev`)
  *
  * `reuseExistingServer` skips spawning a duplicate when you've already
@@ -21,7 +21,7 @@ export default defineConfig({
   webServer: [
     {
       command: 'pnpm --filter api dev',
-      port: 3000,
+      port: 3010,
       reuseExistingServer: !process.env.CI,
       timeout: 60_000,
     },
