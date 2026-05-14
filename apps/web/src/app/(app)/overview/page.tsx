@@ -73,7 +73,7 @@ export default function OverviewPage(): JSX.Element {
   return (
     <div className="space-y-7">
       {/* ── HERO ─────────────────────────────────────────────────────────── */}
-      <section className="relative overflow-hidden rounded-2xl border border-line2 bg-gradient-to-br from-[#0B1220] via-[#111d34] to-[#0F172A] text-surface px-7 lg:px-10 py-9 lg:py-11">
+      <section className="relative overflow-hidden rounded-xl border border-line2 bg-gradient-to-br from-[#0B1220] via-[#111d34] to-[#0F172A] text-surface px-6 lg:px-8 py-5 lg:py-6">
         {/* ambient grid overlay */}
         <div
           className="absolute inset-0 opacity-[0.06] pointer-events-none"
@@ -85,58 +85,56 @@ export default function OverviewPage(): JSX.Element {
         />
         {/* gradient blob */}
         <div
-          className="absolute -right-32 -top-32 w-[420px] h-[420px] rounded-full opacity-30 pointer-events-none"
+          className="absolute -right-24 -top-24 w-[300px] h-[300px] rounded-full opacity-25 pointer-events-none"
           style={{
             background: 'radial-gradient(circle, rgba(96,165,250,0.7) 0%, rgba(96,165,250,0) 70%)',
           }}
         />
 
-        <div className="relative">
-          <div className="flex items-center gap-2 text-[10px] uppercase tracking-[0.22em] text-blue-300/70 mb-3">
-            <span className="inline-block w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-            <span>Holdco data warehouse · live</span>
-            <span className="text-blue-300/40">·</span>
-            <span>{today}</span>
-          </div>
-
-          <h1 className="text-[14px] text-blue-100/70 font-medium mb-2">
-            {greeting}
-            {userName && <span className="text-blue-200">, {userName}</span>}.
-          </h1>
-
-          <div className="flex flex-wrap items-baseline gap-x-6 gap-y-2 mb-7">
-            <div>
-              <div className="text-[11px] text-blue-200/60 uppercase tracking-wider mb-1">
-                Total revenue · this period
-              </div>
+        <div className="relative grid grid-cols-1 lg:grid-cols-[auto_1fr] gap-x-10 gap-y-4 items-center">
+          {/* Left: identity + total revenue */}
+          <div>
+            <div className="flex items-center gap-2 text-[10px] uppercase tracking-[0.22em] text-blue-300/70 mb-2">
+              <span className="inline-block w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+              <span>Holdco · live</span>
+              <span className="text-blue-300/40">·</span>
+              <span>{today}</span>
+            </div>
+            <div className="text-[10px] text-blue-200/60 uppercase tracking-wider mb-0.5">
+              {greeting}
+              {userName && (
+                <span className="text-blue-200/90 normal-case tracking-normal">, {userName}</span>
+              )}{' '}
+              · total revenue
+            </div>
+            <div className="flex items-baseline gap-3 flex-wrap">
               {isLoaded ? (
                 <CountUp
                   value={Number(o.totalRevenue)}
                   formatter={(n) => formatMoney(n)}
-                  className="text-[44px] lg:text-[56px] font-semibold tracking-tighter tabular-nums text-surface bg-gradient-to-r from-white via-white to-blue-200 bg-clip-text text-transparent"
+                  className="text-[28px] lg:text-[34px] font-semibold tracking-tight tabular-nums text-surface bg-gradient-to-r from-white via-white to-blue-200 bg-clip-text text-transparent"
                 />
               ) : (
-                <div className="text-[44px] lg:text-[56px] font-semibold tracking-tighter text-blue-200/30 numeric">
+                <div className="text-[28px] lg:text-[34px] font-semibold tracking-tight text-blue-200/30 numeric">
                   AUD …
                 </div>
               )}
-            </div>
-            {isLoaded && o.momRevenueDelta != null && (
-              <div className="flex items-baseline gap-1.5">
+              {isLoaded && o.momRevenueDelta != null && (
                 <span
-                  className={`text-[14px] font-medium numeric ${
+                  className={`text-[12px] font-medium numeric ${
                     Number(o.momRevenueDelta) >= 0 ? 'text-emerald-300' : 'text-rose-300'
                   }`}
                 >
                   {Number(o.momRevenueDelta) >= 0 ? '▲' : '▼'}{' '}
                   {formatPct(Math.abs(Number(o.momRevenueDelta)))}
+                  <span className="text-blue-200/50 font-normal ml-1">MoM</span>
                 </span>
-                <span className="text-[12px] text-blue-200/50">vs last month</span>
-              </div>
-            )}
+              )}
+            </div>
           </div>
 
-          <div className="grid grid-cols-2 md:grid-cols-5 gap-x-8 gap-y-4">
+          {/* Right: compact 4-stat strip (drops MoM since it's beside the headline) */}
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-x-5 gap-y-2 lg:border-l lg:border-white/10 lg:pl-10">
             <HeroStat
               label="Applications"
               value={f?.submitted}
@@ -147,18 +145,12 @@ export default function OverviewPage(): JSX.Element {
               label="Approval rate"
               value={isLoaded ? Number(o.approvalRate) : null}
               format="pct"
-              hint={o ? `${formatNumber(o.activePartnerCount)} active partners` : '—'}
+              hint={o ? `${formatNumber(o.activePartnerCount)} partners` : '—'}
             />
             <HeroStat
               label="Pixie pulls · 24h"
               value={o?.pixiePullsLast24h ?? 0}
-              hint="HighSale enrichments"
-            />
-            <HeroStat
-              label="MoM revenue"
-              value={isLoaded ? Number(o.momRevenueDelta) : null}
-              format="pct-delta"
-              hint="month-over-month"
+              hint="enrichments"
             />
           </div>
         </div>
@@ -225,15 +217,15 @@ function HeroStat({
 
   return (
     <div>
-      <div className="text-[10px] uppercase tracking-wider text-blue-200/50 mb-1">{label}</div>
+      <div className="text-[10px] uppercase tracking-wider text-blue-200/50 mb-0.5">{label}</div>
       <div
-        className={`text-[22px] lg:text-[26px] font-semibold tracking-tight tabular-nums numeric ${
+        className={`text-[17px] lg:text-[19px] font-semibold tracking-tight tabular-nums leading-tight ${
           positiveTrend ? 'text-emerald-300' : negativeTrend ? 'text-rose-300' : 'text-surface'
         }`}
       >
         {display}
       </div>
-      {hint && <div className="text-[11px] text-blue-200/50 mt-0.5">{hint}</div>}
+      {hint && <div className="text-[10px] text-blue-200/50 mt-0.5">{hint}</div>}
     </div>
   );
 }
