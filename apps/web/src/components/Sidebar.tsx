@@ -12,7 +12,6 @@ import {
   Target,
   Inbox,
   Kanban,
-  Filter,
   Landmark,
   Building2,
   DollarSign,
@@ -82,13 +81,11 @@ const GROUPS: NavGroup[] = [
     ],
   },
   {
-    label: 'Businesses',
+    label: 'Holdco',
     items: [
-      { href: '/portfolio', label: 'Holdco rollup', icon: Briefcase },
+      { href: '/portfolio', label: 'Holdco', icon: Briefcase },
       // Per-business drill-down lives at /portfolio/[vertical]/[business];
-      // click a row in the rollup to drill in. We don't fan out the 7
-      // direct links here because every onboarding adds another row to
-      // the rollup automatically (no nav maintenance).
+      // click a row in the rollup to drill in.
     ],
   },
   {
@@ -97,7 +94,6 @@ const GROUPS: NavGroup[] = [
       { href: '/customers', label: 'Customer book', icon: Users, operatorOnly: true },
       { href: '/applications', label: 'All applications', icon: Inbox, operatorOnly: true },
       { href: '/applications/by-status', label: 'By status', icon: Kanban, operatorOnly: true },
-      { href: '/funnel', label: 'Funnel', icon: Filter },
       { href: '/risk', label: 'Risk profiles', icon: ShieldAlert },
       { href: '/income', label: 'Income & affordability', icon: Wallet },
       { href: '/propensity', label: 'Propensity calibration', icon: Target },
@@ -122,8 +118,8 @@ const GROUPS: NavGroup[] = [
     items: [
       { href: '/data-sources', label: 'All sources', icon: Database },
       { href: '/highsale', label: 'HighSale (EZ Check)', icon: Gauge },
+      { href: '/highsale/schema', label: 'HighSale schema · 70 fields', icon: Database },
       { href: '/pixie', label: 'Pixie', icon: Sparkles },
-      { href: '/pixie/pricing', label: 'Pixie pricing', icon: Tags },
       { href: '/micamp', label: 'MiCamp', icon: CreditCard },
       { href: '/lenders', label: 'Lenders', icon: Landmark },
       { href: '/partners', label: 'Partners', icon: Building2 },

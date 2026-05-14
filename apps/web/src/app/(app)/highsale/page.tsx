@@ -108,6 +108,14 @@ export default function HighSalePage(): JSX.Element {
       <PageHeader
         title="HighSale (EZ Check)"
         subtitle="Per-application credit-data snapshots · ~70 fields per applicant · PII encrypted at rest"
+        action={
+          <Link
+            href="/highsale/schema"
+            className="text-xs px-3 py-1.5 rounded-md border border-line2 text-ink2 hover:bg-paper hover:border-accent transition"
+          >
+            Schema reference →
+          </Link>
+        }
       />
 
       {/* ── KPI strip ─────────────────────────────────────────────────── */}
