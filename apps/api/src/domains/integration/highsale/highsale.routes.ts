@@ -21,11 +21,13 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { Prisma } from '@prisma/client';
+import { z } from 'zod';
 import { getEnv } from '../../../config/env.js';
 import { getPrisma } from '../../../config/database.js';
 import { errors } from '../../../shared/errors/app-error.js';
 import { encryptPII, hashPII } from '../../../shared/utils/encryption.js';
 import { writeAuditLog } from '../../../shared/middleware/audit-log.middleware.js';
+import { requireAuth } from '../../../shared/middleware/auth.middleware.js';
 import { HighsaleSnapshotEnvelopeSchema } from './highsale-snapshot.schema.js';
 
 const SIG_HEADER = 'x-highsale-signature';
@@ -326,6 +328,126 @@ export async function registerHighsaleIntegrationRoutes(app: FastifyInstance): P
       isQualified: snap.is_qualified,
       isQualifiedBnpl: snap.is_qualified_bnpl,
       score: snap.score,
+    };
+  });
+
+  // ─── List + aggregate read endpoints for the /highsale drill page ──────
+  //
+  // GET /highsale/snapshots  → list rows (filtered) + aggregates in one
+  //                            round-trip. The UI needs both per page
+  //                            render; splitting them doubles the
+  //                            network cost for no win.
+
+  const ListQuery = z.object({
+    vertical: z.enum(['medpay', 'tradepay', 'coachpay']).optional(),
+    isQualified: z.coerce.boolean().optional(),
+    isQualifiedBnpl: z.coerce.boolean().optional(),
+    scoreMin: z.coerce.number().int().optional(),
+    scoreMax: z.coerce.number().int().optional(),
+    limit: z.coerce.number().int().min(1).max(500).default(100),
+  });
+
+  app.get('/highsale/snapshots', { preHandler: requireAuth }, async (req) => {
+    const prisma = getPrisma();
+    const q = ListQuery.parse(req.query);
+    const where: Prisma.CreditEnrichmentWhereInput = { deletedAt: null };
+    if (q.vertical) where.vertical = q.vertical;
+    if (q.isQualified !== undefined) where.isQualified = q.isQualified;
+    if (q.isQualifiedBnpl !== undefined) where.isQualifiedBnpl = q.isQualifiedBnpl;
+    if (q.scoreMin !== undefined || q.scoreMax !== undefined) {
+      where.score = {};
+      if (q.scoreMin !== undefined) where.score.gte = q.scoreMin;
+      if (q.scoreMax !== undefined) where.score.lte = q.scoreMax;
+    }
+
+    const [rows, byVertical, byQualification, scoreAgg, recent24h] = await Promise.all([
+      prisma.creditEnrichment.findMany({
+        where,
+        orderBy: { pulledAt: 'desc' },
+        take: q.limit,
+        select: {
+          id: true,
+          vertical: true,
+          pulledAt: true,
+          highsaleTransactionId: true,
+          externalApplicationId: true,
+          applicationId: true,
+          consumerEmailHash: true,
+          score: true,
+          averageGrade: true,
+          isQualified: true,
+          isQualifiedBnpl: true,
+          isQualifiedConsumerLoan: true,
+          dqReasons: true,
+          confidenceScoreBnpl: true,
+          fundingEstimateBnplCents: true,
+          availableCreditCents: true,
+          utilization: true,
+          numOfChargeOffs: true,
+          numOfRepos: true,
+          numOfForeclosures: true,
+          saleConfidenceScore: true,
+        },
+      }),
+      prisma.creditEnrichment.groupBy({
+        by: ['vertical'],
+        where: { deletedAt: null },
+        _count: { _all: true },
+        _avg: { score: true },
+      }),
+      prisma.creditEnrichment.groupBy({
+        by: ['isQualifiedBnpl'],
+        where: { deletedAt: null },
+        _count: { _all: true },
+      }),
+      prisma.creditEnrichment.aggregate({
+        where: { deletedAt: null },
+        _count: { _all: true },
+        _avg: { score: true, saleConfidenceScore: true },
+        _min: { score: true },
+        _max: { score: true },
+      }),
+      prisma.creditEnrichment.count({
+        where: { deletedAt: null, pulledAt: { gte: new Date(Date.now() - 24 * 3600_000) } },
+      }),
+    ]);
+
+    // Top DQ reasons across the filtered set — emit raw counts; UI sorts.
+    const dqCounts = new Map<string, number>();
+    for (const r of rows) {
+      for (const reason of r.dqReasons) {
+        dqCounts.set(reason, (dqCounts.get(reason) ?? 0) + 1);
+      }
+    }
+    const topDqReasons = Array.from(dqCounts.entries())
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 10)
+      .map(([reason, count]) => ({ reason, count }));
+
+    return {
+      data: rows.map((r) => ({
+        ...r,
+        consumerEmailHash: r.consumerEmailHash.toString('hex'),
+      })),
+      aggregates: {
+        total: scoreAgg._count._all,
+        last24h: recent24h,
+        avgScore: scoreAgg._avg.score,
+        minScore: scoreAgg._min.score,
+        maxScore: scoreAgg._max.score,
+        avgMlConfidence: scoreAgg._avg.saleConfidenceScore,
+        byVertical: byVertical.map((v) => ({
+          vertical: v.vertical,
+          count: v._count._all,
+          avgScore: v._avg.score,
+        })),
+        byQualification: {
+          bnplQualified: byQualification.find((b) => b.isQualifiedBnpl === true)?._count._all ?? 0,
+          bnplNotQualified:
+            byQualification.find((b) => b.isQualifiedBnpl === false)?._count._all ?? 0,
+        },
+        topDqReasons,
+      },
     };
   });
 }
