@@ -16,7 +16,6 @@
 #   PII_HASH_SECRET              (32 bytes)
 #   EAZEPAY_APP_WEBHOOK_SECRET   (64 bytes)
 #   HIGHSALE_WEBHOOK_SECRET      (64 bytes)
-#   BUZZPAY_WEBHOOK_SECRET       (32 bytes — retiring, see docs/cuts/buzzpay-removal.md)
 #   PIXIE_WEBHOOK_SECRET         (32 bytes)
 #   MICAMP_WEBHOOK_SECRET        (32 bytes)
 #   KMS_DEV_SECRET               (32 bytes — only for LocalKmsClient; AWS KMS in real prod)
@@ -68,11 +67,8 @@ PII_HASH_SECRET=$(rand 32 hex)
 #   HIGHSALE_WEBHOOK_SECRET     → HighSale outbound dispatcher
 #   PIXIE_WEBHOOK_SECRET        → Pixie outbound webhooks
 #   MICAMP_WEBHOOK_SECRET       → MiCamp outbound webhooks
-# BUZZPAY_WEBHOOK_SECRET is retired (see docs/cuts/buzzpay-removal.md) —
-# generated for backward compat until Phase B removal lands.
 EAZEPAY_APP_WEBHOOK_SECRET=$(rand 64 hex)
 HIGHSALE_WEBHOOK_SECRET=$(rand 64 hex)
-BUZZPAY_WEBHOOK_SECRET=$(rand 32 hex)
 PIXIE_WEBHOOK_SECRET=$(rand 32 hex)
 MICAMP_WEBHOOK_SECRET=$(rand 32 hex)
 

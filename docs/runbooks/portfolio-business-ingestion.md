@@ -52,13 +52,13 @@ Idempotency-Key: <UUIDv7 recommended; 16-128 chars>
 
 ```json
 {
-  "source": "BUZZPAY" | "PIXIE" | "MICAMP",
+  "source": "PIXIE" | "MICAMP",
   "eventType": "application" | "funding-status" | "clawback" | "lender-decision" | "usage" | "processing" | "reversal" | <free-form>,
   "payload": { /* event-shaped object */ }
 }
 ```
 
-> **Note:** the `BUZZPAY` source value is being retired (see [`docs/cuts/buzzpay-removal.md`](../cuts/buzzpay-removal.md)). New integrations should land their event types under a dedicated source per business — schema work in flight.
+> **Note:** the historic `BUZZPAY` source value is retired (Phase B done; see [`docs/cuts/buzzpay-removal.md`](../cuts/buzzpay-removal.md)). The Prisma enum value persists until the Phase C migration drops it. New integrations should land their event types under a dedicated source per business.
 
 **What happens server-side:**
 
@@ -87,7 +87,7 @@ If a business has event types that don't fit the existing schemas, post to `/ing
 
 For external vendors and inter-system pushes. Three surfaces:
 
-- `/api/v1/webhooks/{source}/{eventType}` — legacy per-vendor webhooks. `MICAMP` and `PIXIE` are live; `BUZZPAY` is being retired.
+- `/api/v1/webhooks/{source}/{eventType}` — per-vendor webhooks. `MICAMP` and `PIXIE` are live.
 - `/api/v1/integration/eazepay-app/events` — the dedicated sink for EazePay App's outbound dispatcher. See [`docs/integration/eazepay-app-contract.md`](../integration/eazepay-app-contract.md).
 
 All require HMAC-SHA-256 signatures.

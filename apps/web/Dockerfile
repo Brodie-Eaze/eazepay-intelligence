@@ -16,9 +16,11 @@ ARG PNPM_VERSION=9.12.0
 FROM node:${NODE_VERSION}-alpine AS deps
 RUN apk add --no-cache libc6-compat
 WORKDIR /repo
-RUN corepack enable && corepack prepare pnpm@${PNPM_VERSION} --activate
+RUN corepack enable && corepack prepare pnpm@9.12.0 --activate
 
-COPY package.json pnpm-lock.yaml pnpm-workspace.yaml turbo.json ./
+# tsconfig.base.json is referenced via `extends` in apps/web/tsconfig.json
+# (Next reads it at build time) so it must land in /repo before the build.
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml turbo.json tsconfig.base.json ./
 COPY apps/api/package.json apps/api/
 COPY apps/web/package.json apps/web/
 RUN pnpm fetch --frozen-lockfile

@@ -1,4 +1,4 @@
-import { createHmac, randomBytes } from 'node:crypto';
+import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { authenticator } from 'otplib';
 import { v7 as uuidv7 } from 'uuid';
 import type { Redis } from 'ioredis';
@@ -225,5 +225,11 @@ export function verifyCsrfToken(token: string | undefined): boolean {
   const [random, sig] = parts as [string, string];
   const env = getEnv();
   const expected = createHmac('sha256', env.JWT_ACCESS_SECRET).update(random).digest('base64url');
-  return sig === expected;
+  // Constant-time compare. A naive `sig === expected` short-circuits on the
+  // first byte mismatch and would leak the signature byte-by-byte under a
+  // chatty attacker. Use timingSafeEqual with a length-equality pre-check.
+  const sigBuf = Buffer.from(sig, 'utf8');
+  const expBuf = Buffer.from(expected, 'utf8');
+  if (sigBuf.length !== expBuf.length) return false;
+  return timingSafeEqual(sigBuf, expBuf);
 }

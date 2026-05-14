@@ -1,246 +1,177 @@
 # EazePay Intelligence
 
-Real-time financial intelligence + observability for the EazePay platform — and the holdco view of every silo we operate.
+The data warehouse for every business in the EazePay group.
 
-> Pixie smart-form (HighSale) sits in front of every BuzzPay decision. MiCamp clears the rails.
-> Every event from those three systems flows through here via signed webhooks, persists to an append-only ledger, and renders as a real-time dashboard.
->
-> On top of that, the **Portfolio** surface tracks every silo we acquire — verticals, businesses, monthly P&L, unit economics, cohorts, headcount — at the level a PE group or family office would expect to see it.
-
-**Read-only by design.** This platform never originates loans, renders decisions, or moves money. It sees everything.
+**Production:** [https://eaze-intelligence.up.railway.app](https://eaze-intelligence.up.railway.app) · demo login `admin@eazepay.local` / `Demo!1234` (rotate before any real customer sees this).
 
 ---
 
 ## What this is
 
-A modular-monolith TypeScript platform built around three pillars:
+A **read-only** analytics + observability plane covering 7 launch businesses across 3 verticals:
 
-1. **Real-time event capture.** Vendor webhooks (BuzzPay / Pixie / MiCamp) and programmatic ingestion (PAT-authenticated `/ingestion/*` endpoints) feed an append-only ledger via the outbox pattern. Two-layer idempotency makes replay safe.
-2. **Operator dashboard.** A Next.js 14 web app surfaces the entire customer book, lender funnel, revenue ledger, and portfolio holdco view. Live updates via WebSocket. Single typeface, navy + light-blue palette.
-3. **Holdco / portfolio view.** A second top-level surface tracks every silo: verticals → businesses → financial deep-dive (12-line monthly P&L, revenue breakdown, unit economics, cohort retention, headcount). Designed for PE-grade scrutiny.
+| Vertical                | Businesses                                      |
+| ----------------------- | ----------------------------------------------- |
+| Point-of-sale BNPL      | **MedPay** · **TradePay** · **CoachPay**        |
+| Aurean Holdings         | **Aurean AI** · **Aurean Recruitment**          |
+| Payments infrastructure | **MiCamp Processing** · **HighSale (EZ Check)** |
 
-**Built for SOC 2 Type 1 readiness.** Every mutation writes an audit log row in the same transaction. PII is AES-256-GCM at rest with a version-byte envelope. Append-only tables (`audit_logs`, `revenue_events`, `outbox_events`) have UPDATE/DELETE revoked at the Postgres role level — the immutability claim is enforced by the database, not the application.
+The warehouse never originates loans, renders underwriting decisions, or moves money. Third-party lenders carry the credit book. We capture every signal, attribute revenue across three rev-share streams, and surface it to operators + investors.
+
+Read [`docs/architecture/data-warehouse-overview.md`](docs/architecture/data-warehouse-overview.md) for the full mental model — four inbound planes, three rev-share streams, the four lifecycles of a BNPL application.
 
 ---
 
-## How it works (the 30-second tour)
+## The four inbound planes
 
 ```
-  BuzzPay ──┐                    ┌─────────────────────────────────┐
-  Pixie    ─┤  HMAC + IdempKey   │ POST /webhooks/...              │
-  MiCamp   ─┘ ──────────────────▶│  verify → persist → outbox      │
-                                  │  202 (target p99 < 30 ms)      │
-                                  └────────────────┬───────────────┘
-                                                   │
-                       ┌──── outbox.worker (FOR UPDATE SKIP LOCKED) ────┐
-                       ▼                                                ▼
-                 BullMQ (Redis)                            (Postgres ledger)
-                       │
-                       ▼
-            webhook.worker → application + lender_decision + revenue_event rows
-                       │
-            publishes WS event ──────► Next.js operator dashboard (live)
-                       │
-            evaluated by alert.worker every 30s ──────► Alert row + dispatch
-
-Programmatic ingestion (ETL workers, backfills):
-  PAT bearer ──► POST /ingestion/{applications,lender-decisions,revenue,…}
-              ──► same Zod schemas as the signed-webhook path
-              ──► same outbox + worker pipeline
+EazePay App     ─► /api/v1/integration/eazepay-app/events     (application lifecycle webhooks)
+HighSale        ─► /api/v1/integration/highsale/snapshots     (per-application credit data, ~70 fields)
+Lender APIs     ─► background pull adapters (one per lender)  (funded loans + repayments + arrears)
+MiCamp + Pixie  ─► /api/v1/webhooks/{micamp|pixie}/{event}    (processing fees + pre-qual usage)
 ```
 
-For the auditor-facing version, see [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
+Every payload is HMAC-signed, deduped, persisted to `webhook_events`, and drained to typed tables by the BullMQ workers. dbt re-models everything into the `analytics_staging` + `analytics_marts` schemas for the dashboard.
 
 ---
 
-## What's done, what's not
-
-The single source of truth is [`STATUS.md`](STATUS.md). One-line summary:
-
-- ✅ Foundation, auth, ingestion (vendor + programmatic), portfolio, multi-currency, multi-database, RTBF, lifecycle worker, alerting, observability (`/metrics` + OTEL traces), CI security gates (Trivy + CodeQL + SBOM), 88 unit tests + 6 live integration tests.
-- 🟡 Email/Slack alert dispatch is stubbed; aggregation worker schedule pending; coverage gating in CI pending.
-- ❌ Multi-tenancy retrofit, SSO, KMS migration — all gated on strategic decisions.
-
-For the SOC 2 control mapping line-by-line, see [`docs/governance/SOC2_CONTROLS.md`](docs/governance/SOC2_CONTROLS.md).
-For the honest tech-debt list, see [`docs/KNOWN_ISSUES.md`](docs/KNOWN_ISSUES.md).
-For the forward plan, see [`docs/ROADMAP.md`](docs/ROADMAP.md).
-
----
-
-## Quickstart
+## Quickstart — `git clone` → "I see data" (≈ 5 min)
 
 ```bash
-docker compose up -d                                    # postgres + redis
-cp .env.example .env && cp .env apps/api/.env && cp .env apps/web/.env.local
+# 1. Install
 pnpm install
-pnpm --filter api exec prisma migrate deploy
-psql "$DATABASE_URL" -f apps/api/prisma/init-timescale.sql
-pnpm --filter api db:seed                               # core seed (users, partners, apps, decisions)
-pnpm --filter api db:seed:portfolio                     # holdco demo data (verticals, silos, P&L, cohorts)
-pnpm dev
+
+# 2. Database + redis
+docker compose up -d         # local Postgres 16 + Redis 7
+
+# 3. Copy + customise env
+cp .env.example .env
+cp .env.example apps/api/.env
+cp .env.example apps/web/.env.local
+# then: openssl rand -base64 32 → paste into PII_ENCRYPTION_KEY,
+# PII_HASH_SECRET, JWT_*_SECRET, *_WEBHOOK_SECRET in apps/api/.env
+
+# 4. Migrate + seed (~30s total)
+pnpm --filter api db:migrate
+pnpm --filter api db:seed                      # demo users + default org
+pnpm --filter api db:seed:portfolio-orgs       # 7 launch businesses + DEKs + PATs
+pnpm --filter api db:seed:portfolio-businesses # holdco rollup rows
+pnpm --filter api db:seed:highsale-mock        # 10 mock HighSale applicants
+
+# 5. Run
+pnpm dev   # api on :3010, web on :3011
 ```
 
-API on `:3010`, web on `:3011`. Login `admin@eazepay.local / Demo!1234`.
-
-Demo accounts (all password `Demo!1234`):
-
-| Email                  | Role     | Sees                                           |
-| ---------------------- | -------- | ---------------------------------------------- |
-| admin@eazepay.local    | ADMIN    | Everything · users · audit · pricing · secrets |
-| operator@eazepay.local | OPERATOR | Everything except user admin · can reveal PII  |
-| viewer@eazepay.local   | VIEWER   | Read-only · masked PII                         |
-| investor@eazepay.local | INVESTOR | Aggregated views only · anonymized partners    |
-
-For end-to-end multi-DB integration tests against a real streaming-replication topology:
-
-```bash
-./scripts/test-integration-db.sh
-```
+Open <http://localhost:3011>, sign in with `admin@eazepay.local` / `Demo!1234`, land on `/overview`. You should see the warehouse landscape populated and 10 applicants on `/highsale`.
 
 ---
 
-## Repository layout
+## Where to read next
+
+| Question                                                                        | Doc                                                                                              |
+| ------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| **What is this system, where does data come from, how does revenue attribute?** | [`docs/architecture/data-warehouse-overview.md`](docs/architecture/data-warehouse-overview.md)   |
+| **How does EazePay App push events to us?**                                     | [`docs/integration/eazepay-app-contract.md`](docs/integration/eazepay-app-contract.md)           |
+| **How do I deploy to Railway?**                                                 | [`docs/runbooks/railway-deployment.md`](docs/runbooks/railway-deployment.md)                     |
+| **How do I wire a new business's ingestion?**                                   | [`docs/runbooks/portfolio-business-ingestion.md`](docs/runbooks/portfolio-business-ingestion.md) |
+| **What's queued but not done?**                                                 | [`docs/cuts/`](docs/cuts/) + [`docs/PLATFORM_V2.md`](docs/PLATFORM_V2.md)                        |
+| **How is PII / protected-class data handled?**                                  | [`SECURITY.md`](SECURITY.md) + the governance section of the architecture doc                    |
+| **What changed recently?**                                                      | [`CHANGELOG.md`](CHANGELOG.md)                                                                   |
+
+Per-app READMEs: [`apps/api/README.md`](apps/api/README.md) · [`apps/web/README.md`](apps/web/README.md) · [`data-warehouse/README.md`](data-warehouse/README.md).
+
+---
+
+## Folder layout
 
 ```
 .
-├── README.md                # this file
-├── STATUS.md                # what's done / in progress / not done
-├── CHANGELOG.md             # release notes
-├── CONTRIBUTING.md          # branch strategy + PR checklist
-├── SECURITY.md              # threat model + supply-chain controls
 ├── apps/
-│   ├── api/                 # Fastify 4 + Prisma 5 + BullMQ
-│   │   ├── prisma/          # schema, migrations, init-timescale.sql, seeds
+│   ├── api/                Fastify + Prisma + BullMQ + PostgreSQL
+│   │   ├── prisma/         Schema + migrations + seed scripts
 │   │   └── src/
-│   │       ├── config/      # env, logger, database (writer/reader/long), redis, telemetry
-│   │       ├── domains/     # alerts, applications, auth, customers, fx, ingestion, lenders,
-│   │       │                # notes, outbound-webhooks, partners, pixie, portfolio, revenue,
-│   │       │                # rtbf, scheduled-reports, search, tags, users, webhooks
-│   │       ├── shared/      # middleware (auth, scope, csrf, rbac, audit-log, rate-limit-tiers,
-│   │       │                # webhook-signature, bearer-auth), errors, queues, utils
-│   │       ├── workers/     # 8 workers: webhook, webhook-delivery, outbox, aggregation,
-│   │       │                # revenue, export, alert, lifecycle
-│   │       ├── websocket/   # analytics gateway with Redis pub/sub fanout
-│   │       ├── server.ts    # Fastify factory (plugins → routes)
-│   │       └── index.ts     # production entry (telemetry → buildServer → listen)
-│   └── web/                 # Next.js 14 App Router
-│       └── src/app/(app)/   # 30+ pages across 10 sidebar groups
-├── packages/
-│   └── shared-types/        # cross-package types (frontend ↔ backend contracts pending OpenAPI codegen)
-├── docker/                  # postgres-primary + postgres-replica init scripts (test stack)
-├── docker-compose.yml       # dev: single postgres + redis
-├── docker-compose.test.yml  # CI: primary + streaming-replica + redis
-├── scripts/
-│   └── test-integration-db.sh
+│   │       ├── config/     env, database, redis bootstraps
+│   │       ├── domains/    One folder per business domain
+│   │       ├── shared/     Middleware, utilities, errors, KMS, tenant ctx
+│   │       ├── workers/    BullMQ workers (outbox sweep, drain, aggregation, alerts)
+│   │       └── websocket/  Real-time event fan-out to the web client
+│   └── web/                Next.js 14 App Router operator console
+├── data-warehouse/         dbt project — staging + marts
 ├── docs/
-│   ├── ARCHITECTURE.md      # system diagram + ADRs
-│   ├── PRD.md               # product context, KPIs, page inventory
-│   ├── ROADMAP.md           # forward plan
-│   ├── RUNBOOK.md           # deploy / rollback / incident response / debug
-│   ├── ONBOARDING.md        # clone-to-running setup
-│   ├── ORIENTATION.md          # 30-second / 5-minute orientation
-│   ├── KNOWN_ISSUES.md      # honest tech-debt list
-│   ├── GLOSSARY.md          # domain terms
-│   ├── INGESTION.md         # dev-facing contract for plugging in data sources
-│   ├── COMPUTE_LIMITS.md    # scale envelope + failure-mode matrix
-│   └── governance/
-│       ├── SOC2_CONTROLS.md
-│       ├── PRIVACY.md
-│       └── DATA_CLASSIFICATION.md
-└── .github/
-    └── workflows/ci.yml     # build · dep-vuln-scan · static-analysis · container-scan · integration-multi-db
+│   ├── architecture/       The system mental model
+│   ├── integration/        Cross-repo contracts (EazePay App, HighSale)
+│   ├── runbooks/           Step-by-step ops (deploy, ingestion)
+│   ├── cuts/               Queued removals (BuzzPay phase B/C, PE-MIS)
+│   ├── reviews/            Handover audits
+│   └── governance/         PII / protected-class / SOC 2 framing
+├── scripts/                Shell scripts (e.g. generate-prod-secrets.sh)
+└── infra/                  Local docker-compose (Postgres + Redis)
 ```
-
----
-
-## Documentation index
-
-1. [`STATUS.md`](STATUS.md) — what's done / in progress / not
-2. [`docs/ORIENTATION.md`](docs/ORIENTATION.md) — fast tour of the codebase
-3. [`docs/ONBOARDING.md`](docs/ONBOARDING.md) — clone-to-running setup
-4. [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — system shape + ADRs
-5. [`docs/PRD.md`](docs/PRD.md) — product context, KPIs, data dictionary
-6. [`SECURITY.md`](SECURITY.md) — threat model, auth, PII, supply-chain
-7. [`docs/governance/PRIVACY.md`](docs/governance/PRIVACY.md) — APP / GDPR alignment
-8. [`docs/governance/DATA_CLASSIFICATION.md`](docs/governance/DATA_CLASSIFICATION.md) — every field, classification, retention
-9. [`docs/governance/SOC2_CONTROLS.md`](docs/governance/SOC2_CONTROLS.md) — Trust Services Criteria mapping
-10. [`docs/INGESTION.md`](docs/INGESTION.md) — how to wire any data source
-11. [`docs/COMPUTE_LIMITS.md`](docs/COMPUTE_LIMITS.md) — scale envelope
-12. [`docs/RUNBOOK.md`](docs/RUNBOOK.md) — deploy, rollback, incident response
-13. [`docs/KNOWN_ISSUES.md`](docs/KNOWN_ISSUES.md) — where the bodies are buried
-14. [`docs/GLOSSARY.md`](docs/GLOSSARY.md) — domain terms
-15. [`CONTRIBUTING.md`](CONTRIBUTING.md) — branch strategy + PR checklist
-16. [`CHANGELOG.md`](CHANGELOG.md) — release notes
-
----
-
-## Stack
-
-| Layer         | Choice                                                                                             |
-| ------------- | -------------------------------------------------------------------------------------------------- |
-| Runtime       | Node 20 LTS                                                                                        |
-| Language      | TypeScript strict (`noUncheckedIndexedAccess`, `noImplicitOverride`)                               |
-| HTTP server   | Fastify 4                                                                                          |
-| ORM           | Prisma 5.22 (with metrics preview)                                                                 |
-| Database      | PostgreSQL 16 + TimescaleDB hypertables + continuous aggregates                                    |
-| Cache + queue | Redis 7 + BullMQ                                                                                   |
-| Auth          | Cookie session (httpOnly, Secure, SameSite=Strict, CSRF double-submit) · argon2id · JWT HS256      |
-| PII           | AES-256-GCM at rest · HMAC-SHA-256 lookup hash · key versioning byte                               |
-| Observability | OpenTelemetry (HTTP + pg + Redis + Fastify + BullMQ) · Prisma Prometheus metrics · Pino structured |
-| Frontend      | Next.js 14 App Router · Tailwind · TanStack Query · Recharts · Lucide                              |
-| Monorepo      | pnpm workspaces + Turborepo                                                                        |
-| Validation    | Zod (runtime + types)                                                                              |
-| Tests         | Vitest unit · live Postgres integration via docker-compose · Playwright e2e                        |
-| CI            | GitHub Actions: build · pnpm-audit · Trivy fs + image · CodeQL · live multi-DB integration         |
-
----
-
-## Key conventions
-
-- **Per-domain layout** — `*.routes.ts → *.service.ts → *.repository.ts → *.schemas.ts → *.types.ts`. No exceptions.
-- **Prisma calls only inside `*.repository.ts`** (or directly in routes for trivial reads).
-- **Money is a string at the wire boundary.** Never crosses a JS `number`.
-- **Time is UTC ISO end-to-end.** Display tz applied at the chart.
-- **Every mutation writes an audit_log row in the same transaction.**
-- **PII fields are bytes (ciphertext) + bytes (HMAC hash).** Plaintext never touches Prisma `data` fields.
-- **Reader vs writer:** reads from the analytics surface use `getPrismaReader()` (replica when configured); writes use `getPrismaWriter()`. The reader has a runtime guard that throws on any mutating action.
-- **Single typeface** (Inter), tabular figures via `.numeric` class.
-- **Palette:** navy + light blue. No green / amber / red signal colors.
-- **Currency:** USD by default (`DEFAULT_CURRENCY`, `REPORTING_CURRENCY`); per-event `currency` respected when emitted by vendors.
 
 ---
 
 ## Common commands
 
 ```bash
-pnpm dev                                # API + web in parallel
-pnpm typecheck                          # both apps
-pnpm lint
-pnpm test                               # unit tests
-pnpm build
+# Local dev
+pnpm dev                          # api on :3010, web on :3011 (turbo runs both)
+pnpm --filter api dev             # api only
+pnpm --filter web dev             # web only
 
-pnpm --filter api db:migrate            # prisma migrate deploy
-pnpm --filter api db:migrate:dev        # prisma migrate dev (interactive)
-pnpm --filter api db:seed               # core demo data
-pnpm --filter api db:seed:portfolio     # holdco demo data
-pnpm --filter api db:studio             # prisma studio
+# Workers — required only when draining real webhook traffic
+pnpm --filter api worker:outbox   # sweeps outbox_events → BullMQ
+pnpm --filter api worker:webhook  # consumes webhook queue → typed rows
+# (others: worker:revenue, worker:aggregation, worker:alert, worker:export,
+# worker:lifecycle, worker:webhook-delivery)
 
-pnpm --filter api worker:webhook        # vendor webhook processor
-pnpm --filter api worker:outbox         # outbox sweeper
-pnpm --filter api worker:aggregation    # revenue rollups
-pnpm --filter api worker:revenue        # ledger projections
-pnpm --filter api worker:export         # async export jobs
-pnpm --filter api worker:webhook-delivery  # outbound webhook delivery
-pnpm --filter api worker:alert          # alert rule evaluator (30s poll)
-pnpm --filter api worker:lifecycle      # retention purges + RTBF processor
+# Database
+pnpm --filter api db:migrate      # prisma migrate deploy (prod-shaped)
+pnpm --filter api db:migrate:dev  # prisma migrate dev (creates new migration)
+pnpm --filter api db:studio       # Prisma Studio UI
+pnpm --filter api db:seed         # demo users + default org
+pnpm --filter api db:seed:portfolio-orgs        # 7 launch businesses
+pnpm --filter api db:seed:portfolio-businesses  # holdco rollup
+pnpm --filter api db:seed:highsale-mock         # 10 mock applicants
 
-./scripts/test-integration-db.sh        # docker-compose primary + replica + integration tests
+# Quality
+pnpm -w typecheck                 # tsc across api + web
+pnpm -w lint                      # eslint
+pnpm -w test                      # vitest
+pnpm --filter web build           # next build (smoke before deploy)
+
+# Production deploy
+# → see docs/runbooks/railway-deployment.md
 ```
 
 ---
 
-## Status
+## Quality bars
 
-`feat/portfolio-silos` branch · pre-production · all five non-strategic items from the audit shipped (multi-DB hardening, alert engine, RTBF + lifecycle, OpenTelemetry, CI security scans + SBOM, multi-currency, portfolio persistence). Three deal-blockers remain — multi-tenancy, SSO, KMS — gated on strategic decisions.
+- **Strict TypeScript everywhere.** `noUncheckedIndexedAccess`, `strict: true`, `verbatimModuleSyntax` on workers. `pnpm -w typecheck` is green at every commit (pre-commit hook enforces it).
+- **Append-only persistence** for `audit_logs`, `revenue_events`, `outbox_events`, `webhook_events`, `credit_enrichments`. UPDATE/DELETE revoked at the `eazepay_app` Postgres role.
+- **PII encrypted at rest** (AES-256-GCM, per-message random IV, version-byte envelope). Hashed for analytical join via HMAC-SHA-256 with a separate pepper.
+- **HMAC-signed webhooks** with `±300s` timestamp tolerance and two-layer idempotency (Redis SETNX hot path + Postgres unique constraint cold fallback).
+- **Outbox pattern** for at-least-once delivery to BullMQ. No two-phase commits between Postgres and Redis.
+- **Audit log** row in every state-changing transaction, tagged with principal + IP + UA.
 
-See [`STATUS.md`](STATUS.md) for the full breakdown.
+---
+
+## Status snapshot
+
+- Production: ✅ live on Railway (`https://eaze-intelligence.up.railway.app`).
+- 7 launch businesses seeded · 10 mock HighSale applicants · 3 inbound planes wired (App stub-only; HighSale + MiCamp + Pixie live; lender adapters planned in PLATFORM_V2 Phase 2.7).
+- See [`CHANGELOG.md`](CHANGELOG.md) for the per-commit log.
+- See [`docs/cuts/`](docs/cuts/) and [`HANDOVER.md`](HANDOVER.md) for what's queued.
+
+---
+
+## Who owns what
+
+| Surface                     | Owner                                                                                                                                                                                                  |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Whole repo (until handover) | Brodie · `brodie@amalafinance.com.au`                                                                                                                                                                  |
+| Production deploy           | Railway project `Eaze Intelligence` (workspace: `brodie-eaze's Projects`). Token rotation in `docs/runbooks/railway-deployment.md`                                                                     |
+| EazePay App contract        | Cross-repo — coordinate with App owner before changing the envelope. See `docs/integration/eazepay-app-contract.md`                                                                                    |
+| HighSale schema             | Owned here · single source of truth at `apps/api/src/domains/integration/highsale/highsale-snapshot.schema.ts`. When HighSale adds a field, update Zod + Prisma + the `/highsale/schema` page together |
+
+Licensing: `UNLICENSED` — proprietary. Do not distribute outside the team.

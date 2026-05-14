@@ -23,10 +23,13 @@ ARG PNPM_VERSION=9.12.0
 FROM node:${NODE_VERSION}-alpine AS deps
 RUN apk add --no-cache libc6-compat openssl
 WORKDIR /repo
-RUN corepack enable && corepack prepare pnpm@${PNPM_VERSION} --activate
+RUN corepack enable && corepack prepare pnpm@9.12.0 --activate
 
-# Copy workspace manifests first for cache hits on unchanged deps.
-COPY package.json pnpm-lock.yaml pnpm-workspace.yaml turbo.json ./
+# Copy workspace manifests + the shared tsconfig first for cache hits on
+# unchanged deps. tsconfig.base.json is referenced from each app's
+# tsconfig via `extends: ../../tsconfig.base.json` so it MUST live at the
+# build's /repo root before any `tsc` runs.
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml turbo.json tsconfig.base.json ./
 COPY apps/api/package.json apps/api/
 COPY apps/web/package.json apps/web/
 RUN pnpm fetch --frozen-lockfile
@@ -48,7 +51,7 @@ ENV NODE_ENV=production
 
 # pnpm available in the runner so the Railway preDeployCommand works
 # against the baked node_modules.
-RUN corepack enable && corepack prepare pnpm@${PNPM_VERSION} --activate
+RUN corepack enable && corepack prepare pnpm@9.12.0 --activate
 
 COPY --from=build /repo/package.json /repo/pnpm-lock.yaml /repo/pnpm-workspace.yaml ./
 COPY --from=build /repo/node_modules ./node_modules
@@ -61,4 +64,8 @@ USER node
 EXPOSE 3010
 
 ENTRYPOINT ["/sbin/tini", "--"]
-CMD ["node", "apps/api/dist/index.js"]
+# tsc preserves the source tree's directory structure under outDir because
+# the include list spans src/, tests/, and prisma/seed.ts — the common
+# parent is the package root. Entry lives at dist/src/index.js, not
+# dist/index.js. Same path used by package.json `start` in this commit.
+CMD ["node", "apps/api/dist/src/index.js"]

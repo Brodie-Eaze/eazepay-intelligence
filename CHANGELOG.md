@@ -4,6 +4,51 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning: [S
 
 ## [Unreleased] — `feat/portfolio-silos`
 
+### 2026-05-14 — Handover-readiness sweep
+
+**Added**
+
+- 🚀 **Production deploy** on Railway → <https://eaze-intelligence.up.railway.app>. Live API + Web + Postgres + Redis. See `docs/runbooks/railway-deployment.md`.
+- ⌘K **command palette** (`apps/web/src/components/CommandPalette.tsx`) — fuzzy route search + email/hash/partner-id lookup.
+- **TopBar v2** with environment badge + global search trigger + cross-subdomain auth (SameSite=None+Secure cookies in production).
+- **PageHeader v2** with auto-derived breadcrumbs + status pill on every page.
+- **Reusable `ExportButton`** + per-source CSV/JSON export endpoints (HighSale, Pixie, MiCamp, Partners, Revenue ledger). Every export is audited (`DATA_EXPORTED`).
+- **HighSale ingestion plane** (`apps/api/src/domains/integration/highsale/`) — full `CreditEnrichment` Prisma model (~70 fields), HMAC route, dbt staging + protected-class-gated demographic view, customer-detail credit card, schema-reference page, snapshot detail page.
+- **EazePay App integration contract** stub (`apps/api/src/domains/integration/eazepay-app/`) — Zod envelope + HMAC route + brand→org mapping + contract doc (`docs/integration/eazepay-app-contract.md`).
+- **dbt warehouse scaffold** (`data-warehouse/`) — staging + marts + sources + tests + README. 7-business launch filter.
+- **HighSale mock seed** — 10 applicants spanning the credit spectrum (`db:seed:highsale-mock`).
+- **CSRF on `/auth/refresh`** — prevents rotation hijack via cross-site refresh.
+- **Constant-time CSRF compare** — `verifyCsrfToken` switched from `===` to `timingSafeEqual`.
+- **per-app READMEs** (`apps/api/README.md`, `apps/web/README.md`) — domain catalogue + dev quickstart.
+- **HANDOVER.md** — Monday-morning briefing for the incoming team.
+
+**Changed**
+
+- **Sidebar IA rewritten** into 8 data-warehouse-first groups (Overview · Holdco · Customers & applications · Revenue · Data sources · Operations · Governance · Admin & workspace · Reference).
+- **Overview hero** compressed ~50% — headline + 4 stats in one row.
+- **`/highsale` snapshots** now show name + email + phone columns (decrypted server-side for ADMIN/OPERATOR, audited per page render).
+- **7-business launch** model: `medpay`, `tradepay`, `coachpay`, `aurean-ai` (renamed from `aurean-os`), `aurean-recruitment`, `micamp-processing`, `highsale`. New "Payments infrastructure" vertical.
+- **Cookies** default to `SameSite=None; Secure` in production (cross-subdomain on `*.up.railway.app`). Strict in dev.
+- **`.env.example`** — every secret now `<generate-via-openssl-rand-base64-N>` instead of literal placeholders; no more dev-grade PII key shipping in the example.
+
+**Removed (BuzzPay retirement — Phase A + B)**
+
+- `/buzzpay` + `/buzzpay/apr` web pages.
+- `/api/v1/webhooks/buzzpay/*` route group (4 endpoints).
+- `Buzzpay{Application,LenderDecision,Funding,Clawback}WebhookSchema` Zod schemas + types.
+- `WebhookProcessor.handleBuzzpay` + 4 `processBuzzpay*` private methods.
+- `BUZZPAY_WEBHOOK_SECRET` env requirement.
+- `BUZZPAY` from `secretFor()`, `RevenueStreamSchema` UI types, sidebar nav, status pill, ingestion targets, customer/partner page columns, revenue/streams UI, secrets script.
+- `/revenue/clawbacks` web page (third-party lenders carry the credit book; commission accrues at contract, no clawback semantics).
+- **Pending (Phase C)** — Prisma enum values `WebhookSource.BUZZPAY` + `RevenueStream.BUZZPAY`, `Partner.buzzpayRevSharePct`, `RevenueAggregation.buzzpayRevshareTotal`. Requires migration + data backfill — see `docs/cuts/buzzpay-removal.md`.
+
+**Fixed**
+
+- Sidebar scroll-to-top jump on every navigation (shell now `h-screen overflow-hidden`; sidebar + main have independent scroll regions).
+- `/highsale` + `/applications/by-status` etc. no longer light up parent nav items (longest-prefix active match).
+- Dockerfile pnpm ARG scoping (`PNPM_VERSION` was empty inside RUN steps).
+- Dockerfile missing `tsconfig.base.json` in build context.
+
 ### Added — Portfolio (holdco / silos surface)
 
 - **8 new Prisma models** — `PortfolioVertical`, `PortfolioBusiness`, `PortfolioFinancialPeriod`, `PortfolioRevenueChannel`, `PortfolioProductLine`, `PortfolioUnitEconomics`, `PortfolioCohort`, `PortfolioHeadcount` — replacing the v0.1 in-memory `Map` store

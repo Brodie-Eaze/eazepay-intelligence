@@ -36,7 +36,8 @@ const EnvSchema = z.object({
     }),
   PII_HASH_SECRET: z.string().min(16, 'PII_HASH_SECRET must be ≥16 chars'),
 
-  BUZZPAY_WEBHOOK_SECRET: z.string().min(16),
+  // BUZZPAY_WEBHOOK_SECRET retired — Phase B of docs/cuts/buzzpay-removal.md.
+  // The Prisma enum value WebhookSource.BUZZPAY persists until Phase C.
   PIXIE_WEBHOOK_SECRET: z.string().min(16),
   MICAMP_WEBHOOK_SECRET: z.string().min(16),
 

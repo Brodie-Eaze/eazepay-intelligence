@@ -63,18 +63,6 @@ export async function registerWebhookRoutes(app: FastifyInstance): Promise<void>
     reply.status(202).send({ accepted: true, eventId: wh.eventId });
   };
 
-  for (const evt of ['application', 'lender-decision', 'funding-status', 'clawback'] as const) {
-    app.post(
-      `/webhooks/buzzpay/${evt}`,
-      {
-        preHandler: verifyWebhookSignature(WebhookSource.BUZZPAY),
-        config: webhookRateLimit(),
-        bodyLimit: getEnv().BODY_LIMIT_WEBHOOK_BYTES,
-      },
-      ingest,
-    );
-  }
-
   app.post(
     '/webhooks/pixie/usage',
     {
