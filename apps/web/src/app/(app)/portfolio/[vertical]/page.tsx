@@ -106,7 +106,7 @@ export default function VerticalDetail(): JSX.Element {
 
       <SectionCard
         title="Businesses in this vertical"
-        subtitle="click a row for the full silo deep-dive"
+        subtitle="click a row for the full business deep-dive"
         bodyClassName="p-0"
       >
         <div className="overflow-x-auto">
@@ -121,7 +121,7 @@ export default function VerticalDetail(): JSX.Element {
                 <th className="text-right">EBITDA</th>
                 <th className="text-right">Margin</th>
                 <th className="text-right">FTEs</th>
-                <th>Acquired</th>
+                <th>Founded</th>
               </tr>
             </thead>
             <tbody>

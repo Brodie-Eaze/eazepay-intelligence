@@ -47,14 +47,14 @@ export default function PortfolioIndex(): JSX.Element {
     <div className="space-y-6">
       <PageHeader
         title="Portfolio"
-        subtitle="Every silo, grouped by vertical · the holdco view a PE group or family office would expect"
+        subtitle="Every business under the group, grouped by vertical · rolled up to a single holdco view"
       />
 
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
         <KpiCard
           label="TTM revenue"
           value={r ? formatMoney(r.ttmRevenue) : '…'}
-          hint={r ? `${formatNumber(r.activeCount)} active silos` : ''}
+          hint={r ? `${formatNumber(r.activeCount)} active businesses` : ''}
         />
         <KpiCard
           label="TTM EBITDA"
@@ -81,7 +81,7 @@ export default function PortfolioIndex(): JSX.Element {
 
       <SectionCard
         title="Verticals"
-        subtitle="click into a vertical to see its silos · roll-ups are TTM"
+        subtitle="click into a vertical to see its businesses · roll-ups are TTM"
         bodyClassName="p-0"
       >
         <div className="grid grid-cols-1 md:grid-cols-3">
@@ -119,7 +119,7 @@ export default function PortfolioIndex(): JSX.Element {
 
       <SectionCard
         title="Holdco roll-up"
-        subtitle="aggregated trailing-twelve-months · refreshes nightly from each silo's accounting feed"
+        subtitle="aggregated trailing-twelve-months · refreshes nightly from each business's reporting feed"
         bodyClassName="p-0"
       >
         <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 divide-x divide-line2">
@@ -136,7 +136,7 @@ export default function PortfolioIndex(): JSX.Element {
           <Cell
             label="TTM revenue"
             value={r ? formatMoney(r.ttmRevenue) : '—'}
-            hint="sum across silos"
+            hint="sum across businesses"
           />
           <Cell
             label="TTM EBITDA"

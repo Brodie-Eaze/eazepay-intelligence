@@ -88,14 +88,6 @@ interface UnitEconomics {
   nrr: number;
   churnMonthly: number;
 }
-interface CohortRow {
-  cohort: string;
-  customers: number;
-  m0: number;
-  m3: number;
-  m6: number;
-  m12: number;
-}
 interface HeadcountRow {
   function: string;
   ftes: number;
@@ -132,11 +124,6 @@ export default function BusinessDeepDive(): JSX.Element {
     queryFn: () => api<UnitEconomics>(`/portfolio/businesses/${business}/unit-economics`),
     enabled: Boolean(business),
   });
-  const cohorts = useQuery({
-    queryKey: ['portfolio.cohorts', business],
-    queryFn: () => api<{ cohorts: CohortRow[] }>(`/portfolio/businesses/${business}/cohorts`),
-    enabled: Boolean(business),
-  });
   const headcount = useQuery({
     queryKey: ['portfolio.headcount', business],
     queryFn: () => api<{ rows: HeadcountRow[] }>(`/portfolio/businesses/${business}/headcount`),
@@ -168,7 +155,9 @@ export default function BusinessDeepDive(): JSX.Element {
 
       <PageHeader
         title={b?.name ?? '…'}
-        subtitle={b ? `${b.segment} · ${b.hqRegion} · acquired ${b.acquiredAt}` : 'Loading silo…'}
+        subtitle={
+          b ? `${b.segment} · ${b.hqRegion} · founded ${b.acquiredAt}` : 'Loading business…'
+        }
         action={b ? <StatusPill>{b.status}</StatusPill> : undefined}
       />
 
@@ -360,7 +349,7 @@ export default function BusinessDeepDive(): JSX.Element {
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <SectionCard
           title="Revenue by channel"
-          subtitle="TTM · how the silo acquires"
+          subtitle="TTM · how the business acquires"
           bodyClassName="p-0"
         >
           <div className="overflow-x-auto">
@@ -389,7 +378,7 @@ export default function BusinessDeepDive(): JSX.Element {
 
         <SectionCard
           title="Revenue by product line"
-          subtitle="TTM · what the silo sells"
+          subtitle="TTM · what the business sells"
           bodyClassName="p-0"
         >
           <div className="overflow-x-auto">
@@ -450,45 +439,6 @@ export default function BusinessDeepDive(): JSX.Element {
             value={ue.data ? formatPct(ue.data.churnMonthly) : '—'}
             hint="monthly logo churn"
           />
-        </div>
-      </SectionCard>
-
-      <SectionCard
-        title="Cohort retention"
-        subtitle="month-0 to month-12 · share of cohort still active"
-        bodyClassName="p-0"
-      >
-        <div className="overflow-x-auto">
-          <table className="tbl">
-            <thead>
-              <tr>
-                <th>Cohort</th>
-                <th className="text-right">Customers</th>
-                <th className="text-right">M0</th>
-                <th className="text-right">M3</th>
-                <th className="text-right">M6</th>
-                <th className="text-right">M12</th>
-              </tr>
-            </thead>
-            <tbody>
-              {(cohorts.data?.cohorts ?? []).map((c) => (
-                <tr key={c.cohort}>
-                  <td className="text-ink font-medium">{c.cohort}</td>
-                  <td className="numeric text-right text-ink2">{formatNumber(c.customers)}</td>
-                  <td className="numeric text-right text-ink2">{formatPct(c.m0, 0)}</td>
-                  <td className="numeric text-right" style={{ background: heat(c.m3) }}>
-                    {formatPct(c.m3, 0)}
-                  </td>
-                  <td className="numeric text-right" style={{ background: heat(c.m6) }}>
-                    {formatPct(c.m6, 0)}
-                  </td>
-                  <td className="numeric text-right" style={{ background: heat(c.m12) }}>
-                    {formatPct(c.m12, 0)}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
         </div>
       </SectionCard>
 
@@ -620,10 +570,4 @@ function label(name: string): string {
     default:
       return name;
   }
-}
-
-function heat(v: number): string {
-  // Map 0..1 → blue intensity, capped at 0.5 alpha so text stays readable.
-  const alpha = Math.max(0.04, Math.min(0.45, v * 0.5));
-  return `rgba(29, 78, 216, ${alpha})`;
 }

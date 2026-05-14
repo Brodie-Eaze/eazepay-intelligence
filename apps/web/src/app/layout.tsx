@@ -12,7 +12,7 @@ const inter = Inter({
 
 export const metadata: Metadata = {
   title: 'EazePay Intelligence',
-  description: 'Real-time financial intelligence for the EazePay platform.',
+  description: 'Data warehouse for the EazePay group of businesses.',
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }): JSX.Element {

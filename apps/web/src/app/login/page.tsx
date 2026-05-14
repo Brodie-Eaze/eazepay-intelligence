@@ -114,7 +114,7 @@ export default function LoginPage(): JSX.Element {
 
         <div className="relative z-10 max-w-md">
           <h1 className="text-[32px] leading-[1.15] font-semibold tracking-tight">
-            The financial intelligence layer for the EazePay platform.
+            The data warehouse for every business in the EazePay group.
           </h1>
           <p className="mt-4 text-surface/55 text-[15px] leading-relaxed">
             One pane of glass over the customer book and the economics. Credit profile, risk band,
