@@ -89,6 +89,12 @@ export default function CustomerDetail({ params }: { params: { hash: string } })
     queryFn: () => api<CustomerDetail>(`/customers/${params.hash}`),
   });
 
+  const enrichments = useQuery({
+    queryKey: ['customer.credit-enrichments', params.hash],
+    queryFn: () =>
+      api<{ data: CreditEnrichmentRow[] }>(`/customers/${params.hash}/credit-enrichments`),
+  });
+
   const reveal = async (): Promise<void> => {
     setPiiBusy(true);
     setPiiErr(null);
@@ -271,6 +277,10 @@ export default function CustomerDetail({ params }: { params: { hash: string } })
       </div>
 
       <PeAnalytics customer={c} />
+
+      {enrichments.data?.data && enrichments.data.data.length > 0 && (
+        <CreditEnrichmentsCard rows={enrichments.data.data} />
+      )}
 
       <SectionCard
         title="Application history"
@@ -898,4 +908,144 @@ function computeMetrics(c: CustomerDetail): {
     calibrationDelta,
     fundingConversion,
   };
+}
+
+// ─── HighSale credit-enrichment ───────────────────────────────────────────
+//
+// Per-application credit-data snapshot pulled by HighSale on submit.
+// One card per customer — shows the most-recent N pulls.
+// Demographics are intentionally NOT surfaced here (protected-class).
+
+interface CreditEnrichmentRow {
+  id: string;
+  vertical: 'medpay' | 'tradepay' | 'coachpay';
+  pulledAt: string;
+  highsaleTransactionId: string;
+  externalApplicationId: string | null;
+  isFrozen: boolean;
+  isNoHit: boolean;
+  isInsufficientCreditData: boolean;
+  score: number;
+  averageGrade: number;
+  declineRate: string;
+  approvalRate: string;
+  isQualified: boolean;
+  isQualifiedBnpl: boolean;
+  isQualifiedConsumerLoan: boolean;
+  dqReasons: string[];
+  confidenceScore: string;
+  confidenceScoreBnpl: string;
+  fundingEstimateCents: number;
+  fundingEstimateBnplCents: number;
+  fundingEstimateConsumerLoanCents: number;
+  totalLines: number;
+  availableCreditCents: number;
+  totalCreditLimitCents: number;
+  utilization: string;
+  oldestCreditAge: number;
+  averageCreditAge: number;
+  latePayments: number;
+  collections: number;
+  trendedIncomeCents: number;
+  trendedDebtCents: number;
+  numOfChargeOffs: number;
+  numOfRepos: number;
+  numOfForeclosures: number;
+  numPrBankruptciesInLast24Months: number;
+  saleConfidenceScore: string;
+  verifiableIncomeCents: number;
+  rentPaymentCents: number;
+}
+
+function CreditEnrichmentsCard({ rows }: { rows: CreditEnrichmentRow[] }): JSX.Element {
+  const latest = rows[0]!;
+  return (
+    <SectionCard
+      title="HighSale credit profile"
+      subtitle={`${rows.length} pull${rows.length === 1 ? '' : 's'} on file · most recent ${new Date(latest.pulledAt).toLocaleDateString('en-AU')} · ${latest.vertical}`}
+    >
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-6">
+        <Cell
+          label="Score"
+          value={latest.score.toString()}
+          hint={`avg grade ${latest.averageGrade}`}
+        />
+        <Cell
+          label="Approval rate"
+          value={`${(Number(latest.approvalRate) * 100).toFixed(1)}%`}
+          hint={`decline ${(Number(latest.declineRate) * 100).toFixed(1)}%`}
+        />
+        <Cell
+          label="BNPL qualified"
+          value={latest.isQualifiedBnpl ? 'Yes' : 'No'}
+          hint={`confidence ${(Number(latest.confidenceScoreBnpl) * 100).toFixed(0)}%`}
+          tone={latest.isQualifiedBnpl ? undefined : 'danger'}
+        />
+        <Cell
+          label="BNPL funding estimate"
+          value={formatMoney(latest.fundingEstimateBnplCents / 100)}
+        />
+        <Cell
+          label="HighSale ML confidence"
+          value={`${(Number(latest.saleConfidenceScore) * 100).toFixed(1)}%`}
+        />
+      </div>
+
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-x-6 gap-y-3 text-sm border-t border-line2 pt-4">
+        <Field label="Available credit" value={formatMoney(latest.availableCreditCents / 100)} />
+        <Field label="Total credit limit" value={formatMoney(latest.totalCreditLimitCents / 100)} />
+        <Field label="Utilization" value={`${(Number(latest.utilization) * 100).toFixed(1)}%`} />
+        <Field label="Total lines" value={latest.totalLines.toString()} />
+        <Field label="Avg credit age" value={`${latest.averageCreditAge} mo`} />
+        <Field label="Oldest credit age" value={`${latest.oldestCreditAge} mo`} />
+        <Field label="Late payments" value={latest.latePayments.toString()} />
+        <Field label="Collections" value={latest.collections.toString()} />
+        <Field
+          label="Trended income (annual)"
+          value={formatMoney(latest.trendedIncomeCents / 100)}
+        />
+        <Field label="Trended debt (monthly)" value={formatMoney(latest.trendedDebtCents / 100)} />
+        <Field label="Stated income" value={formatMoney(latest.verifiableIncomeCents / 100)} />
+        <Field label="Stated rent" value={formatMoney(latest.rentPaymentCents / 100)} />
+      </div>
+
+      {(latest.numOfChargeOffs > 0 ||
+        latest.numOfRepos > 0 ||
+        latest.numOfForeclosures > 0 ||
+        latest.numPrBankruptciesInLast24Months > 0) && (
+        <div className="mt-4 p-3 border border-danger/30 bg-danger/5 rounded-md text-xs text-danger">
+          <strong className="font-medium">Adverse events:</strong>{' '}
+          {latest.numOfChargeOffs > 0 &&
+            `${latest.numOfChargeOffs} charge-off${latest.numOfChargeOffs === 1 ? '' : 's'} · `}
+          {latest.numOfRepos > 0 &&
+            `${latest.numOfRepos} repo${latest.numOfRepos === 1 ? '' : 's'} · `}
+          {latest.numOfForeclosures > 0 &&
+            `${latest.numOfForeclosures} foreclosure${latest.numOfForeclosures === 1 ? '' : 's'} · `}
+          {latest.numPrBankruptciesInLast24Months > 0 &&
+            `${latest.numPrBankruptciesInLast24Months} bankruptcy in last 24mo`}
+        </div>
+      )}
+
+      {latest.dqReasons.length > 0 && (
+        <div className="mt-3 text-xs text-muted">
+          <strong className="font-medium text-ink2">DQ reasons:</strong>{' '}
+          {latest.dqReasons.join(' · ')}
+        </div>
+      )}
+
+      <div className="mt-4 pt-3 border-t border-line2 text-[11px] text-muted">
+        HighSale transaction <code className="kbd">{latest.highsaleTransactionId}</code>
+        {latest.externalApplicationId && (
+          <>
+            {' · '}
+            application <code className="kbd">{latest.externalApplicationId}</code>
+          </>
+        )}
+        {latest.isFrozen && ' · ⚠ credit frozen'}
+        {latest.isNoHit && ' · ⚠ no-hit'}
+        {latest.isInsufficientCreditData && ' · ⚠ insufficient data'}
+        {' · demographics block (protected-class) hidden — requires protected_class_read'}
+      </div>
+    </SectionCard>
+  );
 }

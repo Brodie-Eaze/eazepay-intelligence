@@ -283,6 +283,70 @@ export async function registerCustomerRoutes(app: FastifyInstance): Promise<void
     };
   });
 
+  // ─── HighSale credit-enrichment snapshots per customer ──────────────────
+  //
+  // Returns the latest credit_enrichments row(s) for the customer
+  // identified by consumerEmailHash. Excludes the protected-class
+  // demographics block by design — surfacing those requires the
+  // `protected_class_read` permission via a separate endpoint.
+  app.get('/customers/:hash/credit-enrichments', { preHandler: requireAuth }, async (req) => {
+    const params = z.object({ hash: z.string().regex(/^[a-f0-9]{64}$/) }).parse(req.params);
+    const hashBuf = Buffer.from(params.hash, 'hex');
+    const rows = await prisma.creditEnrichment.findMany({
+      where: { consumerEmailHash: hashBuf, deletedAt: null },
+      orderBy: { pulledAt: 'desc' },
+      take: 10,
+      select: {
+        id: true,
+        vertical: true,
+        pulledAt: true,
+        highsaleTransactionId: true,
+        externalApplicationId: true,
+        // Lookup
+        isFrozen: true,
+        isNoHit: true,
+        isInsufficientCreditData: true,
+        // Grades + decision
+        score: true,
+        averageGrade: true,
+        declineRate: true,
+        approvalRate: true,
+        // Qualification
+        isQualified: true,
+        isQualifiedBnpl: true,
+        isQualifiedConsumerLoan: true,
+        dqReasons: true,
+        confidenceScore: true,
+        confidenceScoreBnpl: true,
+        fundingEstimateCents: true,
+        fundingEstimateBnplCents: true,
+        fundingEstimateConsumerLoanCents: true,
+        // Credit profile headline
+        totalLines: true,
+        availableCreditCents: true,
+        totalCreditLimitCents: true,
+        utilization: true,
+        oldestCreditAge: true,
+        averageCreditAge: true,
+        latePayments: true,
+        collections: true,
+        trendedIncomeCents: true,
+        trendedDebtCents: true,
+        // Adverse events
+        numOfChargeOffs: true,
+        numOfRepos: true,
+        numOfForeclosures: true,
+        numPrBankruptciesInLast24Months: true,
+        // ML
+        saleConfidenceScore: true,
+        // Stated (from application form)
+        verifiableIncomeCents: true,
+        rentPaymentCents: true,
+      },
+    });
+    return { data: rows };
+  });
+
   // ─── Risk distribution ───────────────────────────────────────────────────
   app.get('/analytics/risk-distribution', { preHandler: requireAuth }, async () => {
     const buckets = await prisma.$queryRaw<

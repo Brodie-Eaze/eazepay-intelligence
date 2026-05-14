@@ -52,6 +52,8 @@ import { registerAlertRoutes } from './domains/alerts/alert.routes.js';
 import { registerScheduledReportRoutes } from './domains/scheduled-reports/scheduled-report.routes.js';
 import { registerPortfolioRoutes } from './domains/portfolio/portfolio.routes.js';
 import { registerIngestionRoutes } from './domains/ingestion/ingestion.routes.js';
+import { registerEazepayAppIntegrationRoutes } from './domains/integration/eazepay-app/eazepay-app.routes.js';
+import { registerHighsaleIntegrationRoutes } from './domains/integration/highsale/highsale.routes.js';
 import { registerRtbfRoutes } from './domains/rtbf/rtbf.routes.js';
 import { registerFxRoutes } from './domains/fx/fx.routes.js';
 import { registerAnalyticsWebSocket } from './websocket/analytics.gateway.js';
@@ -260,6 +262,8 @@ export async function buildServer(): Promise<FastifyInstance> {
       await registerScheduledReportRoutes(instance);
       await registerPortfolioRoutes(instance);
       await registerIngestionRoutes(instance);
+      await registerEazepayAppIntegrationRoutes(instance);
+      await registerHighsaleIntegrationRoutes(instance);
       await registerRtbfRoutes(instance);
       await registerFxRoutes(instance);
     },

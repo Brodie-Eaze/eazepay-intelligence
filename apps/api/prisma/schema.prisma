@@ -368,6 +368,7 @@ model Organization {
   auditLogs           AuditLog[]            @relation("OrgAuditLogs")
   webhookCredentials  WebhookCredential[]   @relation("OrgWebhookCredentials")
   encryptionKeys      TenantEncryptionKey[] @relation("OrgEncryptionKeys")
+  creditEnrichments   CreditEnrichment[]    @relation("OrgCreditEnrichments")
   // More reverse relations land here as Phase 1.2c–1.2e retrofit
   // orgId onto every TENANT_OWNED table.
 
@@ -1197,4 +1198,199 @@ model TenantEncryptionKey {
   @@unique([orgId, purpose, version])
   @@index([orgId, purpose, isActive])
   @@map("tenant_encryption_keys")
+}
+
+// ─── HighSale credit enrichment (Plane 2) ──────────────────────────────────
+//
+// Per-application credit-data snapshot pulled by HighSale ("EZ Check")
+// on every BNPL application across medpay/tradepay/coachpay. Faithful
+// capture of HighSale's full payload — ~70 fields across 10 logical
+// blocks. See:
+//   apps/api/src/domains/integration/highsale/highsale-snapshot.schema.ts
+//   docs/architecture/data-warehouse-overview.md § Plane 2
+//
+// Governance:
+//   • request_body PII is AES-256-GCM ciphertext + HMAC hash for
+//     analytical join. Mirrors the Application PII pattern.
+//   • Demographics block (ethnicity, gender, marital_status, language,
+//     etc.) is FCRA / fair-lending protected class — captured here but
+//     ONLY readable through stg_credit_enrichments_protected dbt model
+//     and via roles holding the `protected_class_read` permission.
+//     Never feeds underwriting / decisioning analytics.
+
+enum HighsaleVertical {
+  medpay
+  tradepay
+  coachpay
+}
+
+model CreditEnrichment {
+  id    String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  orgId String @map("org_id") @db.Uuid
+
+  // ── Identity / linkage ───────────────────────────────────────────────────
+  /// HighSale's own transaction id. Globally unique per pull.
+  highsaleTransactionId String           @unique @map("highsale_transaction_id")
+  /// Our internal application id — threaded App → HighSale → back via
+  /// the correlation-token approach (option 1, decided 2026-05-14).
+  /// Nullable during App-side rollout window; reconciled to non-null
+  /// once App's HighSale client passes the token through.
+  applicationId         String?          @map("application_id") @db.Uuid
+  /// External application id from the upstream form. May be present
+  /// before we've resolved the internal application uuid.
+  externalApplicationId String?          @map("external_application_id")
+  vertical              HighsaleVertical
+  pulledAt              DateTime         @map("pulled_at") @db.Timestamptz(6)
+
+  // ── PII echo (encrypted at rest) ─────────────────────────────────────────
+  consumerNameCiphertext    Bytes  @map("consumer_name_ciphertext")
+  consumerEmailCiphertext   Bytes  @map("consumer_email_ciphertext")
+  consumerEmailHash         Bytes  @map("consumer_email_hash")
+  consumerPhoneCiphertext   Bytes  @map("consumer_phone_ciphertext")
+  consumerPhoneHash         Bytes  @map("consumer_phone_hash")
+  dateOfBirthCiphertext     Bytes  @map("date_of_birth_ciphertext")
+  dateOfBirthHash           Bytes  @map("date_of_birth_hash")
+  /// Concatenated address ciphertext (line1 + line2 + city + state + zip).
+  /// Kept as a single field — we don't anchor analytics on address
+  /// components, and a single envelope is cheaper than five.
+  addressCiphertext         Bytes  @map("address_ciphertext")
+  /// Stated income from the application form (NOT the credit-bureau
+  /// trended_income). Plaintext — already coarse-grained and operator-
+  /// surfaced at the partner level.
+  verifiableIncomeCents     Int    @map("verifiable_income_cents")
+  rentPaymentCents          Int    @map("rent_payment_cents")
+
+  // ── Lookup outcome flags ─────────────────────────────────────────────────
+  isFrozen                 Boolean @map("is_frozen")
+  isNoHit                  Boolean @map("is_no_hit")
+  isAddressAppend          Boolean @map("is_address_append")
+  isAddressNoHit           Boolean @map("is_address_no_hit")
+  isInsufficientCreditData Boolean @map("is_insufficient_credit_data")
+
+  // ── HighSale grades (10 categorical 0..N) ────────────────────────────────
+  score                Int
+  creditLineGrade      Int @map("credit_line_grade")
+  revolvingLinesGrade  Int @map("revolving_lines_grade")
+  oldestAccountGrade   Int @map("oldest_account_grade")
+  latePaymentsGrade    Int @map("late_payments_grade")
+  collectionsGrade     Int @map("collections_grade")
+  newLinesGrade        Int @map("new_lines_grade")
+  utilizationGrade     Int @map("utilization_grade")
+  recentInquiriesGrade Int @map("recent_inquiries_grade")
+  averageGrade         Int @map("average_grade")
+
+  // ── Decision rates ───────────────────────────────────────────────────────
+  declineRate  Decimal @map("decline_rate") @db.Decimal(5, 4)
+  approvalRate Decimal @map("approval_rate") @db.Decimal(5, 4)
+
+  // ── Inquiry quotas ───────────────────────────────────────────────────────
+  personalRemainingInquiries     Int @map("personal_remaining_inquiries")
+  personalLoanRemainingInquiries Int @map("personal_loan_remaining_inquiries")
+  businessRemainingInquiries     Int @map("business_remaining_inquiries")
+
+  // ── Aggregate credit profile ─────────────────────────────────────────────
+  totalLines               Int     @map("total_lines")
+  totalRevolvingLines      Int     @map("total_revolving_lines")
+  availableCreditCents     Int     @map("available_credit_cents")
+  averageCreditLimitCents  Int     @map("average_credit_limit_cents")
+  totalCreditLimitCents    Int     @map("total_credit_limit_cents")
+  oldestCreditAge          Int     @map("oldest_credit_age")
+  averageCreditAge         Int     @map("average_credit_age")
+  totalInquiries           Int     @map("total_inquiries")
+  utilization              Decimal @db.Decimal(5, 4)
+  latePayments             Int     @map("late_payments")
+  collections              Int
+  trendedIncomeCents       Int     @map("trended_income_cents")
+  trendedDebtCents         Int     @map("trended_debt_cents")
+
+  // ── Qualification outputs ────────────────────────────────────────────────
+  isQualified                  Boolean  @map("is_qualified")
+  /// Reason codes when not qualified. Empty array when qualified.
+  dqReasons                    String[] @map("dq_reasons")
+  confidenceScore              Decimal  @map("confidence_score") @db.Decimal(5, 4)
+  fundingEstimateCents         Int      @map("funding_estimate_cents")
+  isQualifiedBnpl              Boolean  @map("is_qualified_bnpl")
+  confidenceScoreBnpl          Decimal  @map("confidence_score_bnpl") @db.Decimal(5, 4)
+  fundingEstimateBnplCents     Int      @map("funding_estimate_bnpl_cents")
+  isQualifiedConsumerLoan      Boolean  @map("is_qualified_consumer_loan")
+  fundingEstimateConsumerLoanCents Int  @map("funding_estimate_consumer_loan_cents")
+
+  // ── Tradeline detail (28 fields) ─────────────────────────────────────────
+  numSatisfactoryTradeLines                                Int     @map("num_satisfactory_trade_lines")
+  numTradeLinesOpenedInLast6Months                         Int     @map("num_trade_lines_opened_in_last_6_months")
+  monthsSinceMostRecentDelinquency                         Int     @map("months_since_most_recent_delinquency")
+  numPrBankruptciesInLast24Months                          Int     @map("num_pr_bankruptcies_in_last_24_months")
+  totalMonthlyObligationCents                              Int     @map("total_monthly_obligation_cents")
+  numThirdPartyCollectionsWithBalance                      Int     @map("num_third_party_collections_with_balance")
+  numOpenHomeEquityLoanTrades                              Int     @map("num_open_home_equity_loan_trades")
+  totalCreditUnionCreditLinesInLast12Months                Int     @map("total_credit_union_credit_lines_in_last_12_months")
+  totalBalanceOfOpenCreditUnionTradeLinesInLast12MonthsCents Int   @map("total_balance_of_open_credit_union_trade_lines_in_last_12_months_cents")
+  monthsSinceMostRecentCreditUnionTradeOpened              Int     @map("months_since_most_recent_credit_union_trade_opened")
+  totalBalanceOfOpenRevolvingTradesInLast12MonthsCents     Int     @map("total_balance_of_open_revolving_trades_in_last_12_months_cents")
+  utilizationOfOpenRevolvingTradesInLast12Months           Decimal @map("utilization_of_open_revolving_trades_in_last_12_months") @db.Decimal(5, 4)
+  numOfRepoTrades                                          Int     @map("num_of_repo_trades")
+  totalBalanceOfRepoTradesCents                            Int     @map("total_balance_of_repo_trades_cents")
+  numOfRetailTrades                                        Int     @map("num_of_retail_trades")
+  numOfOpenRetailTrades                                    Int     @map("num_of_open_retail_trades")
+  numOfThirdPartyCollections                               Int     @map("num_of_third_party_collections")
+  numOfNonMedicalThirdPartyCollections                     Int     @map("num_of_non_medical_third_party_collections")
+  numOfThirdPartyCollectionsInTheLast36Months              Int     @map("num_of_third_party_collections_in_the_last_36_months")
+  numOfStudentLoanTrades                                   Int     @map("num_of_student_loan_trades")
+  numOfOpenStudentLoanTrades                               Int     @map("num_of_open_student_loan_trades")
+  numOfSatisfactoryOpenStudentLoanTrades                   Int     @map("num_of_satisfactory_open_student_loan_trades")
+  numOf90PlusDaysPastDueStudentLoans                       Int     @map("num_of_90_plus_days_past_due_student_loans")
+  numOfAuthUserTrades                                      Int     @map("num_of_auth_user_trades")
+  numOpenUnsecuredInstallmentTrades                        Int     @map("num_open_unsecured_installment_trades")
+  totalOpenUnsecuredInstallmentTradesInLast12Months        Int     @map("total_open_unsecured_installment_trades_in_last_12_months")
+  percentOfOpenUnsecuredInstallmentTradesGt75InLast12Months Decimal @map("percent_of_open_unsecured_installment_trades_gt_75_in_last_12_months") @db.Decimal(5, 4)
+  utilizationOfOpenUnsecuredVerifiedInstallmentTradesInLast12Months Decimal @map("utilization_of_open_unsecured_verified_installment_trades_in_last_12_months") @db.Decimal(5, 4)
+
+  // ── Adverse events ───────────────────────────────────────────────────────
+  numOfChargeOffs   Int @map("num_of_charge_offs")
+  numOfRepos        Int @map("num_of_repos")
+  numOfForeclosures Int @map("num_of_foreclosures")
+
+  // ── HighSale-proprietary ML output ───────────────────────────────────────
+  saleConfidenceScore Decimal @map("sale_confidence_score") @db.Decimal(5, 4)
+
+  // ── Demographics (protected-class — read-gated downstream) ───────────────
+  /// FCRA / fair-lending protected-class fields. Captured because
+  /// HighSale sends them, but NEVER feed underwriting / decisioning.
+  /// Surfaced only through stg_credit_enrichments_protected dbt model.
+  estimatedIncomeBand       String? @map("estimated_income_band")
+  numberOfChildren          String? @map("number_of_children")
+  maritalStatus             String? @map("marital_status")
+  occupationGroup           String? @map("occupation_group")
+  occupation                String?
+  education                 String?
+  businessOwner             String? @map("business_owner")
+  gender                    String?
+  netWorth                  String? @map("net_worth")
+  estimatedCurrentHomeValue String? @map("estimated_current_home_value")
+  ethnicity                 String?
+  ethnicGroup               String? @map("ethnic_group")
+  language                  String?
+
+  // ── Forensic completeness ────────────────────────────────────────────────
+  /// Full raw HighSale JSON. Belt-and-braces — captures any field
+  /// HighSale adds before we promote it to a typed column, and lets
+  /// support reproduce decisions made against historical payloads.
+  rawPayload Json @map("raw_payload") @db.JsonB
+
+  // ── Bookkeeping ──────────────────────────────────────────────────────────
+  receivedAt DateTime  @default(now()) @map("received_at") @db.Timestamptz(6)
+  deletedAt  DateTime? @map("deleted_at") @db.Timestamptz(6)
+  createdAt  DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt  DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  org Organization @relation("OrgCreditEnrichments", fields: [orgId], references: [id])
+
+  @@index([orgId, pulledAt(sort: Desc)])
+  @@index([vertical, pulledAt(sort: Desc)])
+  @@index([applicationId])
+  @@index([externalApplicationId])
+  @@index([consumerEmailHash])
+  @@index([consumerPhoneHash])
+  @@index([isQualifiedBnpl, vertical, pulledAt(sort: Desc)])
+  @@map("credit_enrichments")
 }

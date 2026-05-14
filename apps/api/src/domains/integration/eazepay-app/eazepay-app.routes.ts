@@ -61,7 +61,7 @@ function verifySignature(
 }
 
 export async function registerEazepayAppIntegrationRoutes(app: FastifyInstance): Promise<void> {
-  app.post('/api/v1/integration/eazepay-app/events', async (req, reply) => {
+  app.post('/integration/eazepay-app/events', async (req, reply) => {
     const env = getEnv();
 
     // ─── Header presence ───────────────────────────────────────────────

@@ -74,3 +74,10 @@ sources:
         freshness:
           warn_after: { count: 1, period: hour }
           error_after: { count: 6, period: hour }
+
+      - name: credit_enrichments
+        description: 'HighSale (EZ Check) credit-data snapshots — one row per BNPL application. PII columns are encrypted bytea; the staging models use only the hash columns. See docs/architecture/data-warehouse-overview.md § Plane 2.'
+        loaded_at_field: pulled_at
+        freshness:
+          warn_after: { count: 6, period: hour }
+          error_after: { count: 24, period: hour }

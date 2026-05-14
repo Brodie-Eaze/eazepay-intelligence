@@ -21,7 +21,7 @@
 -- analytical join) DO surface as `consumer_email_hash` /
 -- `consumer_phone_hash`, mirroring how `stg_applications` handles them.
 
-{{ config(materialized='view', enabled=false) }}
+{{ config(materialized='view') }}
 
 select
   -- Identity + linkage

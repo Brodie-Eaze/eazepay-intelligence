@@ -26,7 +26,7 @@
 -- main credit_enrichments table. See
 --   docs/architecture/data-warehouse-overview.md § Plane 2 governance
 
-{{ config(materialized='view', enabled=false, tags=['staging', 'protected_class']) }}
+{{ config(materialized='view', tags=['staging', 'protected_class']) }}
 
 select
   id                            as snapshot_id,
