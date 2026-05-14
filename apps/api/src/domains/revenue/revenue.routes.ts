@@ -3,6 +3,8 @@ import { z } from 'zod';
 import { getPrismaReader } from '../../config/database.js';
 import { requireAuth } from '../../shared/middleware/auth.middleware.js';
 import { denyInvestorScope } from '../../shared/middleware/rbac.middleware.js';
+import { writeAuditLog } from '../../shared/middleware/audit-log.middleware.js';
+import { rowsToCsv, attachmentHeader } from '../../shared/utils/csv.js';
 import { partnerLabel } from '../partners/partner.types.js';
 import { RevenueRepository } from './revenue.repository.js';
 import { RevenueService } from './revenue.service.js';
@@ -54,6 +56,72 @@ export async function registerRevenueRoutes(app: FastifyInstance): Promise<void>
       total: r.total,
     }));
   });
+
+  // ─── Export — revenue ledger as CSV / JSON ────────────────────────────
+  //
+  // Reuses the ledger query (stream / partner / from / to). Default cap
+  // 50k rows. Always audited as DATA_EXPORTED.
+  const ExportQuery = RevenueLedgerQuerySchema.omit({ limit: true, cursor: true }).extend({
+    format: z.enum(['csv', 'json']).default('csv'),
+  });
+
+  app.get(
+    '/revenue/ledger/export',
+    { preHandler: [requireAuth, denyInvestorScope] },
+    async (req, reply) => {
+      const q = ExportQuery.parse(req.query);
+      // Pull all rows matching the filter (one page, large cap)
+      const page = await service.ledger({ ...q, limit: 50_000, cursor: undefined });
+
+      await writeAuditLog({
+        req,
+        action: 'DATA_EXPORTED',
+        resourceType: 'revenue_event',
+        metadata: {
+          source: q.stream ?? 'all',
+          format: q.format,
+          rowCount: page.data.length,
+          filters: {
+            stream: q.stream ?? null,
+            partnerId: q.partnerId ?? null,
+            from: q.from ?? null,
+            to: q.to ?? null,
+          },
+        },
+      });
+
+      const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+      const streamTag = q.stream ? `_${q.stream.toLowerCase()}` : '';
+      const filename = `revenue_ledger${streamTag}_${timestamp}.${q.format}`;
+
+      const columns: Array<{ key: string; pick?: (r: (typeof page.data)[number]) => unknown }> = [
+        { key: 'idempotency_key', pick: (r) => r.idempotencyKey },
+        { key: 'partner_id', pick: (r) => r.partnerId },
+        { key: 'lender_decision_id', pick: (r) => r.lenderDecisionId },
+        { key: 'source', pick: (r) => r.source },
+        { key: 'stream', pick: (r) => r.stream },
+        { key: 'event_type', pick: (r) => r.eventType },
+        { key: 'amount', pick: (r) => r.amount.toString() },
+        { key: 'currency', pick: (r) => r.currency },
+        { key: 'effective_at', pick: (r) => r.effectiveAt.toISOString() },
+        { key: 'recorded_at', pick: (r) => r.recordedAt.toISOString() },
+        { key: 'metadata', pick: (r) => (r.metadata ? JSON.stringify(r.metadata) : null) },
+      ];
+
+      if (q.format === 'json') {
+        reply.header('Content-Type', 'application/json');
+        reply.header('Content-Disposition', attachmentHeader(filename));
+        return page.data.map((r) => {
+          const obj: Record<string, unknown> = {};
+          for (const c of columns) obj[c.key] = c.pick ? c.pick(r) : null;
+          return obj;
+        });
+      }
+      reply.header('Content-Type', 'text/csv; charset=utf-8');
+      reply.header('Content-Disposition', attachmentHeader(filename));
+      return rowsToCsv(page.data, columns);
+    },
+  );
 
   app.get('/revenue/clawbacks', { preHandler: [requireAuth, denyInvestorScope] }, async (req) => {
     const q = RangeQuery.parse(req.query);

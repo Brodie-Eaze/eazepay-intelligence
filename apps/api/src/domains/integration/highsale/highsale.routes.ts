@@ -28,6 +28,7 @@ import { errors } from '../../../shared/errors/app-error.js';
 import { encryptPII, hashPII } from '../../../shared/utils/encryption.js';
 import { writeAuditLog } from '../../../shared/middleware/audit-log.middleware.js';
 import { requireAuth } from '../../../shared/middleware/auth.middleware.js';
+import { rowsToCsv, attachmentHeader } from '../../../shared/utils/csv.js';
 import { HighsaleSnapshotEnvelopeSchema } from './highsale-snapshot.schema.js';
 
 const SIG_HEADER = 'x-highsale-signature';
@@ -622,5 +623,272 @@ export async function registerHighsaleIntegrationRoutes(app: FastifyInstance): P
 
       rawPayload: row.rawPayload,
     };
+  });
+
+  // ─── Export — CSV or JSON, respects filters, audited ───────────────────
+  //
+  // GET /highsale/snapshots/export?format=csv&vertical=&isQualifiedBnpl=&
+  //                                 scoreMin=&scoreMax=&includeProtected=
+  // Returns up to 50k rows in one shot. PII columns export as hashes only
+  // (never plaintext). The protected-class demographics block is OFF by
+  // default; including it requires ADMIN role + flips on the
+  // PROTECTED_CLASS_READ audit row alongside DATA_EXPORTED.
+  const ExportQuery = ListQuery.extend({
+    format: z.enum(['csv', 'json']).default('csv'),
+    includeProtected: z.coerce.boolean().default(false),
+  });
+
+  app.get('/highsale/snapshots/export', { preHandler: requireAuth }, async (req, reply) => {
+    const prisma = getPrisma();
+    const q = ExportQuery.parse(req.query);
+
+    if (q.includeProtected && req.auth?.role !== 'ADMIN') {
+      throw errors.forbidden('Including protected-class demographics requires ADMIN role.');
+    }
+
+    const where: Prisma.CreditEnrichmentWhereInput = { deletedAt: null };
+    if (q.vertical) where.vertical = q.vertical;
+    if (q.isQualified !== undefined) where.isQualified = q.isQualified;
+    if (q.isQualifiedBnpl !== undefined) where.isQualifiedBnpl = q.isQualifiedBnpl;
+    if (q.scoreMin !== undefined || q.scoreMax !== undefined) {
+      where.score = {};
+      if (q.scoreMin !== undefined) where.score.gte = q.scoreMin;
+      if (q.scoreMax !== undefined) where.score.lte = q.scoreMax;
+    }
+
+    const rows = await prisma.creditEnrichment.findMany({
+      where,
+      orderBy: { pulledAt: 'desc' },
+      take: 50_000,
+    });
+
+    // Always audit. Protected-class inclusion gets a second row.
+    await writeAuditLog({
+      req,
+      action: 'DATA_EXPORTED',
+      resourceType: 'credit_enrichment',
+      metadata: {
+        source: 'highsale',
+        format: q.format,
+        rowCount: rows.length,
+        filters: {
+          vertical: q.vertical ?? null,
+          isQualified: q.isQualified ?? null,
+          isQualifiedBnpl: q.isQualifiedBnpl ?? null,
+          scoreMin: q.scoreMin ?? null,
+          scoreMax: q.scoreMax ?? null,
+          includeProtected: q.includeProtected,
+        },
+      },
+    });
+    if (q.includeProtected) {
+      await writeAuditLog({
+        req,
+        action: 'PROTECTED_CLASS_READ',
+        resourceType: 'credit_enrichment',
+        metadata: {
+          via: 'export',
+          rowCount: rows.length,
+          format: q.format,
+        },
+      });
+    }
+
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const verticalTag = q.vertical ? `_${q.vertical}` : '';
+    const protectedTag = q.includeProtected ? '_protected' : '';
+    const filename = `highsale_snapshots${verticalTag}${protectedTag}_${timestamp}.${q.format}`;
+
+    // Columns intentionally explicit — order + naming matters for SQL
+    // joins downstream. Money columns are integer cents (matches the
+    // schema reference). Demographics columns only added when allowed.
+    const columns: Array<{ key: string; pick?: (r: (typeof rows)[number]) => unknown }> = [
+      { key: 'snapshot_id', pick: (r) => r.id },
+      { key: 'highsale_transaction_id', pick: (r) => r.highsaleTransactionId },
+      { key: 'external_application_id', pick: (r) => r.externalApplicationId },
+      { key: 'application_id', pick: (r) => r.applicationId },
+      { key: 'org_id', pick: (r) => r.orgId },
+      { key: 'vertical', pick: (r) => r.vertical },
+      { key: 'pulled_at', pick: (r) => r.pulledAt.toISOString() },
+      { key: 'received_at', pick: (r) => r.receivedAt.toISOString() },
+      // PII as hashes only
+      { key: 'consumer_email_hash', pick: (r) => r.consumerEmailHash.toString('hex') },
+      { key: 'consumer_phone_hash', pick: (r) => r.consumerPhoneHash.toString('hex') },
+      { key: 'date_of_birth_hash', pick: (r) => r.dateOfBirthHash.toString('hex') },
+      // Stated income (already plain — not bureau data)
+      { key: 'verifiable_income_cents', pick: (r) => r.verifiableIncomeCents },
+      { key: 'rent_payment_cents', pick: (r) => r.rentPaymentCents },
+      // Lookup
+      { key: 'is_frozen', pick: (r) => r.isFrozen },
+      { key: 'is_no_hit', pick: (r) => r.isNoHit },
+      { key: 'is_address_append', pick: (r) => r.isAddressAppend },
+      { key: 'is_address_no_hit', pick: (r) => r.isAddressNoHit },
+      { key: 'is_insufficient_credit_data', pick: (r) => r.isInsufficientCreditData },
+      // Grades
+      { key: 'score', pick: (r) => r.score },
+      { key: 'credit_line_grade', pick: (r) => r.creditLineGrade },
+      { key: 'revolving_lines_grade', pick: (r) => r.revolvingLinesGrade },
+      { key: 'oldest_account_grade', pick: (r) => r.oldestAccountGrade },
+      { key: 'late_payments_grade', pick: (r) => r.latePaymentsGrade },
+      { key: 'collections_grade', pick: (r) => r.collectionsGrade },
+      { key: 'new_lines_grade', pick: (r) => r.newLinesGrade },
+      { key: 'utilization_grade', pick: (r) => r.utilizationGrade },
+      { key: 'recent_inquiries_grade', pick: (r) => r.recentInquiriesGrade },
+      { key: 'average_grade', pick: (r) => r.averageGrade },
+      // Decision rates
+      { key: 'decline_rate', pick: (r) => r.declineRate.toString() },
+      { key: 'approval_rate', pick: (r) => r.approvalRate.toString() },
+      // Inquiry quotas
+      { key: 'personal_remaining_inquiries', pick: (r) => r.personalRemainingInquiries },
+      { key: 'personal_loan_remaining_inquiries', pick: (r) => r.personalLoanRemainingInquiries },
+      { key: 'business_remaining_inquiries', pick: (r) => r.businessRemainingInquiries },
+      // Credit profile
+      { key: 'total_lines', pick: (r) => r.totalLines },
+      { key: 'total_revolving_lines', pick: (r) => r.totalRevolvingLines },
+      { key: 'available_credit_cents', pick: (r) => r.availableCreditCents },
+      { key: 'average_credit_limit_cents', pick: (r) => r.averageCreditLimitCents },
+      { key: 'total_credit_limit_cents', pick: (r) => r.totalCreditLimitCents },
+      { key: 'oldest_credit_age', pick: (r) => r.oldestCreditAge },
+      { key: 'average_credit_age', pick: (r) => r.averageCreditAge },
+      { key: 'total_inquiries', pick: (r) => r.totalInquiries },
+      { key: 'utilization', pick: (r) => r.utilization.toString() },
+      { key: 'late_payments', pick: (r) => r.latePayments },
+      { key: 'collections', pick: (r) => r.collections },
+      { key: 'trended_income_cents', pick: (r) => r.trendedIncomeCents },
+      { key: 'trended_debt_cents', pick: (r) => r.trendedDebtCents },
+      // Qualification
+      { key: 'is_qualified', pick: (r) => r.isQualified },
+      { key: 'dq_reasons', pick: (r) => r.dqReasons.join(';') },
+      { key: 'confidence_score', pick: (r) => r.confidenceScore.toString() },
+      { key: 'funding_estimate_cents', pick: (r) => r.fundingEstimateCents },
+      { key: 'is_qualified_bnpl', pick: (r) => r.isQualifiedBnpl },
+      { key: 'confidence_score_bnpl', pick: (r) => r.confidenceScoreBnpl.toString() },
+      { key: 'funding_estimate_bnpl_cents', pick: (r) => r.fundingEstimateBnplCents },
+      { key: 'is_qualified_consumer_loan', pick: (r) => r.isQualifiedConsumerLoan },
+      {
+        key: 'funding_estimate_consumer_loan_cents',
+        pick: (r) => r.fundingEstimateConsumerLoanCents,
+      },
+      // Tradeline detail
+      { key: 'num_satisfactory_trade_lines', pick: (r) => r.numSatisfactoryTradeLines },
+      {
+        key: 'num_trade_lines_opened_in_last_6_months',
+        pick: (r) => r.numTradeLinesOpenedInLast6Months,
+      },
+      {
+        key: 'months_since_most_recent_delinquency',
+        pick: (r) => r.monthsSinceMostRecentDelinquency,
+      },
+      {
+        key: 'num_pr_bankruptcies_in_last_24_months',
+        pick: (r) => r.numPrBankruptciesInLast24Months,
+      },
+      { key: 'total_monthly_obligation_cents', pick: (r) => r.totalMonthlyObligationCents },
+      {
+        key: 'num_third_party_collections_with_balance',
+        pick: (r) => r.numThirdPartyCollectionsWithBalance,
+      },
+      { key: 'num_open_home_equity_loan_trades', pick: (r) => r.numOpenHomeEquityLoanTrades },
+      {
+        key: 'total_credit_union_credit_lines_in_last_12_months',
+        pick: (r) => r.totalCreditUnionCreditLinesInLast12Months,
+      },
+      {
+        key: 'total_balance_of_open_credit_union_trade_lines_in_last_12_months_cents',
+        pick: (r) => r.totalBalanceOfOpenCreditUnionTradeLinesInLast12MonthsCents,
+      },
+      {
+        key: 'months_since_most_recent_credit_union_trade_opened',
+        pick: (r) => r.monthsSinceMostRecentCreditUnionTradeOpened,
+      },
+      {
+        key: 'total_balance_of_open_revolving_trades_in_last_12_months_cents',
+        pick: (r) => r.totalBalanceOfOpenRevolvingTradesInLast12MonthsCents,
+      },
+      {
+        key: 'utilization_of_open_revolving_trades_in_last_12_months',
+        pick: (r) => r.utilizationOfOpenRevolvingTradesInLast12Months.toString(),
+      },
+      { key: 'num_of_repo_trades', pick: (r) => r.numOfRepoTrades },
+      { key: 'total_balance_of_repo_trades_cents', pick: (r) => r.totalBalanceOfRepoTradesCents },
+      { key: 'num_of_retail_trades', pick: (r) => r.numOfRetailTrades },
+      { key: 'num_of_open_retail_trades', pick: (r) => r.numOfOpenRetailTrades },
+      { key: 'num_of_third_party_collections', pick: (r) => r.numOfThirdPartyCollections },
+      {
+        key: 'num_of_non_medical_third_party_collections',
+        pick: (r) => r.numOfNonMedicalThirdPartyCollections,
+      },
+      {
+        key: 'num_of_third_party_collections_in_the_last_36_months',
+        pick: (r) => r.numOfThirdPartyCollectionsInTheLast36Months,
+      },
+      { key: 'num_of_student_loan_trades', pick: (r) => r.numOfStudentLoanTrades },
+      { key: 'num_of_open_student_loan_trades', pick: (r) => r.numOfOpenStudentLoanTrades },
+      {
+        key: 'num_of_satisfactory_open_student_loan_trades',
+        pick: (r) => r.numOfSatisfactoryOpenStudentLoanTrades,
+      },
+      {
+        key: 'num_of_90_plus_days_past_due_student_loans',
+        pick: (r) => r.numOf90PlusDaysPastDueStudentLoans,
+      },
+      { key: 'num_of_auth_user_trades', pick: (r) => r.numOfAuthUserTrades },
+      {
+        key: 'num_open_unsecured_installment_trades',
+        pick: (r) => r.numOpenUnsecuredInstallmentTrades,
+      },
+      {
+        key: 'total_open_unsecured_installment_trades_in_last_12_months',
+        pick: (r) => r.totalOpenUnsecuredInstallmentTradesInLast12Months,
+      },
+      {
+        key: 'percent_of_open_unsecured_installment_trades_gt_75_in_last_12_months',
+        pick: (r) => r.percentOfOpenUnsecuredInstallmentTradesGt75InLast12Months.toString(),
+      },
+      {
+        key: 'utilization_of_open_unsecured_verified_installment_trades_in_last_12_months',
+        pick: (r) => r.utilizationOfOpenUnsecuredVerifiedInstallmentTradesInLast12Months.toString(),
+      },
+      // Adverse events
+      { key: 'num_of_charge_offs', pick: (r) => r.numOfChargeOffs },
+      { key: 'num_of_repos', pick: (r) => r.numOfRepos },
+      { key: 'num_of_foreclosures', pick: (r) => r.numOfForeclosures },
+      // ML
+      { key: 'sale_confidence_score', pick: (r) => r.saleConfidenceScore.toString() },
+    ];
+
+    if (q.includeProtected) {
+      columns.push(
+        ...([
+          { key: 'estimated_income_band', pick: (r) => r.estimatedIncomeBand },
+          { key: 'number_of_children', pick: (r) => r.numberOfChildren },
+          { key: 'marital_status', pick: (r) => r.maritalStatus },
+          { key: 'occupation_group', pick: (r) => r.occupationGroup },
+          { key: 'occupation', pick: (r) => r.occupation },
+          { key: 'education', pick: (r) => r.education },
+          { key: 'business_owner', pick: (r) => r.businessOwner },
+          { key: 'gender', pick: (r) => r.gender },
+          { key: 'net_worth', pick: (r) => r.netWorth },
+          { key: 'estimated_current_home_value', pick: (r) => r.estimatedCurrentHomeValue },
+          { key: 'ethnicity', pick: (r) => r.ethnicity },
+          { key: 'ethnic_group', pick: (r) => r.ethnicGroup },
+          { key: 'language', pick: (r) => r.language },
+        ] as Array<{ key: string; pick: (r: (typeof rows)[number]) => unknown }>),
+      );
+    }
+
+    if (q.format === 'json') {
+      reply.header('Content-Type', 'application/json');
+      reply.header('Content-Disposition', attachmentHeader(filename));
+      return rows.map((r) => {
+        const obj: Record<string, unknown> = {};
+        for (const c of columns) obj[c.key] = c.pick ? c.pick(r) : null;
+        return obj;
+      });
+    }
+
+    reply.header('Content-Type', 'text/csv; charset=utf-8');
+    reply.header('Content-Disposition', attachmentHeader(filename));
+    return rowsToCsv(rows, columns);
   });
 }

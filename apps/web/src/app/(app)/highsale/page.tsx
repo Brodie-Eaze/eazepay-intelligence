@@ -10,6 +10,8 @@ import { SectionCard } from '@/components/SectionCard';
 import { KpiCard } from '@/components/KpiCard';
 import { MiniBar } from '@/components/MiniBar';
 import { StatusPill } from '@/components/StatusPill';
+import { ExportButton } from '@/components/ExportButton';
+import { useUser } from '@/lib/auth';
 
 /**
  * /highsale — credit-data snapshot drill page.
@@ -69,6 +71,7 @@ type VerticalFilter = '' | 'medpay' | 'tradepay' | 'coachpay';
 type BnplFilter = '' | 'true' | 'false';
 
 export default function HighSalePage(): JSX.Element {
+  const user = useUser();
   const [vertical, setVertical] = useState<VerticalFilter>('');
   const [bnpl, setBnpl] = useState<BnplFilter>('');
   const [scoreBand, setScoreBand] = useState<'' | 'prime' | 'near' | 'sub' | 'deep'>('');
@@ -109,12 +112,30 @@ export default function HighSalePage(): JSX.Element {
         title="HighSale (EZ Check)"
         subtitle="Per-application credit-data snapshots · ~70 fields per applicant · PII encrypted at rest"
         action={
-          <Link
-            href="/highsale/schema"
-            className="text-xs px-3 py-1.5 rounded-md border border-line2 text-ink2 hover:bg-paper hover:border-accent transition"
-          >
-            Schema reference →
-          </Link>
+          <div className="flex items-center gap-2">
+            <Link
+              href="/highsale/schema"
+              className="text-xs px-3 py-1.5 rounded-md border border-line2 text-ink2 hover:bg-paper hover:border-accent transition"
+            >
+              Schema reference →
+            </Link>
+            <ExportButton
+              endpoint="/highsale/snapshots/export"
+              filters={params}
+              filenameHint="highsale_snapshots"
+              userRole={user?.role}
+              toggles={[
+                {
+                  id: 'protected',
+                  label: 'Include protected-class demographics',
+                  param: 'includeProtected',
+                  requireRole: 'ADMIN',
+                  warningWhenOn:
+                    'Protected-class columns are FCRA / fair-lending sensitive. Export will be tagged PROTECTED_CLASS_READ in the audit log.',
+                },
+              ]}
+            />
+          </div>
         }
       />
 

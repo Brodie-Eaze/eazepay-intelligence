@@ -5,6 +5,7 @@ import { useQuery } from '@tanstack/react-query';
 import { api } from '@/lib/api';
 import { formatMoney, formatPct } from '@/lib/format';
 import { PageHeader } from '@/components/PageHeader';
+import { ExportButton } from '@/components/ExportButton';
 import { SectionCard } from '@/components/SectionCard';
 import { Monogram } from '@/components/Monogram';
 import { MiniBar } from '@/components/MiniBar';
@@ -41,13 +42,26 @@ export default function PartnersPage(): JSX.Element {
       <PageHeader
         title="Partners"
         subtitle="Every business deploying EazePay · ranked by 30-day revenue"
+        action={<ExportButton endpoint="/partners/export" filenameHint="partners" />}
       />
 
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-        <KpiCard label="Active partners" value={totalActive.toLocaleString('en-AU')} hint="across the network" />
+        <KpiCard
+          label="Active partners"
+          value={totalActive.toLocaleString('en-AU')}
+          hint="across the network"
+        />
         <KpiCard label="30-day revenue" value={formatMoney(totalRev)} hint="ledger projection" />
-        <KpiCard label="Applications (30d)" value={totalApps.toLocaleString('en-AU')} hint={`${formatPct(totalApps ? totalFunded / totalApps : 0)} funded`} />
-        <KpiCard label="Avg per partner" value={formatMoney(totalActive ? totalRev / totalActive : 0)} hint="revenue average" />
+        <KpiCard
+          label="Applications (30d)"
+          value={totalApps.toLocaleString('en-AU')}
+          hint={`${formatPct(totalApps ? totalFunded / totalApps : 0)} funded`}
+        />
+        <KpiCard
+          label="Avg per partner"
+          value={formatMoney(totalActive ? totalRev / totalActive : 0)}
+          hint="revenue average"
+        />
       </div>
 
       <SectionCard
@@ -73,19 +87,38 @@ export default function PartnersPage(): JSX.Element {
                 <tr key={p.partnerId}>
                   <td className="numeric text-muted">{i + 1}</td>
                   <td>
-                    <Link href={`/partners/${p.partnerId}`} className="inline-flex items-center gap-2 text-ink hover:text-accent">
+                    <Link
+                      href={`/partners/${p.partnerId}`}
+                      className="inline-flex items-center gap-2 text-ink hover:text-accent"
+                    >
                       <Monogram label={p.partnerLabel} />
                       <span className="font-medium tracking-tight">{p.partnerLabel}</span>
                     </Link>
                   </td>
-                  <td className="numeric text-right text-ink2">{p.applications.toLocaleString('en-AU')}</td>
-                  <td className="numeric text-right text-ink2">{p.approved.toLocaleString('en-AU')}</td>
-                  <td className="numeric text-right text-ink">{p.funded.toLocaleString('en-AU')}</td>
-                  <td className="numeric text-right text-ink font-medium">{formatMoney(p.revenue)}</td>
-                  <td className="w-32"><MiniBar value={Number(p.revenue) / maxRev} /></td>
+                  <td className="numeric text-right text-ink2">
+                    {p.applications.toLocaleString('en-AU')}
+                  </td>
+                  <td className="numeric text-right text-ink2">
+                    {p.approved.toLocaleString('en-AU')}
+                  </td>
+                  <td className="numeric text-right text-ink">
+                    {p.funded.toLocaleString('en-AU')}
+                  </td>
+                  <td className="numeric text-right text-ink font-medium">
+                    {formatMoney(p.revenue)}
+                  </td>
+                  <td className="w-32">
+                    <MiniBar value={Number(p.revenue) / maxRev} />
+                  </td>
                 </tr>
               ))}
-              {lb.length === 0 && <tr><td colSpan={7} className="text-center text-muted py-8">No partner activity yet.</td></tr>}
+              {lb.length === 0 && (
+                <tr>
+                  <td colSpan={7} className="text-center text-muted py-8">
+                    No partner activity yet.
+                  </td>
+                </tr>
+              )}
             </tbody>
           </table>
         </div>
