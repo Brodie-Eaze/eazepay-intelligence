@@ -32,11 +32,19 @@ export function AppShell({ children }: { children: React.ReactNode }): JSX.Eleme
 
   return (
     <LiveTickerContext.Provider value={{ events, connected }}>
-      <div className="flex min-h-screen">
+      {/*
+       * `h-screen` (not min-h-screen) pins the shell to the viewport so
+       * the window itself never scrolls. The sidebar and main each have
+       * their own `overflow-y-auto` and scroll independently. Without
+       * this, a tall sidebar (10+ nav groups) pushes the window's body
+       * height past viewport, and every route change resets window
+       * scroll — which yanks the sidebar back to the top.
+       */}
+      <div className="flex h-screen overflow-hidden">
         <Sidebar />
         <div className="flex-1 flex flex-col min-w-0">
           <TopBar wsConnected={connected} />
-          <main ref={mainRef} className="flex-1 p-6 lg:p-8 overflow-auto bg-paper">
+          <main ref={mainRef} className="flex-1 p-6 lg:p-8 overflow-y-auto bg-paper">
             {children}
           </main>
         </div>

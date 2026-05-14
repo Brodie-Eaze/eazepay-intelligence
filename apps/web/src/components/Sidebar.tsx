@@ -187,7 +187,7 @@ export function Sidebar(): JSX.Element {
   })();
 
   return (
-    <aside className="w-64 shrink-0 border-r border-line2 bg-surface px-3 py-6 flex flex-col overflow-y-auto">
+    <aside className="w-64 shrink-0 border-r border-line2 bg-surface px-3 py-6 flex flex-col h-full overflow-y-auto">
       <Link href="/overview" className="block mb-7 px-3">
         <div className="font-semibold tracking-tight text-ink text-[17px] leading-none">
           EazePay
