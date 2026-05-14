@@ -7,14 +7,20 @@
  *
  * Intelligence's launch-business slugs (data-warehouse/models/staging/
  * stg_organizations.sql + dbt_project.yml vars.active_org_slugs):
- *   aurean-os, aurean-recruitment, coachpay, tradepay, medpay
+ *   medpay, tradepay, coachpay,
+ *   aurean-ai, aurean-recruitment,
+ *   micamp-processing, highsale
  *
- * Three brands map 1:1. `direct` has no current home — quarantine until
- * product decides which holdco org owns "direct" revenue.
+ * The 3 BNPL brands map 1:1. `direct` has no current home — quarantine
+ * until product decides which holdco org owns "direct" revenue.
  *
- * Aurean OS + Aurean Recruitment have no representation in App; they
- * never appear on this codepath. They ingest via their own native
- * adapters (TBD).
+ * The other 4 launch businesses (aurean-ai, aurean-recruitment,
+ * micamp-processing, highsale) have no `BrandCode` representation in
+ * EazePay App and never appear on this codepath. They ingest via their
+ * own native adapters:
+ *   - aurean-ai + aurean-recruitment → /api/v1/ingestion/* PAT-driven
+ *   - micamp-processing → MICAMP webhook source (HMAC inbound)
+ *   - highsale          → its own ingestion adapter (TBD this phase)
  *
  * See docs/integration/eazepay-app-contract.md § Brand → Org resolution.
  */

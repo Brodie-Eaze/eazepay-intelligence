@@ -122,8 +122,12 @@ Reference contract. Intelligence builds normalised rows for each.
 ## Brand → Org resolution
 
 App models tenancy as `Merchant.brand: ProductBrand` (medpay / tradepay /
-coachpay / direct). Intelligence models tenancy as `Organization.slug`
-(aurean-os / aurean-recruitment / coachpay / tradepay / medpay).
+coachpay / direct). Intelligence models tenancy as `Organization.slug` —
+**7 launch businesses** grouped into 3 verticals:
+
+- **Point-of-sale BNPL:** medpay, tradepay, coachpay
+- **Aurean Holdings:** aurean-ai, aurean-recruitment
+- **Payments infrastructure:** micamp-processing, highsale
 
 Resolution at the ingestion boundary:
 
@@ -134,9 +138,14 @@ Resolution at the ingestion boundary:
 | `coachpay`      | `coachpay`                       | 1:1                                                                                                                                      |
 | `direct`        | —                                | Unmapped today. Event accepted but routed to a `default_org_id` quarantine until product decides which holdco org owns "direct" revenue. |
 
-Aurean OS and Aurean Recruitment have **no representation in EazePay
-App**. They feed Intelligence via their own native ingestion paths,
-not via this contract.
+The other 4 launch businesses have **no representation in EazePay
+App** — they feed Intelligence via their own native paths, not via
+this contract:
+
+- `aurean-ai`, `aurean-recruitment` → PAT-driven `/api/v1/ingestion/*`
+- `micamp-processing` → `MICAMP` HMAC webhook source (already wired)
+- `highsale` → free-form PAT ingestion today; dedicated `HIGHSALE`
+  source enum queued (see `docs/runbooks/portfolio-business-ingestion.md`)
 
 Implementation: `apps/api/src/domains/integration/eazepay-app/brand-org-mapping.ts`.
 

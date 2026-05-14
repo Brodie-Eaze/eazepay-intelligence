@@ -1,9 +1,9 @@
 -- The canonical org list with a `is_launch_business` flag so the marts
--- layer can scope to Brodie's 5 launch businesses without hardcoding
+-- layer can scope to Brodie's 7 launch businesses without hardcoding
 -- slugs in every downstream model.
 --
 -- The slug → boolean mapping is the only place launch-business membership
--- is encoded; expanding to a 6th business is one line here + a slug in
+-- is encoded; onboarding a new business is one line here + a slug in
 -- dbt_project.yml `active_org_slugs`.
 
 with source as (
@@ -28,11 +28,16 @@ select
   created_at    as org_created_at,
   case
     when slug in (
-      'aurean-os',
-      'aurean-recruitment',
-      'coachpay',
+      -- Point-of-sale BNPL brands
+      'medpay',
       'tradepay',
-      'medpay'
+      'coachpay',
+      -- Aurean Holdings
+      'aurean-ai',
+      'aurean-recruitment',
+      -- Payments infrastructure
+      'micamp-processing',
+      'highsale'
     ) then true
     else false
   end           as is_launch_business

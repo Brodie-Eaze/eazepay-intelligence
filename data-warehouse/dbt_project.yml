@@ -49,12 +49,19 @@ vars:
   # Each org slug listed here gets staging models that scope their data.
   # Add a new slug when onboarding a new business; the staging template
   # in macros/stg_business.sql picks it up automatically.
+  #
+  # 7 launch businesses:
+  #   medpay, tradepay, coachpay         — point-of-sale BNPL brands
+  #   aurean-ai, aurean-recruitment      — Aurean Holdings
+  #   micamp-processing, highsale        — payments infrastructure
   active_org_slugs:
-    - aurean-os
-    - aurean-recruitment
-    - coachpay
-    - tradepay
     - medpay
+    - tradepay
+    - coachpay
+    - aurean-ai
+    - aurean-recruitment
+    - micamp-processing
+    - highsale
 
   # Reporting currency for the marts layer. Per-business amounts are
   # converted (when fx_rates are populated) — until then assumed AUD.

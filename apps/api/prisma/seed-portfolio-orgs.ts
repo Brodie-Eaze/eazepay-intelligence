@@ -1,5 +1,5 @@
 /**
- * Seed the five real businesses Brodie operates into the platform as orgs.
+ * Seed the seven real businesses Brodie operates into the platform as orgs.
  *
  * The platform IS the data centre for these businesses — every business pipes
  * data into it via the ingestion API or webhook routes. Each business needs:
@@ -55,12 +55,33 @@ interface BusinessSeed {
 
 const BUSINESSES: BusinessSeed[] = [
   {
-    slug: 'aurean-os',
-    name: 'AureanOS',
+    slug: 'medpay',
+    name: 'MedPay',
+    dataRegion: 'au',
+    tokenScopes: [ApiTokenScope.READ, ApiTokenScope.WRITE],
+    dataDescription: 'Medical/dental BNPL applications + funding + clawbacks.',
+  },
+  {
+    slug: 'tradepay',
+    name: 'TradePay',
+    dataRegion: 'au',
+    tokenScopes: [ApiTokenScope.READ, ApiTokenScope.WRITE],
+    dataDescription: 'Trade-services BNPL applications + funding + processing events.',
+  },
+  {
+    slug: 'coachpay',
+    name: 'CoachPay',
+    dataRegion: 'au',
+    tokenScopes: [ApiTokenScope.READ, ApiTokenScope.WRITE],
+    dataDescription: 'Coach BNPL applications, lender decisions, funding events, clawbacks.',
+  },
+  {
+    slug: 'aurean-ai',
+    name: 'Aurean AI',
     dataRegion: 'au',
     tokenScopes: [ApiTokenScope.READ, ApiTokenScope.WRITE],
     dataDescription:
-      'Operating-system layer: revenue events, partner/applicant rows, internal usage metrics.',
+      'AI ops layer: revenue events, model inference usage, partner/applicant scoring metrics.',
   },
   {
     slug: 'aurean-recruitment',
@@ -71,25 +92,20 @@ const BUSINESSES: BusinessSeed[] = [
       'Candidate placements, rep performance, commission tracking, recruiter productivity.',
   },
   {
-    slug: 'coachpay',
-    name: 'CoachPay',
+    slug: 'micamp-processing',
+    name: 'MiCamp Processing',
     dataRegion: 'au',
     tokenScopes: [ApiTokenScope.READ, ApiTokenScope.WRITE],
-    dataDescription: 'Coach BNPL applications, lender decisions, funding events, clawbacks.',
+    dataDescription:
+      'Card-processing rail: settlement events, processing fees, chargeback + reversal ledger.',
   },
   {
-    slug: 'tradepay',
-    name: 'TradePay',
+    slug: 'highsale',
+    name: 'HighSale',
     dataRegion: 'au',
     tokenScopes: [ApiTokenScope.READ, ApiTokenScope.WRITE],
-    dataDescription: 'Trade-services BNPL applications + funding + processing events.',
-  },
-  {
-    slug: 'medpay',
-    name: 'MedPay',
-    dataRegion: 'au',
-    tokenScopes: [ApiTokenScope.READ, ApiTokenScope.WRITE],
-    dataDescription: 'Medical/dental BNPL applications + funding + clawbacks.',
+    dataDescription:
+      'Credit-data scoring (a.k.a. EZ Check): pre-qual inquiries, risk-band assignments, snapshot lifecycle.',
   },
 ];
 

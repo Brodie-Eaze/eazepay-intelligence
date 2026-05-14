@@ -1,19 +1,21 @@
 # Runbook — Portfolio business data ingestion
 
 **Audience:** ops / engineering when wiring up one of Brodie's businesses to pipe data into the platform.
-**Status:** the 5 launch businesses are seeded as Organizations with admin memberships, per-org PII DEKs, and ingestion PATs.
+**Status:** the 7 launch businesses are seeded as Organizations with admin memberships, per-org PII DEKs, and ingestion PATs.
 
 ---
 
-## The 5 launch businesses
+## The 7 launch businesses
 
-| Slug                 | Name               | Data category                                                |
-| -------------------- | ------------------ | ------------------------------------------------------------ |
-| `aurean-os`          | AureanOS           | OS-layer revenue + applicant + usage metrics                 |
-| `aurean-recruitment` | Aurean Recruitment | Candidate placements, rep performance, commissions           |
-| `coachpay`           | CoachPay           | Coach BNPL applications, lender decisions, funding/clawbacks |
-| `tradepay`           | TradePay           | Trade-services BNPL applications, funding, processing        |
-| `medpay`             | MedPay             | Medical/dental BNPL applications, funding, clawbacks         |
+| Slug                 | Name                | Group                   | Data category                                                   |
+| -------------------- | ------------------- | ----------------------- | --------------------------------------------------------------- |
+| `medpay`             | MedPay              | Point-of-sale BNPL      | Medical/dental BNPL applications, funding, clawbacks            |
+| `tradepay`           | TradePay            | Point-of-sale BNPL      | Trade-services BNPL applications, funding, processing           |
+| `coachpay`           | CoachPay            | Point-of-sale BNPL      | Coaching BNPL applications, lender decisions, funding/clawbacks |
+| `aurean-ai`          | Aurean AI           | Aurean Holdings         | AI ops revenue, model inference usage, scoring metrics          |
+| `aurean-recruitment` | Aurean Recruitment  | Aurean Holdings         | Candidate placements, rep performance, commissions              |
+| `micamp-processing`  | MiCamp Processing   | Payments infrastructure | Settlement events, processing fees, chargeback/reversal ledger  |
+| `highsale`           | HighSale (EZ Check) | Payments infrastructure | Pre-qual inquiries, risk-band assignments, snapshot lifecycle   |
 
 Each carries:
 
@@ -30,7 +32,7 @@ Two ingestion surfaces exist today; pick the one that fits the source system.
 
 ### A. Generic PAT-authenticated ingestion (recommended for in-house systems)
 
-For systems Brodie controls — AureanOS internals, Aurean Recruitment placement events, CoachPay/TradePay/MedPay application + funding events. The system calls the platform's REST API directly.
+For systems Brodie controls — Aurean AI internals, Aurean Recruitment placement events, CoachPay/TradePay/MedPay application + funding events, MiCamp processing events, HighSale inquiry events. The system calls the platform's REST API directly.
 
 **Endpoint:**
 
@@ -56,6 +58,8 @@ Idempotency-Key: <UUIDv7 recommended; 16-128 chars>
 }
 ```
 
+> **Note:** the `BUZZPAY` source value is being retired (see [`docs/cuts/buzzpay-removal.md`](../cuts/buzzpay-removal.md)). New integrations should land their event types under a dedicated source per business — schema work in flight.
+
 **What happens server-side:**
 
 1. Bearer middleware (`requireBearerAuth`) resolves the PAT → User + Organization. 401 if revoked, expired, or membership has been removed since the PAT was issued.
@@ -65,25 +69,28 @@ Idempotency-Key: <UUIDv7 recommended; 16-128 chars>
    - Stores raw payload only for unknown event types (queryable via `/admin/webhook-events`).
 4. `INGESTION_REQUEST` audit row written. Caller receives `{ eventId, replayed }`. Replays of the same `Idempotency-Key` are idempotent and return `replayed: true`.
 
-**Bulk variant:** `POST /api/v1/ingestion/:target/bulk` for batch backfills (up to 500 events per call). `:target` is one of `applications`, `lender-decisions`, `funding-status`, `clawbacks`, `pixie-usage`, `micamp-processing`, `micamp-reversals`. The bulk endpoint writes a single batch-level audit row.
+**Bulk variant:** `POST /api/v1/ingestion/:target/bulk` for batch backfills (up to 500 events per call). The bulk endpoint writes a single batch-level audit row.
 
 **Per-business mapping (suggested):**
 
-| Business           | Use `source` value                                                            | Reason                                      |
-| ------------------ | ----------------------------------------------------------------------------- | ------------------------------------------- |
-| AureanOS           | `BUZZPAY` for application-flow events, `PIXIE` for usage                      | Reuses existing typed schemas               |
-| Aurean Recruitment | `BUZZPAY` for placement events shaped as applications                         | Fits the existing application/funding shape |
-| CoachPay           | `BUZZPAY` (applications + lender-decisions) + `MICAMP` (processing/reversals) | Native fit                                  |
-| TradePay           | Same as CoachPay                                                              | Native fit                                  |
-| MedPay             | Same as CoachPay                                                              | Native fit                                  |
+| Business                     | Source value (today)                                                                                             | Migration target                                        |
+| ---------------------------- | ---------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------- |
+| MedPay / TradePay / CoachPay | EazePay App webhook → `/api/v1/integration/eazepay-app/events` once App-side platform-sink lands; PAT until then | Native — see `docs/integration/eazepay-app-contract.md` |
+| Aurean AI                    | PAT POST `/ingestion/events`, free-form `eventType`                                                              | Dedicated typed schema once event shapes stabilise      |
+| Aurean Recruitment           | PAT POST `/ingestion/events`, free-form `eventType`                                                              | Dedicated typed schema once event shapes stabilise      |
+| MiCamp Processing            | `MICAMP` source enum, existing typed schema                                                                      | Stays on `MICAMP` source                                |
+| HighSale                     | PAT POST `/ingestion/events`, free-form `eventType`                                                              | Add `HIGHSALE` source enum + typed schema (queued)      |
 
 If a business has event types that don't fit the existing schemas, post to `/ingestion/events` with a custom `eventType` string. The raw payload is stored; build a typed schema later when the shape stabilises.
 
 ### B. HMAC-signed webhook ingress (for vendor systems that push to us)
 
-For external vendors. The platform's existing webhook routes live at `/api/v1/webhooks/{source}/{eventType}` and require HMAC-SHA-256 signatures. Today the signing secrets are env-var-driven; the per-org webhook credential lookup (where each business has its own signing secret) is a Phase 1.3 follow-up.
+For external vendors and inter-system pushes. Three surfaces:
 
-**For now:** use Surface A for every business.
+- `/api/v1/webhooks/{source}/{eventType}` — legacy per-vendor webhooks. `MICAMP` and `PIXIE` are live; `BUZZPAY` is being retired.
+- `/api/v1/integration/eazepay-app/events` — the dedicated sink for EazePay App's outbound dispatcher. See [`docs/integration/eazepay-app-contract.md`](../integration/eazepay-app-contract.md).
+
+All require HMAC-SHA-256 signatures.
 
 ---
 
@@ -114,16 +121,14 @@ curl -X POST "$API/api/v1/ingestion/events" \
   -H "Idempotency-Key: $(uuidgen)" \
   -H "Content-Type: application/json" \
   -d '{
-    "source": "BUZZPAY",
-    "eventType": "application",
+    "source": "MICAMP",
+    "eventType": "processing",
     "payload": {
-      "externalApplicationId": "TEST-001",
+      "externalProcessingId": "TEST-001",
       "partnerExternalId": "PARTNER-TEST",
-      "consumerName": "Test User",
-      "consumerEmail": "test@example.com",
-      "consumerPhone": "+61400000000",
-      "creditScore": 720,
-      "submittedAt": "2026-05-12T00:00:00Z"
+      "amount": 12500,
+      "currency": "AUD",
+      "occurredAt": "2026-05-14T00:00:00Z"
     }
   }'
 ```
@@ -134,30 +139,29 @@ Verify the data landed:
 
 ```bash
 psql "$DATABASE_URL" -c "SELECT id, source, event_type, signature_valid, received_at FROM webhook_events ORDER BY received_at DESC LIMIT 1;"
-psql "$DATABASE_URL" -c "SELECT id, external_application_id, partner_id FROM applications WHERE external_application_id = 'TEST-001';"
 ```
 
-PII columns will be encrypted with **the bootstrap org's** DEK because the current Application creation path does not yet thread `orgId` through. The Phase 1.3 route retrofit closes that gap; once it lands, applications written via the CoachPay PAT will encrypt under CoachPay's DEK.
+PII columns will be encrypted with **the bootstrap org's** DEK because the current Application creation path does not yet thread `orgId` through. The Phase 1.3 route retrofit closes that gap.
 
 ---
 
 ## Phase 1.3 dependency (currently in flight)
 
-The 5 businesses are provisioned correctly. **The remaining gap is the route-handler retrofit** that propagates `orgId` from the bearer-auth resolution through to every Prisma create/findMany call. Until that lands:
+The 7 businesses are provisioned correctly. **The remaining gap is the route-handler retrofit** that propagates `orgId` from the bearer-auth resolution through to every Prisma create/findMany call. Until that lands:
 
 - Ingestion works — the PAT identifies the org, the audit log records it, the WebhookEvent + downstream rows are created.
 - BUT: the PII columns on `applications` are encrypted under the default org's DEK, not the business's own DEK. This is incorrect for the multi-tenant data-isolation guarantee.
-- The dashboard queries (customer book, revenue, partner list) are not yet filtered by `orgId`. Brodie's SUPER-level visibility means he sees everything correctly; a non-SUPER user from one business would see other businesses' data. The 5 businesses' admin user is Brodie, who is SUPER, so this is a latent risk not an active one.
+- The dashboard queries (customer book, revenue, partner list) are not yet filtered by `orgId`. Brodie's SUPER-level visibility means he sees everything correctly; a non-SUPER user from one business would see other businesses' data. The 7 businesses' admin user is Brodie, who is SUPER, so this is a latent risk not an active one.
 
 The fix is Phase 1.3 § "route prefix migration to `/o/:orgSlug/` + ~67 handler retrofits", tracked in [`docs/PLATFORM_V2.md`](../PLATFORM_V2.md).
 
-**Do not invite non-Brodie users to any of the 5 orgs until Phase 1.3 lands.** Once it lands, each business's dashboard properly scopes its data.
+**Do not invite non-Brodie users to any of the 7 orgs until Phase 1.3 lands.**
 
 ---
 
 ## Tokens (rotate when convenient)
 
-The seed printed the 5 initial PATs to stdout. They are stored as `epi_pk_<prefix>_<secret>`; the platform persists only `sha256(secret)`. Rotate by:
+The seed printed the initial PATs to stdout. They are stored as `epi_pk_<prefix>_<secret>`; the platform persists only `sha256(secret)`. Rotate by:
 
 1. Revoke the current token in the admin UI (`/admin` → API tokens) or via SQL:
 
@@ -171,6 +175,7 @@ The seed printed the 5 initial PATs to stdout. They are stored as `epi_pk_<prefi
 
 ## Future ingestion improvements (queued)
 
-- **Per-org webhook signing secrets** — Phase 1.3 follow-up. Will replace the env-var BUZZPAY/PIXIE/MICAMP secrets with per-credential rows in `webhook_credentials`, allowing each business to have its own signing key.
-- **Per-business schemas** — when an event type doesn't fit the existing application/funding shapes, define a typed schema in `apps/api/src/domains/{business}/*.schemas.ts`. The catalogue should grow as the businesses send real data.
+- **Per-org webhook signing secrets** — Phase 1.3 follow-up. Will replace the env-var MICAMP/PIXIE secrets with per-credential rows in `webhook_credentials`, allowing each business to have its own signing key.
+- **`HIGHSALE` source enum** — once HighSale's event shapes stabilise, promote from free-form to a typed schema. Tracked in `docs/cuts/buzzpay-removal.md` follow-up.
+- **EazePay App platform-sink** — landing the App-side webhook subscription that pushes all 3 BNPL brands into Intelligence. See `docs/integration/eazepay-app-contract.md`.
 - **Streaming connectors** — Kafka/Redpanda topic per business is the Phase 10 plan; until then, REST POST is the path.

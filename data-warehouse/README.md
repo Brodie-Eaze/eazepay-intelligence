@@ -75,12 +75,22 @@ warehouse-only role that bypasses RLS, because mart queries cross orgs.
 
 ## Launch-business scoping
 
-The 5 launch businesses are flagged via `stg_organizations.is_launch_business`
-(slugs: `aurean-os`, `aurean-recruitment`, `coachpay`, `tradepay`,
-`medpay`). All marts filter on this flag so sandbox/test tenants don't
-pollute portfolio numbers.
+The 7 launch businesses are flagged via `stg_organizations.is_launch_business`:
 
-To add a 6th launch business: add the slug in two places —
+| Slug                 | Group                   | Notes                          |
+| -------------------- | ----------------------- | ------------------------------ |
+| `medpay`             | Point-of-sale BNPL      | Medical / dental               |
+| `tradepay`           | Point-of-sale BNPL      | Trade services                 |
+| `coachpay`           | Point-of-sale BNPL      | Coaching                       |
+| `aurean-ai`          | Aurean Holdings         | AI operations layer            |
+| `aurean-recruitment` | Aurean Holdings         | Talent placement               |
+| `micamp-processing`  | Payments infrastructure | Card-processing rail           |
+| `highsale`           | Payments infrastructure | Credit-data scoring (EZ Check) |
+
+All marts filter on this flag so sandbox/test tenants don't pollute
+portfolio numbers.
+
+To onboard a new launch business: add the slug in two places —
 `models/staging/stg_organizations.sql` and the `active_org_slugs` var
 in `dbt_project.yml`.
 
