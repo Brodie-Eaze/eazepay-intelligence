@@ -27,7 +27,7 @@
  *   We persist email + sub + name (in audit log only). No tokens stored.
  *   Google's own logs are out of our scope; see docs/governance/PRIVACY.md.
  */
-import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
+import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { getEnv } from '../../config/env.js';
@@ -41,6 +41,7 @@ import { AuthRepository } from './auth.repository.js';
 import { AuthService } from './auth.service.js';
 
 const STATE_COOKIE = '__Host-oauth_state';
+const PKCE_COOKIE = '__Host-oauth_pkce';
 const STATE_TTL_SECONDS = 600;
 
 interface GoogleIdTokenClaims {
@@ -88,6 +89,30 @@ export async function registerOAuthRoutes(app: FastifyInstance): Promise<void> {
       sameSite: 'lax', // must allow cross-site GET back from accounts.google.com
     });
 
+    // Phase 4c (SEC-106): PKCE S256.
+    //
+    // Without PKCE, an authorization code interception attack works like
+    // this: attacker on the redirect path (proxy, browser extension,
+    // referer leak) grabs the `code` query param and exchanges it at
+    // /token themselves. The client_secret is needed for confidential
+    // clients, but anyone with the secret + a captured code can mint the
+    // session. PKCE binds the code to a one-time code_verifier the client
+    // chose before redirect, so a captured code is useless without it.
+    //
+    // We generate a 64-byte random verifier, SHA-256 it, base64url-encode
+    // the digest, and send that as code_challenge. The plaintext verifier
+    // is set on an __Host-prefixed cookie alongside the state. On callback
+    // we read the cookie and forward it to /token; Google re-derives the
+    // challenge and rejects if it doesn't match.
+    const codeVerifier = randomBytes(64).toString('base64url');
+    const codeChallenge = createHash('sha256').update(codeVerifier).digest('base64url');
+    const pkceSig = signState(codeVerifier);
+    setCookie(reply, PKCE_COOKIE, `${codeVerifier}.${pkceSig}`, {
+      maxAgeSeconds: STATE_TTL_SECONDS,
+      httpOnly: true,
+      sameSite: 'lax',
+    });
+
     const params = new URLSearchParams({
       client_id: env.GOOGLE_OAUTH_CLIENT_ID!,
       redirect_uri: env.GOOGLE_OAUTH_REDIRECT_URI!,
@@ -96,6 +121,8 @@ export async function registerOAuthRoutes(app: FastifyInstance): Promise<void> {
       state: nonce,
       access_type: 'online',
       prompt: 'select_account',
+      code_challenge: codeChallenge,
+      code_challenge_method: 'S256',
     });
     if (env.GOOGLE_OAUTH_ALLOWED_DOMAINS.length === 1) {
       // hd hint nudges Google to default to the work account; doesn't enforce.
@@ -126,6 +153,15 @@ export async function registerOAuthRoutes(app: FastifyInstance): Promise<void> {
     }
     setCookie(reply, STATE_COOKIE, '', { maxAgeSeconds: 0, httpOnly: true });
 
+    // Phase 4c PKCE: read & verify the code_verifier cookie, then forward
+    // the plaintext to /token. Google re-derives the challenge and refuses
+    // the exchange if a captured code is presented with the wrong verifier.
+    const pkceCookie = readPkceCookie(req);
+    if (!pkceCookie) throw errors.badRequest('OAuth PKCE cookie missing or expired');
+    const codeVerifier = verifyPkceCookie(pkceCookie);
+    if (!codeVerifier) throw errors.badRequest('OAuth PKCE verification failed');
+    setCookie(reply, PKCE_COOKIE, '', { maxAgeSeconds: 0, httpOnly: true });
+
     // Exchange code → tokens. Phase 7 (SF-011): bounded fetch — without a
     // timeout a Google outage dangles the connection pool indefinitely.
     const tokenRes = await fetch('https://oauth2.googleapis.com/token', {
@@ -137,6 +173,7 @@ export async function registerOAuthRoutes(app: FastifyInstance): Promise<void> {
         client_secret: env.GOOGLE_OAUTH_CLIENT_SECRET!,
         redirect_uri: env.GOOGLE_OAUTH_REDIRECT_URI!,
         grant_type: 'authorization_code',
+        code_verifier: codeVerifier,
       }),
       signal: AbortSignal.timeout(10_000),
     });
@@ -237,6 +274,37 @@ function readStateCookie(req: { headers: { cookie?: string } }): string | null {
     .map((s) => s.trim())
     .find((s) => s.startsWith(`${STATE_COOKIE}=`));
   return match ? decodeURIComponent(match.slice(STATE_COOKIE.length + 1)) : null;
+}
+
+function readPkceCookie(req: { headers: { cookie?: string } }): string | null {
+  const raw = req.headers.cookie;
+  if (!raw) return null;
+  const match = raw
+    .split(';')
+    .map((s) => s.trim())
+    .find((s) => s.startsWith(`${PKCE_COOKIE}=`));
+  return match ? decodeURIComponent(match.slice(PKCE_COOKIE.length + 1)) : null;
+}
+
+/**
+ * Verify the PKCE cookie's HMAC and return the plaintext code_verifier.
+ * Returns null on signature mismatch or malformed value.
+ *
+ * The cookie format is `<code_verifier>.<sig>` where sig is an HMAC over
+ * code_verifier with OAUTH_STATE_SECRET (same key as state — they share
+ * the OAuth-flow trust boundary). Without the HMAC, an attacker who
+ * could write the cookie (XSS) could swap the verifier for one they
+ * control and pair it with an intercepted authorization code.
+ */
+function verifyPkceCookie(cookieValue: string): string | null {
+  const [verifier, sig] = cookieValue.split('.') as [string, string];
+  if (!verifier || !sig) return null;
+  const expected = signState(verifier); // re-use the OAuth state secret
+  const a = Buffer.from(sig);
+  const b = Buffer.from(expected);
+  if (a.length !== b.length) return null;
+  if (!timingSafeEqual(a, b)) return null;
+  return verifier;
 }
 
 // Phase 4b (SEC-121): JWKS-based id_token verification.

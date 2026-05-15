@@ -66,6 +66,13 @@ export class AuthRepository {
     orgId: string;
     userId: string;
     familyId: string;
+    /**
+     * Phase 4c: persistent session identifier. Today defaults to familyId
+     * (1:1); future "trust this device" work may let multiple families
+     * share a sessionId. Embedded in the access JWT as `sid` so a revoked
+     * session immediately denies outstanding access tokens.
+     */
+    sessionId: string;
     rawToken: string;
     expiresAt: Date;
   }): Promise<RefreshToken> {
@@ -75,6 +82,7 @@ export class AuthRepository {
         orgId: args.orgId,
         userId: args.userId,
         familyId: args.familyId,
+        sessionId: args.sessionId,
         tokenHash: AuthRepository.hashRefresh(args.rawToken),
         expiresAt: args.expiresAt,
       },
@@ -93,6 +101,7 @@ export class AuthRepository {
     newRaw: string;
     userId: string;
     familyId: string;
+    sessionId: string;
     expiresAt: Date;
   }): Promise<RefreshToken> {
     return this.prisma.$transaction(async (tx) => {
@@ -102,6 +111,7 @@ export class AuthRepository {
           orgId: args.orgId,
           userId: args.userId,
           familyId: args.familyId,
+          sessionId: args.sessionId,
           tokenHash: AuthRepository.hashRefresh(args.newRaw),
           expiresAt: args.expiresAt,
         },
@@ -122,11 +132,49 @@ export class AuthRepository {
     return res.count;
   }
 
+  /**
+   * Phase 4c: revoke every refresh in a session. Today === revokeFamily,
+   * but using the sessionId surface keeps the user-facing API (one
+   * session = one revocation unit) independent of the rotation chain.
+   */
+  async revokeSession(userId: string, sessionId: string): Promise<number> {
+    const res = await this.prisma.refreshToken.updateMany({
+      where: { userId, sessionId, revokedAt: null },
+      data: { revokedAt: new Date() },
+    });
+    return res.count;
+  }
+
   async revokeAllForUser(userId: string): Promise<number> {
     const res = await this.prisma.refreshToken.updateMany({
       where: { userId, revokedAt: null },
       data: { revokedAt: new Date() },
     });
     return res.count;
+  }
+
+  /**
+   * Phase 4c: enumerate the user's active sessions. One row per
+   * sessionId. Each session's `lastUsedAt` is the createdAt of the most
+   * recent (rotated) refresh row in that session. `revokedAt IS NULL`
+   * means at least one row in the session is still live.
+   */
+  async listActiveSessions(
+    userId: string,
+  ): Promise<Array<{ sessionId: string; orgId: string; createdAt: Date; expiresAt: Date }>> {
+    const rows = await this.prisma.refreshToken.findMany({
+      where: { userId, revokedAt: null, expiresAt: { gt: new Date() } },
+      select: { sessionId: true, orgId: true, createdAt: true, expiresAt: true },
+      orderBy: { createdAt: 'desc' },
+    });
+    // Collapse to one row per sessionId. Keep the most-recent rotation.
+    const bySession = new Map<
+      string,
+      { sessionId: string; orgId: string; createdAt: Date; expiresAt: Date }
+    >();
+    for (const r of rows) {
+      if (!bySession.has(r.sessionId)) bySession.set(r.sessionId, r);
+    }
+    return [...bySession.values()];
   }
 }

@@ -18,6 +18,13 @@ import { getRedis } from '../../config/redis.js';
  * sub-ms typical.
  */
 const DENY_JTI_PREFIX = 'denyJti:';
+/**
+ * Phase 4c: session-id deny-list. /auth/sessions/:id DELETE writes the
+ * sessionId here with TTL = remaining access-token life so existing
+ * access tokens carrying that `sid` are denied immediately. Distinct from
+ * the jti deny-list because one session covers many rotated access tokens.
+ */
+const DENY_SID_PREFIX = 'denySid:';
 
 /**
  * Mark an access-token jti as revoked until its natural expiry. Called
@@ -29,9 +36,25 @@ export async function denyJti(jti: string, expiresAt: Date): Promise<void> {
   await getRedis().setex(`${DENY_JTI_PREFIX}${jti}`, ttlSeconds, '1');
 }
 
+/**
+ * Phase 4c: mark a sessionId revoked for `ttlSeconds` (defaults to one
+ * access-token TTL so any outstanding access tokens in that session
+ * become unusable before they'd naturally expire).
+ */
+export async function denySession(sessionId: string, ttlSeconds: number): Promise<void> {
+  if (ttlSeconds <= 0) return;
+  await getRedis().setex(`${DENY_SID_PREFIX}${sessionId}`, ttlSeconds, '1');
+}
+
 /** Check whether an access-token jti has been revoked. */
 async function isJtiDenied(jti: string): Promise<boolean> {
   const v = await getRedis().get(`${DENY_JTI_PREFIX}${jti}`);
+  return v !== null;
+}
+
+/** Phase 4c: check whether a sessionId has been revoked. */
+async function isSessionDenied(sid: string): Promise<boolean> {
+  const v = await getRedis().get(`${DENY_SID_PREFIX}${sid}`);
   return v !== null;
 }
 
@@ -59,6 +82,14 @@ export async function requireAuth(req: FastifyRequest, _reply: FastifyReply): Pr
     throw errors.unauthorized('Token revoked');
   }
 
+  // Phase 4c (session revocation): /auth/sessions/:id DELETE writes the
+  // sessionId into a Redis deny-list with TTL = access-token life. This
+  // makes session revocation effective within a single Redis round-trip
+  // rather than waiting for the access token to expire (15 min).
+  if (payload.sid && (await isSessionDenied(payload.sid))) {
+    throw errors.unauthorized('Session revoked');
+  }
+
   // Soft-deleted users lose access immediately. We re-read role +
   // platformRole on every request rather than trusting the JWT — those
   // are the most security-sensitive fields, and the cost of one indexed
@@ -84,6 +115,7 @@ export async function requireAuth(req: FastifyRequest, _reply: FastifyReply): Pr
     platformRole,
     scope: payload.scope ?? 'standard',
     jti: payload.jti,
+    sid: payload.sid,
   };
 }
 

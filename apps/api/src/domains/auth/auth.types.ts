@@ -40,4 +40,12 @@ export interface AuthContext {
   platformRole?: PlatformRole | null;
   scope: AuthScope;
   jti: string;
+  /**
+   * Phase 4c: refresh-token session id this access token was issued
+   * under. Allows /auth/sessions to mark the current session distinctly
+   * (so the UI doesn't accidentally let the user revoke the very session
+   * they're using). Optional during the migration window — pre-Phase-4c
+   * tokens still verify but carry no sid.
+   */
+  sid?: string;
 }

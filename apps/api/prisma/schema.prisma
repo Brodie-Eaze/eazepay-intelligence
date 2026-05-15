@@ -577,6 +577,11 @@ model RefreshToken {
   orgId      String    @map("org_id") @db.Uuid
   userId     String    @map("user_id") @db.Uuid
   familyId   String    @map("family_id") @db.Uuid
+  // Phase 4c: session identifier (===familyId today; can diverge once
+  // "trust this device" lands). Used by /auth/sessions enumerate +
+  // revoke, and embedded in access JWTs as `sid` so a revoked session
+  // immediately invalidates outstanding access tokens (Redis deny-list).
+  sessionId  String    @map("session_id") @db.Uuid
   tokenHash  String    @unique @map("token_hash")
   expiresAt  DateTime  @map("expires_at") @db.Timestamptz(6)
   revokedAt  DateTime? @map("revoked_at") @db.Timestamptz(6)
@@ -589,6 +594,7 @@ model RefreshToken {
   @@index([orgId, userId, revokedAt])
   @@index([userId])
   @@index([familyId])
+  @@index([userId, sessionId, revokedAt])
   @@map("refresh_tokens")
 }
 

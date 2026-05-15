@@ -7,7 +7,7 @@ import { getRedis } from '../../config/redis.js';
 import { errors } from '../../shared/errors/app-error.js';
 import { COOKIE, clearCookie, readCookie, setCookie } from '../../shared/utils/cookies.js';
 import { writeAuditLog } from '../../shared/middleware/audit-log.middleware.js';
-import { denyJti, requireAuth } from '../../shared/middleware/auth.middleware.js';
+import { denyJti, denySession, requireAuth } from '../../shared/middleware/auth.middleware.js';
 import { verifyJwt } from '../../shared/utils/jwt.js';
 import { csrfGuard } from '../../shared/middleware/csrf.middleware.js';
 import { compositeRateLimit } from '../../shared/middleware/rate-limit.middleware.js';
@@ -250,6 +250,58 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
         resourceId: auth.userId,
       });
       return { ok: true };
+    },
+  );
+
+  // ─── Sessions (Phase 4c) ──────────────────────────────────────────────────
+  //
+  // /auth/sessions enumerates every active refresh-token session for the
+  // user (one row per sessionId). /auth/sessions/:id DELETE revokes one,
+  // writing the sessionId into a Redis deny-list keyed on `sid` so any
+  // outstanding access tokens in that session are denied within one
+  // request — no waiting 15 minutes for the access cookie to expire.
+  app.get('/auth/sessions', { preHandler: requireAuth }, async (req) => {
+    const auth = req.auth!;
+    const sessions = await service.listSessions(auth.userId);
+    // Mark the "current" session so the UI can render it distinctly and
+    // guard the user from revoking the session they're currently logged
+    // in with. `sid` is populated on the AuthContext from the access JWT
+    // claim by requireAuth.
+    return {
+      sessions: sessions.map((s) => ({
+        sessionId: s.sessionId,
+        orgId: s.orgId,
+        createdAt: s.createdAt.toISOString(),
+        expiresAt: s.expiresAt.toISOString(),
+        current: auth.sid === s.sessionId,
+      })),
+    };
+  });
+
+  app.delete(
+    '/auth/sessions/:sessionId',
+    { preHandler: [requireAuth, csrfGuard] },
+    async (req, reply) => {
+      const auth = req.auth!;
+      const params = z.object({ sessionId: z.string().uuid() }).parse(req.params);
+      const count = await service.revokeSession(auth.userId, params.sessionId);
+      if (count === 0) {
+        // Either the sessionId belongs to a different user (don't leak),
+        // or it was already revoked / expired. Same response either way.
+        throw errors.notFound('Session not found');
+      }
+      // Deny the sessionId for the maximum access-token lifetime so any
+      // outstanding access tokens in this session are rejected immediately.
+      await denySession(params.sessionId, env.JWT_ACCESS_TTL_SECONDS);
+      await writeAuditLog({
+        req,
+        userId: auth.userId,
+        action: 'USER_SESSION_REVOKED',
+        resourceType: 'session',
+        resourceId: params.sessionId,
+        metadata: { rowsRevoked: count },
+      });
+      reply.status(204).send();
     },
   );
 

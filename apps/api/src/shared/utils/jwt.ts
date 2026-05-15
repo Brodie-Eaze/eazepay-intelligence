@@ -36,6 +36,14 @@ export interface JwtPayload {
   scope?: 'standard' | 'investor';
   kind: JwtKind;
   fid?: string; // refresh token family id
+  /**
+   * Phase 4c: session identifier. Bound to the refresh-token row that
+   * issued this access token. Allows requireAuth to deny access tokens
+   * the moment a session is revoked (Redis deny-list keyed on sid).
+   * Optional during the migration window — pre-Phase-4c tokens still
+   * verify; once they expire the field is universally present.
+   */
+  sid?: string;
   jti: string; // unique token id
   iat: number;
   exp: number;

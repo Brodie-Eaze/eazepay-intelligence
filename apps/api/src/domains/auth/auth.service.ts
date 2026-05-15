@@ -48,7 +48,10 @@ export class AuthService {
     }
 
     await this.repo.recordLogin(user.id);
-    return this.issueSession(user, 'standard', newRefreshFamilyId());
+    const familyId = newRefreshFamilyId();
+    // Phase 4c: 1:1 session-to-family for now. Once "trust this device"
+    // lands, sessionId persists across family rotations on the same device.
+    return this.issueSession(user, 'standard', familyId, familyId);
   }
 
   async refresh(rawRefreshToken: string): Promise<IssuedTokens> {
@@ -80,9 +83,12 @@ export class AuthService {
       newRaw,
       userId: user.id,
       familyId: stored.familyId,
+      // Phase 4c: preserve sessionId across rotation so the session
+      // identity stays stable for the user-facing /auth/sessions surface.
+      sessionId: stored.sessionId,
       expiresAt: newExpires,
     });
-    const access = await this.signAccess(user, 'standard');
+    const access = await this.signAccess(user, 'standard', stored.sessionId);
     return {
       access,
       refresh: { token: newRaw, expiresAt: newExpires },
@@ -101,6 +107,10 @@ export class AuthService {
     const env = getEnv();
     // Scope toggle re-issues a fresh access token under a new family for clean revocation.
     const familyId = newRefreshFamilyId();
+    // Phase 4c: scope toggle starts a new session (different family,
+    // different session) so revoking the toggled session doesn't kill
+    // the user's other devices.
+    const sessionId = familyId;
     const refreshRaw = AuthRepository.newRawRefreshToken();
     const refreshExpires = new Date(Date.now() + env.JWT_REFRESH_TTL_SECONDS * 1000);
     // Phase 1 retrofit: scope toggle inherits orgId from the user's
@@ -112,10 +122,11 @@ export class AuthService {
       orgId: scopeOrgId,
       userId: user.id,
       familyId,
+      sessionId,
       rawToken: refreshRaw,
       expiresAt: refreshExpires,
     });
-    const access = await this.signAccess(user, requestedScope);
+    const access = await this.signAccess(user, requestedScope, sessionId);
     return {
       access,
       refresh: { token: refreshRaw, expiresAt: refreshExpires },
@@ -129,6 +140,25 @@ export class AuthService {
     if (!rawRefreshToken) return;
     const stored = await this.repo.findRefreshTokenByRaw(rawRefreshToken);
     if (stored) await this.repo.revokeFamily(stored.familyId);
+  }
+
+  /**
+   * Phase 4c: enumerate the user's active refresh-token sessions.
+   * Surfaces sessionId, the org the session is acting under, and the
+   * createdAt / expiresAt of the most recent rotation in that session.
+   */
+  async listSessions(
+    userId: string,
+  ): Promise<Array<{ sessionId: string; orgId: string; createdAt: Date; expiresAt: Date }>> {
+    return this.repo.listActiveSessions(userId);
+  }
+
+  /**
+   * Phase 4c: revoke a single session (all refresh rows sharing that
+   * sessionId). Returns the count of refresh rows revoked.
+   */
+  async revokeSession(userId: string, sessionId: string): Promise<number> {
+    return this.repo.revokeSession(userId, sessionId);
   }
 
   async issueWsTicket(
@@ -167,7 +197,8 @@ export class AuthService {
    */
   async issueSessionForUser(user: User, scope: AuthScope = 'standard'): Promise<IssuedTokens> {
     await this.repo.recordLogin(user.id);
-    return this.issueSession(user, scope, newRefreshFamilyId());
+    const familyId = newRefreshFamilyId();
+    return this.issueSession(user, scope, familyId, familyId);
   }
 
   // ─── internal ──────────────────────────────────────────────────────────────
@@ -176,6 +207,7 @@ export class AuthService {
     user: User,
     scope: AuthScope,
     familyId: string,
+    sessionId: string,
   ): Promise<IssuedTokens> {
     const env = getEnv();
     const refreshRaw = AuthRepository.newRawRefreshToken();
@@ -189,10 +221,11 @@ export class AuthService {
       orgId: sessionOrgId,
       userId: user.id,
       familyId,
+      sessionId,
       rawToken: refreshRaw,
       expiresAt: refreshExpires,
     });
-    const access = await this.signAccess(user, scope);
+    const access = await this.signAccess(user, scope, sessionId);
     return {
       access,
       refresh: { token: refreshRaw, expiresAt: refreshExpires },
@@ -205,6 +238,7 @@ export class AuthService {
   private async signAccess(
     user: User,
     scope: AuthScope,
+    sessionId: string,
   ): Promise<{ token: string; expiresAt: Date }> {
     const env = getEnv();
     // Phase 1.3: embed the user's active organisation + per-org role in the
@@ -213,6 +247,8 @@ export class AuthService {
     // (Phase 1.3 expansion) lets the user change active org later.
     // Platform staff are embedded so requireAuth can short-circuit
     // platform-route checks without an extra DB hit.
+    // Phase 4c: embed `sid` (sessionId) so the access JWT can be denied
+    // immediately when the refresh-token session is revoked.
     const membership = await this.repo.findOldestMembership(user.id);
     const token = signJwt(
       {
@@ -223,6 +259,7 @@ export class AuthService {
         platformRole: user.platformRole ?? null,
         kind: 'access',
         jti: newJti(),
+        sid: sessionId,
         scope,
       },
       env.JWT_ACCESS_TTL_SECONDS,
