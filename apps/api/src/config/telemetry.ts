@@ -34,7 +34,8 @@
 import { NodeSDK } from '@opentelemetry/sdk-node';
 import { getNodeAutoInstrumentations } from '@opentelemetry/auto-instrumentations-node';
 import { OTLPTraceExporter } from '@opentelemetry/exporter-trace-otlp-http';
-import { Resource } from '@opentelemetry/resources';
+import { FastifyInstrumentation } from '@opentelemetry/instrumentation-fastify';
+import { resourceFromAttributes } from '@opentelemetry/resources';
 import { ATTR_SERVICE_NAME, ATTR_SERVICE_VERSION } from '@opentelemetry/semantic-conventions';
 
 let sdk: NodeSDK | undefined;
@@ -76,7 +77,7 @@ export function startTelemetry(opts: TelemetryStartOpts = {}): NodeSDK | undefin
     ...(headers ? { headers } : {}),
   });
 
-  const resource = new Resource({
+  const resource = resourceFromAttributes({
     [ATTR_SERVICE_NAME]: serviceName,
     [ATTR_SERVICE_VERSION]: process.env.npm_package_version ?? '0.1.0',
     'deployment.environment': process.env.NODE_ENV ?? 'development',
@@ -91,13 +92,14 @@ export function startTelemetry(opts: TelemetryStartOpts = {}): NodeSDK | undefin
         '@opentelemetry/instrumentation-fs': { enabled: false },
         // DNS spans rarely useful in this stack.
         '@opentelemetry/instrumentation-dns': { enabled: false },
-        // Fastify request hooks add 1 span per route — keep on, it's the
-        // money-maker for understanding p99 by route.
-        '@opentelemetry/instrumentation-fastify': { enabled: true },
         // Redis + Postgres are the highest-value spans for this platform.
         '@opentelemetry/instrumentation-ioredis': { enabled: true },
         '@opentelemetry/instrumentation-pg': { enabled: true },
       }),
+      // Fastify instrumentation moved out of the auto bundle in 0.75+ —
+      // register it explicitly. Adds 1 span per route which is the
+      // money-maker for understanding p99 by route.
+      new FastifyInstrumentation(),
     ],
   });
 
