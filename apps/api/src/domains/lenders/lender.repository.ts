@@ -9,7 +9,12 @@ export interface ILenderRepository {
     data: Prisma.LenderDecisionUncheckedCreateInput;
   }): Promise<LenderDecision>;
   findByExternalKey(externalKey: string): Promise<LenderDecision | null>;
-  waterfall(filter: { from?: Date; to?: Date; tier?: LenderTier }): Promise<WaterfallAggregate[]>;
+  waterfall(filter: {
+    orgId: string;
+    from?: Date;
+    to?: Date;
+    tier?: LenderTier;
+  }): Promise<WaterfallAggregate[]>;
 }
 
 export interface WaterfallAggregate {
@@ -58,8 +63,13 @@ export class LenderRepository implements ILenderRepository {
     });
   }
 
-  async waterfall(filter: { from?: Date; to?: Date; tier?: LenderTier }): Promise<WaterfallAggregate[]> {
-    const where: Prisma.LenderDecisionWhereInput = {};
+  async waterfall(filter: {
+    orgId: string;
+    from?: Date;
+    to?: Date;
+    tier?: LenderTier;
+  }): Promise<WaterfallAggregate[]> {
+    const where: Prisma.LenderDecisionWhereInput = { orgId: filter.orgId };
     if (filter.tier) where.lenderTier = filter.tier;
     if (filter.from || filter.to) {
       where.decisionTimestamp = {};

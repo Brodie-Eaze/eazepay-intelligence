@@ -44,6 +44,27 @@ async function main(): Promise<void> {
   });
   const orgId = bootstrapOrg.id;
 
+  // GAP-103/104/105: ensure the 7 launch-business orgs exist. The KPI
+  // endpoints + business webhook routes resolve into these slugs at
+  // ingest time; without the rows, fail-closed kicks in and every
+  // request returns 401.
+  const LAUNCH_BUSINESSES = [
+    { slug: 'medpay', name: 'medpay' },
+    { slug: 'tradepay', name: 'tradepay' },
+    { slug: 'coachpay', name: 'coachpay' },
+    { slug: 'aurean-ai', name: 'Aurean AI' },
+    { slug: 'aurean-recruitment', name: 'Aurean Recruitment' },
+    { slug: 'micamp-processing', name: 'MiCamp Processing' },
+    { slug: 'highsale', name: 'HighSale' },
+  ];
+  for (const b of LAUNCH_BUSINESSES) {
+    await prisma.organization.upsert({
+      where: { slug: b.slug },
+      create: { id: uuidv7(), slug: b.slug, name: b.name, dataRegion: 'au' },
+      update: {},
+    });
+  }
+
   // ─── Users ────────────────────────────────────────────────────────────────
   const adminHash = await argon2.hash('Demo!1234', { type: argon2.argon2id });
   const viewerHash = adminHash;

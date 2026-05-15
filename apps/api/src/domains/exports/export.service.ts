@@ -1,15 +1,20 @@
 /**
  * Export service. Runs the actual data extraction for a given export job.
  *
- * Output strategy: write to local FS under ./tmp/exports/<id>.<ext>. In
- * production this swaps to S3 with a presigned URL — the public download
- * endpoint is the same shape, only the storage backend changes.
+ * Output strategy: write via the registered `ExportStorage` driver.
+ * The two implementations (local disk + S3) live behind a common interface;
+ * the driver is selected at boot via EXPORT_STORAGE_DRIVER. See
+ * apps/api/src/shared/storage/index.ts.
+ *
+ * Phase 1.5 + Phase 3 + GAP-113: every export is org-scoped, with PII
+ * fields encrypted under the per-org DEK before egress where applicable.
+ *
+ * GAP-109: storage backend abstracted so production Railway deployments
+ * use S3 with presigned URLs (ephemeral container FS would otherwise
+ * lose exports across redeploys).
  */
-import { mkdir, writeFile } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
 import { ExportFormat, ExportStatus, ExportType, type PrismaClient } from '@prisma/client';
-
-const STORAGE_ROOT = process.env.EXPORT_STORAGE_DIR ?? join(process.cwd(), 'tmp', 'exports');
+import { getExportStorage } from '../../shared/storage/index.js';
 
 export class ExportService {
   /**
@@ -49,17 +54,28 @@ export class ExportService {
         exp.orgId,
         exp.filters as Record<string, unknown>,
       );
-      const filePath = join(STORAGE_ROOT, `${exp.id}.${this.extensionFor(exp.format)}`);
-      await mkdir(dirname(filePath), { recursive: true });
-
+      const extension = this.extensionFor(exp.format);
       let body: string;
+      let contentType: string;
       if (exp.format === ExportFormat.JSON) {
         body = JSON.stringify({ exportId, type: exp.type, rowCount: rows.length, rows }, null, 2);
+        contentType = 'application/json';
       } else {
         // Both CSV and XLSX get CSV body for now; XLSX → CSV-with-extension is acceptable until we wire xlsx writer.
         body = this.toCsv(columns, rows);
+        contentType = 'text/csv; charset=utf-8';
       }
-      await writeFile(filePath, body, 'utf8');
+
+      // Persist via the registered storage backend. Local-disk writes a
+      // file under EXPORT_STORAGE_DIR; S3 writes an object + we'll
+      // presign the download URL later. The locator the backend returns
+      // is opaque to us — we just store it in `file_path`.
+      const stored = await getExportStorage().write({
+        exportId,
+        extension,
+        body,
+        contentType,
+      });
 
       await this.prisma.export.update({
         where: { id: exportId },
@@ -67,8 +83,8 @@ export class ExportService {
           status: ExportStatus.COMPLETED,
           completedAt: new Date(),
           rowCount: rows.length,
-          filePath,
-          fileBytes: Buffer.byteLength(body, 'utf8'),
+          filePath: stored.locator,
+          fileBytes: stored.size,
           expiresAt: new Date(Date.now() + 24 * 3600_000), // 24h TTL on the download
         },
       });
@@ -82,7 +98,7 @@ export class ExportService {
     }
   }
 
-  private extensionFor(format: ExportFormat): string {
+  private extensionFor(format: ExportFormat): 'csv' | 'json' {
     switch (format) {
       case ExportFormat.CSV:
         return 'csv';

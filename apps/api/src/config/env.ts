@@ -74,6 +74,16 @@ const EnvSchema = z.object({
   // See docs/architecture/data-warehouse-overview.md § Plane 2.
   HIGHSALE_WEBHOOK_SECRET: z.string().min(32),
 
+  // GAP-103: Aurean AI business-events webhook signing secret. Verifies
+  // HMAC-SHA-256 for POST /integration/aurean-ai/events. Optional in
+  // dev (the integration starts as PAT-driven /ingestion/*); required
+  // once the Aurean platform begins emitting native webhooks.
+  AUREAN_AI_WEBHOOK_SECRET: z.string().min(32).optional(),
+
+  // GAP-104: Aurean Recruitment business-events webhook signing secret.
+  // Same pattern as AUREAN_AI above. Optional during the migration window.
+  AUREAN_RECRUITMENT_WEBHOOK_SECRET: z.string().min(32).optional(),
+
   CORS_ORIGINS: z
     .string()
     .default('http://localhost:3011')

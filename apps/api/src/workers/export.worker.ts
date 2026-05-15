@@ -7,9 +7,13 @@ import { getPrisma, getPrismaLong } from '../config/database.js';
 import { getLogger } from '../config/logger.js';
 import { EXPORT_QUEUE_NAME, type ExportJob } from '../shared/queues/export.queue.js';
 import { ExportService } from '../domains/exports/export.service.js';
+import { registerExportStorageFromEnv } from '../shared/storage/index.js';
 
 async function main(): Promise<void> {
   const log = getLogger();
+  // GAP-109: storage backend wires up here too — the worker runs as a
+  // separate process and doesn't go through src/index.ts.
+  registerExportStorageFromEnv();
   // Writer for Export-row status transitions (read-after-write consistent),
   // long-running role for the bulk row extraction (5-min statement budget,
   // separate connection pool from the API request path). When

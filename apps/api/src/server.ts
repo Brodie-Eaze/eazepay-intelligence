@@ -54,6 +54,18 @@ import { registerPortfolioRoutes } from './domains/portfolio/portfolio.routes.js
 import { registerIngestionRoutes } from './domains/ingestion/ingestion.routes.js';
 import { registerEazepayAppIntegrationRoutes } from './domains/integration/eazepay-app/eazepay-app.routes.js';
 import { registerHighsaleIntegrationRoutes } from './domains/integration/highsale/highsale.routes.js';
+import {
+  isAureanAiEnabled,
+  registerAureanAiIntegrationRoutes,
+} from './domains/integration/aurean-ai/aurean-ai.routes.js';
+import { registerAureanAiKpiRoutes } from './domains/integration/aurean-ai/aurean-ai-kpis.routes.js';
+import {
+  isAureanRecruitmentEnabled,
+  registerAureanRecruitmentIntegrationRoutes,
+} from './domains/integration/aurean-recruitment/aurean-recruitment.routes.js';
+import { registerAureanRecruitmentKpiRoutes } from './domains/integration/aurean-recruitment/aurean-recruitment-kpis.routes.js';
+import { registerHighSaleBusinessIntegrationRoutes } from './domains/integration/highsale-business/highsale-business.routes.js';
+import { registerHighSaleBusinessKpiRoutes } from './domains/integration/highsale-business/highsale-business-kpis.routes.js';
 import { registerRtbfRoutes } from './domains/rtbf/rtbf.routes.js';
 import { registerFxRoutes } from './domains/fx/fx.routes.js';
 import { registerAnalyticsWebSocket } from './websocket/analytics.gateway.js';
@@ -331,6 +343,23 @@ export async function buildServer(): Promise<FastifyInstance> {
       await registerIngestionRoutes(instance);
       await registerEazepayAppIntegrationRoutes(instance);
       await registerHighsaleIntegrationRoutes(instance);
+      // GAP-103/104: only register Aurean routes when their secrets are
+      // provisioned. They're optional during the migration window because
+      // the Aurean platforms might still be on PAT-based /ingestion/*
+      // until their native webhook emitters ship.
+      if (isAureanAiEnabled()) {
+        await registerAureanAiIntegrationRoutes(instance);
+      }
+      if (isAureanRecruitmentEnabled()) {
+        await registerAureanRecruitmentIntegrationRoutes(instance);
+      }
+      // GAP-105: HighSale business-events route (always-on; shares HMAC
+      // secret with the existing /integration/highsale/snapshots route).
+      await registerHighSaleBusinessIntegrationRoutes(instance);
+      // GAP-103/104/105: per-business KPI read endpoints.
+      await registerAureanAiKpiRoutes(instance);
+      await registerAureanRecruitmentKpiRoutes(instance);
+      await registerHighSaleBusinessKpiRoutes(instance);
       await registerRtbfRoutes(instance);
       await registerFxRoutes(instance);
     },

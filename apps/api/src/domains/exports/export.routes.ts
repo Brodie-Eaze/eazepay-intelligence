@@ -1,4 +1,3 @@
-import { createReadStream, statSync } from 'node:fs';
 import type { FastifyInstance } from 'fastify';
 import { v7 as uuidv7 } from 'uuid';
 import { z } from 'zod';
@@ -11,6 +10,7 @@ import { writeAuditLog } from '../../shared/middleware/audit-log.middleware.js';
 import { enqueueExport } from '../../shared/queues/export.queue.js';
 import { errors } from '../../shared/errors/app-error.js';
 import { getBootstrapOrgId } from '../../shared/tenant/bootstrap-org.js';
+import { getExportStorage } from '../../shared/storage/index.js';
 
 const CreateSchema = z.object({
   type: z.nativeEnum(ExportType),
@@ -111,12 +111,30 @@ export async function registerExportRoutes(app: FastifyInstance): Promise<void> 
       throw errors.badRequest('Export expired');
     }
     if (!row.filePath) throw errors.internal('Export has no file');
-    const stat = statSync(row.filePath);
+    // GAP-109: storage abstraction. Local-disk backend returns a Readable
+    // stream we pipe to the response; S3 backend returns a presigned URL
+    // we 302-redirect to. Either way the route signature is the same and
+    // tenant scoping stays at the row-ownership check above.
+    const result = await getExportStorage().read(row.filePath);
     const ext = row.format === ExportFormat.JSON ? 'json' : 'csv';
     const filename = `eazepay-${row.type.toLowerCase()}-${row.id}.${ext}`;
+    if (result.presignedUrl) {
+      // S3 path: redirect the client to a short-lived signed URL. Audit
+      // the issuance so a leaked URL in the logs is at least traceable.
+      await writeAuditLog({
+        req,
+        action: 'USER_UPDATED',
+        resourceType: 'export',
+        resourceId: row.id,
+        metadata: { kind: 'presigned_download', filename },
+      });
+      reply.header('Cache-Control', 'no-store');
+      return reply.redirect(result.presignedUrl, 302);
+    }
+    if (!result.stream) throw errors.internal('Storage backend returned no readable handle');
     reply.header('Content-Type', ext === 'json' ? 'application/json' : 'text/csv');
     reply.header('Content-Disposition', `attachment; filename="${filename}"`);
-    reply.header('Content-Length', stat.size);
-    return reply.send(createReadStream(row.filePath));
+    if (result.size != null) reply.header('Content-Length', result.size);
+    return reply.send(result.stream);
   });
 }

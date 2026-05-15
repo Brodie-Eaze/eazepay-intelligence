@@ -9,10 +9,18 @@ import { getEnv } from './config/env.js';
 import { getLogger } from './config/logger.js';
 import { disconnectPrisma } from './config/database.js';
 import { disconnectRedis } from './config/redis.js';
+import { registerExportStorageFromEnv } from './shared/storage/index.js';
 
 async function main(): Promise<void> {
   const env = getEnv();
   const log = getLogger();
+
+  // GAP-109: register the export-storage backend (local-disk or s3)
+  // based on EXPORT_STORAGE_DRIVER. Fail-closed: an unknown driver or
+  // missing s3 env vars throws here, before buildServer touches the
+  // route handlers that depend on it.
+  registerExportStorageFromEnv();
+
   const app = await buildServer();
 
   try {

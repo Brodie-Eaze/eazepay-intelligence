@@ -14,6 +14,12 @@ import {
 import { computePixieMargin } from '../pixie/pixie.algorithm.js';
 import { EazepayAppProcessor } from '../integration/eazepay-app/eazepay-app.service.js';
 import type { EazepayAppEventEnvelope } from '../integration/eazepay-app/envelope.schema.js';
+import { AureanAiProcessor } from '../integration/aurean-ai/aurean-ai.service.js';
+import type { AureanAiEventEnvelope } from '../integration/aurean-ai/envelope.schema.js';
+import { AureanRecruitmentProcessor } from '../integration/aurean-recruitment/aurean-recruitment.service.js';
+import type { AureanRecruitmentEventEnvelope } from '../integration/aurean-recruitment/envelope.schema.js';
+import { HighSaleBusinessProcessor } from '../integration/highsale-business/highsale-business.service.js';
+import type { HighSaleBusinessEventEnvelope } from '../integration/highsale-business/envelope.schema.js';
 
 export interface ProcessJobInput {
   webhookEventId: string;
@@ -25,8 +31,14 @@ export interface ProcessJobInput {
 
 export class WebhookProcessor {
   private readonly eazepayApp: EazepayAppProcessor;
+  private readonly aureanAi: AureanAiProcessor;
+  private readonly aureanRecruitment: AureanRecruitmentProcessor;
+  private readonly highSaleBusiness: HighSaleBusinessProcessor;
   constructor(private readonly prisma: PrismaClient) {
     this.eazepayApp = new EazepayAppProcessor(prisma);
+    this.aureanAi = new AureanAiProcessor(prisma);
+    this.aureanRecruitment = new AureanRecruitmentProcessor(prisma);
+    this.highSaleBusiness = new HighSaleBusinessProcessor(prisma);
   }
 
   async process(job: ProcessJobInput): Promise<void> {
@@ -53,19 +65,42 @@ export class WebhookProcessor {
           });
           break;
         }
-        case WebhookSource.HIGHSALE:
-        case WebhookSource.AUREAN_AI:
-        case WebhookSource.AUREAN_RECRUITMENT:
-          // GAP-103/104/105 drain handlers are wired in their own
-          // dedicated services; this switch covers the cases so an
-          // accidentally-routed job doesn't fall to the BUZZPAY drop arm.
-          // Today these sources don't post to the outbox; they ingest via
-          // PAT-driven /ingestion/* + their own service writes.
-          getLogger().warn(
-            { source: job.source, webhookEventId: job.webhookEventId },
-            'webhook.source.unrouted_to_processor',
-          );
+        case WebhookSource.HIGHSALE: {
+          // GAP-105: HighSale business-events drain.
+          const payload = job.payload as { envelope?: HighSaleBusinessEventEnvelope };
+          if (!payload.envelope) {
+            throw errors.badRequest('HighSale business job missing envelope');
+          }
+          await this.highSaleBusiness.process({
+            webhookEventId: job.webhookEventId,
+            envelope: payload.envelope,
+          });
           break;
+        }
+        case WebhookSource.AUREAN_AI: {
+          // GAP-103: Aurean AI inference + revenue drain.
+          const payload = job.payload as { envelope?: AureanAiEventEnvelope };
+          if (!payload.envelope) {
+            throw errors.badRequest('Aurean AI job missing envelope');
+          }
+          await this.aureanAi.process({
+            webhookEventId: job.webhookEventId,
+            envelope: payload.envelope,
+          });
+          break;
+        }
+        case WebhookSource.AUREAN_RECRUITMENT: {
+          // GAP-104: Aurean Recruitment placement + commission drain.
+          const payload = job.payload as { envelope?: AureanRecruitmentEventEnvelope };
+          if (!payload.envelope) {
+            throw errors.badRequest('Aurean Recruitment job missing envelope');
+          }
+          await this.aureanRecruitment.process({
+            webhookEventId: job.webhookEventId,
+            envelope: payload.envelope,
+          });
+          break;
+        }
         case WebhookSource.BUZZPAY:
           // Retired vendor — see docs/cuts/buzzpay-removal.md. Routes are
           // gone; this branch only fires if an old queued job is replayed.

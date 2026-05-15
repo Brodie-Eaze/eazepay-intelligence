@@ -136,16 +136,71 @@ NOBYPASSRLS, REVOKE UPDATE/DELETE on audit_logs / revenue_events / webhook_event
 outbox_events; REVOKE DELETE on credit_enrichments; selective UPDATE on tenant_encryption_keys.
 Not auto-applied — runs deliberately during a maintenance window.
 
+### GAP-108 — Per-org analytics scope
+
+All `/analytics/*` + `/revenue/*` + `/lenders/*` endpoints now derive
+`orgId` from `req.auth.orgId` (set by login from the user's oldest
+membership) and pass it to the repository layer. Every query filters
+by orgId in WHERE clauses; cache keys are namespaced by orgId so
+SET-EX races between tenants are impossible.
+
+AnalyticsRepository, AnalyticsService, RevenueRepository, RevenueService,
+LenderRepository, LenderService — every method signature now takes
+`orgId` as its first argument. Routes fail-closed with a 400 if the
+user has no active org. Platform-staff cross-org views are exclusively
+on `/platform/*`.
+
+### GAP-109 — S3 export delivery framework
+
+New `apps/api/src/shared/storage/` directory with a clean interface +
+two implementations:
+
+- `LocalDiskStorage` (dev + tests; writes to `EXPORT_STORAGE_DIR`)
+- `S3Storage` (production; writes to `EXPORT_S3_BUCKET` with
+  server-side AES256 encryption; returns 15-minute presigned URLs)
+
+`registerExportStorageFromEnv()` is called once at boot from
+`src/index.ts` + the export worker. Driver selected by
+`EXPORT_STORAGE_DRIVER` (`local` | `s3`).
+
+The download route branches on backend: local backend pipes the file
+stream to the response; S3 backend issues a 302 redirect to the
+presigned URL. The `Export.file_path` schema column stores an opaque
+locator (`/abs/path` or `s3://bucket/key`).
+
+### GAP-103 / 104 / 105 — Business webhook sinks
+
+A shared `business-webhook-ingest.ts` helper handles HMAC verify +
+2-layer idempotency + WebhookEvent persist + outbox emit; per-business
+modules supply only the routing config + Zod schema + drain handlers.
+
+- **GAP-103 Aurean AI**: `POST /integration/aurean-ai/events` (HMAC
+  with `AUREAN_AI_WEBHOOK_SECRET`), event-types `inference.completed`
+  / `score.published` / `revenue.accrued` / `model.deployed`. Drain in
+  `AureanAiProcessor`. KPI surface at `GET /aurean-ai/kpis`.
+- **GAP-104 Aurean Recruitment**: `POST /integration/aurean-recruitment
+/events`, event-types `candidate.entered_pipeline` /
+  `candidate.stage_changed` / `placement.contracted` /
+  `commission.earned` / `placement.rescinded`. Drain in
+  `AureanRecruitmentProcessor`. KPI surface at
+  `GET /aurean-recruitment/kpis` (30-day window).
+- **GAP-105 HighSale business events**: `POST /integration/highsale
+/events` (shares HMAC secret with the existing `/snapshots` route),
+  event-types `inquiry.submitted` / `risk_band.assigned` /
+  `snapshot.generated` / `revenue.recorded`. Drain in
+  `HighSaleBusinessProcessor`. KPI surface at `GET /highsale/kpis`.
+
+All three drains run inside `withTenantSession` so post-role-deploy
+the eazepay_app role sees the GUC. The seed script now upserts the
+7 launch-business orgs (`medpay` / `tradepay` / `coachpay` / `aurean-ai`
+/ `aurean-recruitment` / `micamp-processing` / `highsale`) so KPI
+endpoints have an org to resolve into out-of-the-box.
+
 ## 🟡 Deferred to future sessions
 
-These are non-blockers — the platform is production-ready without them. Each represents 4 hours
-to 5 days of focused work and ships in its own dedicated branch.
+These are non-blockers — the platform is production-ready without them.
 
 - **GAP-101** Lender adapter Plane 3 framework + reference adapter (~3–5 days; no code exists).
-- **GAP-103 / 104 / 105** Aurean AI / Recruitment / HighSale typed event Zod schemas + drain handlers + per-business KPI endpoints.
-  Enum values landed in Phase 1; the EazePay App pattern is the template (~1 day each).
-- **GAP-108** Per-org analytics endpoints. Today /analytics/\* is cross-tenant; add orgId filter or wrap in withTenantSession.
-- **GAP-109** S3 export delivery. Today exports write local FS; production needs S3 + presigned URLs.
 - **GAP-119** Customer detail lender data (depends on GAP-101).
 
 ## Production deploy checklist (Day-1 before merge)
