@@ -210,10 +210,18 @@ export class AuthService {
   }
 
   private newCsrfToken(): string {
-    // Bound to the access secret so server can verify without DB lookup.
+    // P0 fix (SEC-115): CSRF token HMAC uses CSRF_SIGNING_SECRET, not the
+    // JWT access secret. Sharing the JWT key meant any compromise of the
+    // access secret (e.g., offline brute-force on a captured cookie)
+    // immediately compromised CSRF protection too. Fallback to
+    // JWT_ACCESS_SECRET during the migration window so existing CSRF
+    // cookies remain valid until rotation; production startup enforces
+    // CSRF_SIGNING_SECRET to be set.
     const random = randomBytes(24).toString('base64url');
     const env = getEnv();
-    const sig = createHmac('sha256', env.JWT_ACCESS_SECRET).update(random).digest('base64url');
+    const sig = createHmac('sha256', env.CSRF_SIGNING_SECRET ?? env.JWT_ACCESS_SECRET)
+      .update(random)
+      .digest('base64url');
     return `${random}.${sig}`;
   }
 }
@@ -224,7 +232,11 @@ export function verifyCsrfToken(token: string | undefined): boolean {
   if (parts.length !== 2) return false;
   const [random, sig] = parts as [string, string];
   const env = getEnv();
-  const expected = createHmac('sha256', env.JWT_ACCESS_SECRET).update(random).digest('base64url');
+  // Match the secret used in `newCsrfToken` — CSRF_SIGNING_SECRET if set,
+  // JWT_ACCESS_SECRET otherwise. Once production rotates, the fallback path
+  // is unreachable because env.ts requires CSRF_SIGNING_SECRET to be set.
+  const csrfSecret = env.CSRF_SIGNING_SECRET ?? env.JWT_ACCESS_SECRET;
+  const expected = createHmac('sha256', csrfSecret).update(random).digest('base64url');
   // Constant-time compare. A naive `sig === expected` short-circuits on the
   // first byte mismatch and would leak the signature byte-by-byte under a
   // chatty attacker. Use timingSafeEqual with a length-equality pre-check.

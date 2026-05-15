@@ -49,6 +49,9 @@ export interface AwsKmsClientOptions {
 export class AwsKmsClient implements KmsClient {
   private readonly client: KMSClient;
 
+  /** See KmsClient.isProductionGrade — true here; false for LocalKmsClient. */
+  readonly isProductionGrade = true as const;
+
   constructor(opts: AwsKmsClientOptions = {}) {
     const region = opts.region ?? process.env['AWS_REGION'] ?? 'ap-southeast-2';
     this.client = new KMSClient({ region });

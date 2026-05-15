@@ -2,6 +2,7 @@ import { Prisma, RevenueEventType, RevenueStream, WebhookSource } from '@prisma/
 import { v7 as uuidv7 } from 'uuid';
 import type { PrismaClient } from '@prisma/client';
 import { getEnv } from '../../config/env.js';
+import { getLogger } from '../../config/logger.js';
 import { encryptPII } from '../../shared/utils/encryption.js';
 import { errors } from '../../shared/errors/app-error.js';
 import { publishWsEvent, withPartnerLabel } from '../../shared/utils/ws-publisher.js';
@@ -36,7 +37,23 @@ export class WebhookProcessor {
         case WebhookSource.BUZZPAY:
           // Retired vendor — see docs/cuts/buzzpay-removal.md. Routes are
           // gone; this branch only fires if an old queued job is replayed.
-          // Drop silently so it doesn't poison the queue.
+          // SF-017: log + audit the drop instead of silently swallowing so
+          // a misconfiguration (someone re-enabling BUZZPAY ingress) is
+          // visible in the metric stream.
+          getLogger().warn(
+            {
+              webhookEventId: job.webhookEventId,
+              idempotencyKey: job.idempotencyKey,
+              errorId: 'webhook.buzzpay.drop_retired',
+            },
+            'webhook.buzzpay.drop_retired',
+          );
+          await writeAuditLog({
+            action: 'WEBHOOK_FAILED',
+            resourceType: 'webhook_event',
+            resourceId: job.webhookEventId,
+            metadata: { source: 'BUZZPAY', reason: 'retired_vendor', eventType: job.eventType },
+          });
           break;
       }
       await this.prisma.webhookEvent.update({
@@ -120,6 +137,7 @@ export class WebhookProcessor {
           },
         },
         create: {
+          orgId: partner.orgId,
           partnerId: partner.id,
           period: 'DAILY',
           periodStart: dayStart,
@@ -238,8 +256,19 @@ export class WebhookProcessor {
   }): Promise<void> {
     try {
       const currency = (args.currency ?? getEnv().DEFAULT_CURRENCY).toUpperCase();
+      // Phase 1 retrofit: revenue_events now carry org_id. Resolve from the
+      // partner row (the unique (orgId, externalId) means there is exactly
+      // one partner per id).
+      const partner = await this.prisma.partner.findUnique({
+        where: { id: args.partnerId },
+        select: { orgId: true },
+      });
+      if (!partner) {
+        throw new Error(`recordRevenue: partner ${args.partnerId} not found`);
+      }
       await this.prisma.revenueEvent.create({
         data: {
+          orgId: partner.orgId,
           partnerId: args.partnerId,
           lenderDecisionId: args.lenderDecisionId ?? null,
           source: args.source,

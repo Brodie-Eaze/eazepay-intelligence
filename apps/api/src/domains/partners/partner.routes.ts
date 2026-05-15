@@ -56,7 +56,12 @@ export async function registerPartnerRoutes(app: FastifyInstance): Promise<void>
         source: 'partners',
         format: fmt,
         rowCount: rows.length,
-        scope: req.auth!.scope ?? 'operator',
+        // Fix (TD-121): `req.auth.scope` is the non-optional AuthScope union
+        // 'standard' | 'investor' — there's no 'operator' member, so the
+        // `?? 'operator'` fallback was dead code that masked a confusion
+        // between AuthScope and some other role enum. Drop the fallback;
+        // the value is always populated.
+        scope: req.auth!.scope,
       },
     });
 

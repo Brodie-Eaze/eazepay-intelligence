@@ -37,9 +37,20 @@ export interface GeneratedDataKey {
  *
  * All methods async even for in-process implementations to keep call sites
  * provider-agnostic. Callers must never branch on whether the implementation
- * is local or remote.
+ * is local or remote — EXCEPT for `isProductionGrade`, which is the single
+ * supported way to refuse irreversible operations (cryptoshred / KMS key
+ * deletion) when wired to a dev/test client. See ADR-002 §9 and SEC-108.
  */
 export interface KmsClient {
+  /**
+   * True for implementations backed by a real KMS provider whose
+   * scheduleKeyDeletion + disableKey are durable (AwsKmsClient). False for
+   * in-process implementations whose key-destruction calls are no-ops
+   * (LocalKmsClient). Callers that mutate durable state on the strength of
+   * a successful KMS call MUST assert this is true before proceeding.
+   */
+  readonly isProductionGrade: boolean;
+
   /**
    * Generate a fresh DEK + KMS-wrapped ciphertext atomically.
    *

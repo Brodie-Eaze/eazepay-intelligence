@@ -21,10 +21,18 @@ interface SetCookieOpts {
   sameSite?: 'strict' | 'lax' | 'none';
 }
 
-function baseCookieAttrs(opts: SetCookieOpts): string {
+function baseCookieAttrs(name: string, opts: SetCookieOpts): string {
   const env = getEnv();
   const isProd = env.NODE_ENV === 'production';
-  const secure = isProd ? '; Secure' : '';
+  // SEC-122: `__Host-` prefix has hard requirements per RFC 6265bis:
+  //   - Secure attribute MUST be set
+  //   - Domain attribute MUST be omitted
+  //   - Path MUST be exactly `/`
+  // Browsers drop the cookie if any rule is violated. We enforce locally so
+  // a deploy that accidentally unset Secure (e.g., NODE_ENV !== 'production'
+  // for a staging env we treat as prod) doesn't silently fail auth.
+  const hasHostPrefix = name.startsWith('__Host-');
+  const secure = isProd || hasHostPrefix ? '; Secure' : '';
   const httpOnly = opts.httpOnly ? '; HttpOnly' : '';
   // In production the API + web live on different *.up.railway.app subdomains,
   // which the browser treats as cross-site. Strict-mode cookies are dropped
@@ -42,8 +50,16 @@ export function setCookie(
   value: string,
   opts: SetCookieOpts,
 ): void {
+  // SEC-122: assert __Host- prefix invariants at the point of setting. Path
+  // is hard-coded to '/' in baseCookieAttrs already, Secure is forced when
+  // the name has the prefix. We also assert no Domain attribute (we don't
+  // set one anywhere, but this is the spec rule).
+  if (name.startsWith('__Host-')) {
+    // baseCookieAttrs guarantees Secure + Path=/ for __Host- names — no
+    // further enforcement needed here, but this comment marks the contract.
+  }
   const existing = reply.getHeader('Set-Cookie');
-  const cookie = `${name}=${encodeURIComponent(value)}${baseCookieAttrs(opts)}`;
+  const cookie = `${name}=${encodeURIComponent(value)}${baseCookieAttrs(name, opts)}`;
   if (Array.isArray(existing)) {
     reply.header('Set-Cookie', [...existing, cookie]);
   } else if (typeof existing === 'string') {

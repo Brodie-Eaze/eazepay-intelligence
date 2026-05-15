@@ -89,14 +89,20 @@ export async function registerEazepayAppIntegrationRoutes(app: FastifyInstance):
     if (skew > TOLERANCE_SECONDS) throw errors.invalidSignature();
 
     // ─── HMAC compare ──────────────────────────────────────────────────
-    // App's dispatcher signs over `JSON.stringify(envelope)`. We mirror
-    // that here — both sides re-stringify deterministically (V8
-    // preserves insertion order, Fastify doesn't reorder). When we
-    // outgrow this and need byte-exact comparison (e.g. payload
-    // contains floats), add @fastify/raw-body and switch to req.rawBody.
-    // The existing webhook signature middleware uses the same
-    // JSON.stringify approach — consistent within the codebase.
-    const rawBody = typeof req.body === 'string' ? req.body : JSON.stringify(req.body ?? {});
+    // P0 fix (SEC-004 / CR-104 / SEC-100): sign over the RAW request bytes,
+    // not a re-serialised JSON form. Fastify's JSON content-type parser is
+    // overridden in server.ts to retain `req.rawBody` for every JSON
+    // request. JSON.stringify(req.body) reorders/normalises (whitespace,
+    // numeric precision, key order, unicode escapes) and DOES NOT round-
+    // trip the App dispatcher's signed bytes — meaning legitimate webhooks
+    // can fail and crafted payloads can pass. Always read req.rawBody.
+    const rawBody = req.rawBody;
+    if (rawBody == null) {
+      // Defensive: rawBody capture is wired in server.ts. If a future
+      // refactor drops the content-type parser, fail closed — every
+      // webhook becomes 401 until the wiring is restored.
+      throw errors.invalidSignature();
+    }
     if (!verifySignature(rawBody, ts, sig, env.EAZEPAY_APP_WEBHOOK_SECRET)) {
       throw errors.invalidSignature();
     }

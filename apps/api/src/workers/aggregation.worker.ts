@@ -6,6 +6,7 @@ import { getLogger } from '../config/logger.js';
 import { getPrisma, getPrismaLong } from '../config/database.js';
 import { getRedis } from '../config/redis.js';
 import { AGGREGATION_QUEUE_NAME, type AggregationJob } from '../shared/queues/aggregation.queue.js';
+import { getBootstrapOrgId } from '../shared/tenant/bootstrap-org.js';
 
 /**
  * Materializes daily/monthly/yearly RevenueAggregation rows from the ledger.
@@ -84,9 +85,17 @@ async function main(): Promise<void> {
       const approvalRate = totalApps === 0 ? '0' : (approvedApps / totalApps).toFixed(4);
       const fundingRate = approvedApps === 0 ? '0' : (fundedApps / approvedApps).toFixed(4);
 
+      // Phase 1 retrofit: revenue_aggregations now carry org_id. The
+      // current aggregation worker computes platform-wide rollups
+      // (no per-org breakdown yet). Until per-org rollups land
+      // (Phase 1.5 follow-up), every rollup row attaches to the bootstrap
+      // org. Once partner_id is org-scoped end-to-end, this loops per
+      // organisation.id and runs the aggregations filtered by that org.
+      const bootstrapOrgId = await getBootstrapOrgId(prisma);
       await prisma.revenueAggregation.upsert({
         where: { periodStart_period: { periodStart: from, period } },
         create: {
+          orgId: bootstrapOrgId,
           period,
           periodStart: from,
           periodEnd: to,
