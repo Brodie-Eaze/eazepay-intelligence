@@ -54,6 +54,7 @@ describe('RtbfService.submit', () => {
 
     const svc = new RtbfService(prisma);
     const req = await svc.submit({
+      orgId: '00000000-0000-0000-0000-000000000001',
       emailHash: Buffer.alloc(32, 7),
       requestedById: 'user-1',
       reason: 'data-subject request',
@@ -74,6 +75,7 @@ describe('RtbfService.submit', () => {
 
     const svc = new RtbfService(prisma);
     const req = await svc.submit({
+      orgId: '00000000-0000-0000-0000-000000000001',
       emailHash: Buffer.alloc(32, 7),
       requestedById: 'user-1',
     });

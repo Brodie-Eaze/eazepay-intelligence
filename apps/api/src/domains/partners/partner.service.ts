@@ -3,7 +3,11 @@ import { v7 as uuidv7 } from 'uuid';
 import type { Partner } from '@prisma/client';
 import { errors } from '../../shared/errors/app-error.js';
 import { paginate, type Paginated } from '../../shared/utils/pagination.js';
-import type { CreatePartnerInput, UpdatePartnerInput, ListPartnersQuery } from './partner.schemas.js';
+import type {
+  CreatePartnerInput,
+  UpdatePartnerInput,
+  ListPartnersQuery,
+} from './partner.schemas.js';
 import type { IPartnerRepository } from './partner.repository.js';
 import { parseCursor } from '../../shared/utils/pagination.js';
 
@@ -28,14 +32,19 @@ export class PartnerService {
     return row;
   }
 
-  async create(input: CreatePartnerInput): Promise<Partner> {
-    const exists = await this.repo.findByExternalId(input.externalId);
-    if (exists) throw errors.conflict(`Partner with externalId already exists`, { externalId: input.externalId });
+  async create(input: CreatePartnerInput & { orgId: string }): Promise<Partner> {
+    const exists = await this.repo.findByExternalId(input.orgId, input.externalId);
+    if (exists)
+      throw errors.conflict(`Partner with externalId already exists`, {
+        externalId: input.externalId,
+      });
     const cost = new Prisma.Decimal(input.pixieDataPullCost);
     const charge = new Prisma.Decimal(input.pixieChargeRate);
     const margin = charge.minus(cost);
     return this.repo.create({
       id: uuidv7(),
+      // Phase 1 retrofit: Partner is org-scoped; externalId uniqueness is per-org.
+      orgId: input.orgId,
       externalId: input.externalId,
       name: input.name,
       industry: input.industry,
@@ -58,8 +67,10 @@ export class PartnerService {
     if (input.industry !== undefined) data.industry = input.industry;
     if (input.tier !== undefined) data.tier = input.tier;
     if (input.status !== undefined) data.status = input.status;
-    if (input.contractValue !== undefined) data.contractValue = new Prisma.Decimal(input.contractValue);
-    if (input.buzzpayRevSharePct !== undefined) data.buzzpayRevSharePct = new Prisma.Decimal(input.buzzpayRevSharePct);
+    if (input.contractValue !== undefined)
+      data.contractValue = new Prisma.Decimal(input.contractValue);
+    if (input.buzzpayRevSharePct !== undefined)
+      data.buzzpayRevSharePct = new Prisma.Decimal(input.buzzpayRevSharePct);
     if (input.pixieDataPullCost !== undefined || input.pixieChargeRate !== undefined) {
       const cost = new Prisma.Decimal(input.pixieDataPullCost ?? existing.pixieDataPullCost);
       const charge = new Prisma.Decimal(input.pixieChargeRate ?? existing.pixieChargeRate);

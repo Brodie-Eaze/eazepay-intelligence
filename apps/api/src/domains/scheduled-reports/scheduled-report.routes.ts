@@ -13,6 +13,7 @@ import { v7 as uuidv7 } from 'uuid';
 import { z } from 'zod';
 import { ExportStatus } from '@prisma/client';
 import { getPrisma } from '../../config/database.js';
+import { getBootstrapOrgId } from '../../shared/tenant/bootstrap-org.js';
 import { requireAuth } from '../../shared/middleware/auth.middleware.js';
 import { csrfGuard } from '../../shared/middleware/csrf.middleware.js';
 import { errors } from '../../shared/errors/app-error.js';
@@ -66,9 +67,11 @@ export async function registerScheduledReportRoutes(app: FastifyInstance): Promi
   app.post('/scheduled-reports', { preHandler: [requireAuth, csrfGuard] }, async (req, reply) => {
     const auth = req.auth!;
     const input = Schema.parse(req.body);
+    const orgId = auth.orgId ?? (await getBootstrapOrgId(prisma));
     const created = await prisma.scheduledReport.create({
       data: {
         id: uuidv7(),
+        orgId,
         userId: auth.userId,
         name: input.name,
         reportType: input.reportType,
@@ -127,6 +130,8 @@ export async function registerScheduledReportRoutes(app: FastifyInstance): Promi
     const run = await prisma.reportRun.create({
       data: {
         id: uuidv7(),
+        // Inherit org from the scheduled report so runs stay tenant-scoped.
+        orgId: sched.orgId,
         scheduledReportId: sched.id,
         status: ExportStatus.PENDING,
         startedAt: null,

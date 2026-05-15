@@ -56,6 +56,14 @@ export class AuthRepository {
   }
 
   async createRefreshToken(args: {
+    /**
+     * Phase 1 retrofit: refresh tokens are now org-scoped. orgId is sourced
+     * from the active membership at session-issue time; multi-org users get
+     * one refresh family per org rather than one shared across orgs (which
+     * was the prior latent bug — a stolen refresh from one org would have
+     * worked across all of the user's orgs).
+     */
+    orgId: string;
     userId: string;
     familyId: string;
     rawToken: string;
@@ -64,6 +72,7 @@ export class AuthRepository {
     return this.prisma.refreshToken.create({
       data: {
         id: uuidv7(),
+        orgId: args.orgId,
         userId: args.userId,
         familyId: args.familyId,
         tokenHash: AuthRepository.hashRefresh(args.rawToken),
@@ -79,6 +88,7 @@ export class AuthRepository {
   }
 
   async rotateRefreshToken(args: {
+    orgId: string;
     oldId: string;
     newRaw: string;
     userId: string;
@@ -89,6 +99,7 @@ export class AuthRepository {
       const created = await tx.refreshToken.create({
         data: {
           id: uuidv7(),
+          orgId: args.orgId,
           userId: args.userId,
           familyId: args.familyId,
           tokenHash: AuthRepository.hashRefresh(args.newRaw),

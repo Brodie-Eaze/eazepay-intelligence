@@ -27,6 +27,7 @@ import { csrfGuard } from '../../shared/middleware/csrf.middleware.js';
 import { requireRole } from '../../shared/middleware/rbac.middleware.js';
 import { writeAuditLog } from '../../shared/middleware/audit-log.middleware.js';
 import { errors } from '../../shared/errors/app-error.js';
+import { getBootstrapOrgId } from '../../shared/tenant/bootstrap-org.js';
 import { PortfolioRepository } from './portfolio.repository.js';
 
 const VerticalParam = z.object({ vertical: z.string().min(1).max(64) });
@@ -343,8 +344,11 @@ export async function registerPortfolioRoutes(app: FastifyInstance): Promise<voi
     '/portfolio/verticals',
     { preHandler: [requireAuth, csrfGuard, requireRole('ADMIN')] },
     async (req) => {
+      const auth = req.auth!;
       const body = VerticalUpsert.parse(req.body);
+      const orgId = auth.orgId ?? (await getBootstrapOrgId(getPrismaWriter()));
       const created = await repo.upsertVertical({
+        orgId,
         slug: body.slug,
         name: body.name,
         description: body.description,
@@ -365,10 +369,13 @@ export async function registerPortfolioRoutes(app: FastifyInstance): Promise<voi
     '/portfolio/businesses',
     { preHandler: [requireAuth, csrfGuard, requireRole('ADMIN')] },
     async (req) => {
+      const auth = req.auth!;
       const body = BusinessUpsert.parse(req.body);
       if (!(await repo.getVertical(body.vertical))) throw errors.notFound('vertical');
       const existed = Boolean(await repo.getBusiness(body.slug));
+      const orgId = auth.orgId ?? (await getBootstrapOrgId(getPrismaWriter()));
       const saved = await repo.upsertBusiness({
+        orgId,
         slug: body.slug,
         name: body.name,
         verticalSlug: body.vertical,
@@ -429,11 +436,15 @@ export async function registerPortfolioRoutes(app: FastifyInstance): Promise<voi
     '/portfolio/businesses/:slug/pnl',
     { preHandler: [requireAuth, csrfGuard, requireRole('ADMIN')] },
     async (req) => {
+      const auth = req.auth!;
       const params = BusinessParam.parse(req.params);
-      if (!(await repo.getBusiness(params.slug))) throw errors.notFound('business');
+      const business = await repo.getBusiness(params.slug);
+      if (!business) throw errors.notFound('business');
       const body = PnlPush.parse(req.body);
+      const orgId = auth.orgId ?? business.orgId ?? (await getBootstrapOrgId(getPrismaWriter()));
       const ingested = await repo.replaceFinancialPeriods(
         params.slug,
+        orgId,
         body.periods.map((p) => ({ ...p, periodStart: new Date(p.periodStart) })),
       );
       await writeAuditLog({
@@ -452,15 +463,19 @@ export async function registerPortfolioRoutes(app: FastifyInstance): Promise<voi
     '/portfolio/businesses/:slug/revenue',
     { preHandler: [requireAuth, csrfGuard, requireRole('ADMIN')] },
     async (req) => {
+      const auth = req.auth!;
       const params = BusinessParam.parse(req.params);
-      if (!(await repo.getBusiness(params.slug))) throw errors.notFound('business');
+      const business = await repo.getBusiness(params.slug);
+      if (!business) throw errors.notFound('business');
       const body = RevenuePush.parse(req.body);
       const asOf = body.asOf ? new Date(body.asOf) : todayDate();
+      const orgId = auth.orgId ?? business.orgId ?? (await getBootstrapOrgId(getPrismaWriter()));
       // Atomic replace of both surfaces in one transaction — channels and
       // products are a logical unit; partial failure must roll back to the
       // previous snapshot rather than landing one half of the new state.
       const { channels, products } = await repo.replaceRevenue(
         params.slug,
+        orgId,
         asOf,
         body.channels,
         body.products,
@@ -481,10 +496,13 @@ export async function registerPortfolioRoutes(app: FastifyInstance): Promise<voi
     '/portfolio/businesses/:slug/unit-economics',
     { preHandler: [requireAuth, csrfGuard, requireRole('ADMIN')] },
     async (req) => {
+      const auth = req.auth!;
       const params = BusinessParam.parse(req.params);
-      if (!(await repo.getBusiness(params.slug))) throw errors.notFound('business');
+      const business = await repo.getBusiness(params.slug);
+      if (!business) throw errors.notFound('business');
       const body = UnitEconomicsPush.parse(req.body);
-      const saved = await repo.upsertUnitEconomics(params.slug, {
+      const orgId = auth.orgId ?? business.orgId ?? (await getBootstrapOrgId(getPrismaWriter()));
+      const saved = await repo.upsertUnitEconomics(params.slug, orgId, {
         asOf: body.asOf ? new Date(body.asOf) : todayDate(),
         cac: body.cac,
         ltv: body.ltv,
@@ -510,11 +528,15 @@ export async function registerPortfolioRoutes(app: FastifyInstance): Promise<voi
     '/portfolio/businesses/:slug/cohorts',
     { preHandler: [requireAuth, csrfGuard, requireRole('ADMIN')] },
     async (req) => {
+      const auth = req.auth!;
       const params = BusinessParam.parse(req.params);
-      if (!(await repo.getBusiness(params.slug))) throw errors.notFound('business');
+      const business = await repo.getBusiness(params.slug);
+      if (!business) throw errors.notFound('business');
       const body = CohortsPush.parse(req.body);
+      const orgId = auth.orgId ?? business.orgId ?? (await getBootstrapOrgId(getPrismaWriter()));
       const ingested = await repo.replaceCohorts(
         params.slug,
+        orgId,
         body.cohorts.map((c) => ({ ...c, cohortMonth: new Date(c.cohortMonth) })),
       );
       await writeAuditLog({
@@ -533,11 +555,14 @@ export async function registerPortfolioRoutes(app: FastifyInstance): Promise<voi
     '/portfolio/businesses/:slug/headcount',
     { preHandler: [requireAuth, csrfGuard, requireRole('ADMIN')] },
     async (req) => {
+      const auth = req.auth!;
       const params = BusinessParam.parse(req.params);
-      if (!(await repo.getBusiness(params.slug))) throw errors.notFound('business');
+      const business = await repo.getBusiness(params.slug);
+      if (!business) throw errors.notFound('business');
       const body = HeadcountPush.parse(req.body);
       const asOf = body.asOf ? new Date(body.asOf) : todayDate();
-      const ingested = await repo.replaceHeadcount(params.slug, asOf, body.rows);
+      const orgId = auth.orgId ?? business.orgId ?? (await getBootstrapOrgId(getPrismaWriter()));
+      const ingested = await repo.replaceHeadcount(params.slug, orgId, asOf, body.rows);
       await writeAuditLog({
         req,
         action: 'PORTFOLIO_DATA_INGESTED',

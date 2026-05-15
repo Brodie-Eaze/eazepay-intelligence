@@ -41,6 +41,11 @@ import { errors } from '../../shared/errors/app-error.js';
 import { withSpan } from '../../shared/utils/tracing.js';
 
 export interface SubmitInput {
+  /**
+   * Phase 1 retrofit: RTBF requests are org-scoped. The tenant whose data is
+   * being erased. Caller (route handler) sources this from req.auth.orgId.
+   */
+  orgId: string;
   emailHash: Buffer;
   requestedById: string;
   reason?: string;
@@ -63,6 +68,7 @@ export class RtbfService {
     const created = await this.prisma.rtbfRequest.create({
       data: {
         id: uuidv7(),
+        orgId: input.orgId,
         emailHash: input.emailHash,
         requestedById: input.requestedById,
         ...(input.reason ? { reason: input.reason } : {}),

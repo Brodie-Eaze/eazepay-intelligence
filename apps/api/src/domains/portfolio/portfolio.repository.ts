@@ -26,6 +26,7 @@ import type {
 } from '@prisma/client';
 
 export interface BusinessUpsertInput {
+  orgId: string;
   slug: string;
   name: string;
   verticalSlug: string;
@@ -133,13 +134,19 @@ export class PortfolioRepository {
   }
 
   upsertVertical(input: {
+    orgId: string;
     slug: string;
     name: string;
     description?: string;
   }): Promise<PortfolioVertical> {
     return this.writer.portfolioVertical.upsert({
       where: { slug: input.slug },
-      create: { slug: input.slug, name: input.name, description: input.description ?? '' },
+      create: {
+        slug: input.slug,
+        orgId: input.orgId,
+        name: input.name,
+        description: input.description ?? '',
+      },
       update: { name: input.name, description: input.description ?? '' },
     });
   }
@@ -179,7 +186,7 @@ export class PortfolioRepository {
     };
     return this.writer.portfolioBusiness.upsert({
       where: { slug: input.slug },
-      create: { slug: input.slug, ...data },
+      create: { slug: input.slug, orgId: input.orgId, ...data },
       update: data,
     });
   }
@@ -219,7 +226,11 @@ export class PortfolioRepository {
     });
   }
 
-  async replaceFinancialPeriods(slug: string, periods: FinancialPeriodInput[]): Promise<number> {
+  async replaceFinancialPeriods(
+    slug: string,
+    orgId: string,
+    periods: FinancialPeriodInput[],
+  ): Promise<number> {
     // Replace-set semantics: clear then bulk insert. Atomic via $transaction.
     return this.writer.$transaction(async (tx) => {
       await tx.portfolioFinancialPeriod.deleteMany({ where: { businessSlug: slug } });
@@ -227,6 +238,7 @@ export class PortfolioRepository {
       await tx.portfolioFinancialPeriod.createMany({
         data: periods.map((p) => ({
           id: uuidv7(),
+          orgId,
           businessSlug: slug,
           periodStart: p.periodStart,
           periodLabel: p.periodLabel,
@@ -284,6 +296,7 @@ export class PortfolioRepository {
 
   async replaceChannels(
     slug: string,
+    orgId: string,
     asOf: Date,
     channels: RevenueChannelInput[],
   ): Promise<number> {
@@ -293,6 +306,7 @@ export class PortfolioRepository {
       await tx.portfolioRevenueChannel.createMany({
         data: channels.map((c) => ({
           id: uuidv7(),
+          orgId,
           businessSlug: slug,
           asOf,
           channel: c.channel,
@@ -305,13 +319,19 @@ export class PortfolioRepository {
     });
   }
 
-  async replaceProducts(slug: string, asOf: Date, products: ProductLineInput[]): Promise<number> {
+  async replaceProducts(
+    slug: string,
+    orgId: string,
+    asOf: Date,
+    products: ProductLineInput[],
+  ): Promise<number> {
     return this.writer.$transaction(async (tx) => {
       await tx.portfolioProductLine.deleteMany({ where: { businessSlug: slug, asOf } });
       if (products.length === 0) return 0;
       await tx.portfolioProductLine.createMany({
         data: products.map((p) => ({
           id: uuidv7(),
+          orgId,
           businessSlug: slug,
           asOf,
           name: p.name,
@@ -335,6 +355,7 @@ export class PortfolioRepository {
    */
   async replaceRevenue(
     slug: string,
+    orgId: string,
     asOf: Date,
     channels: RevenueChannelInput[],
     products: ProductLineInput[],
@@ -346,6 +367,7 @@ export class PortfolioRepository {
         await tx.portfolioRevenueChannel.createMany({
           data: channels.map((c) => ({
             id: uuidv7(),
+            orgId,
             businessSlug: slug,
             asOf,
             channel: c.channel,
@@ -359,6 +381,7 @@ export class PortfolioRepository {
         await tx.portfolioProductLine.createMany({
           data: products.map((p) => ({
             id: uuidv7(),
+            orgId,
             businessSlug: slug,
             asOf,
             name: p.name,
@@ -378,7 +401,11 @@ export class PortfolioRepository {
     return this.reader.portfolioUnitEconomics.findUnique({ where: { businessSlug: slug } });
   }
 
-  upsertUnitEconomics(slug: string, input: UnitEconomicsInput): Promise<PortfolioUnitEconomics> {
+  upsertUnitEconomics(
+    slug: string,
+    orgId: string,
+    input: UnitEconomicsInput,
+  ): Promise<PortfolioUnitEconomics> {
     const data = {
       asOf: input.asOf,
       cac: input.cac.toString(),
@@ -391,7 +418,7 @@ export class PortfolioRepository {
     };
     return this.writer.portfolioUnitEconomics.upsert({
       where: { businessSlug: slug },
-      create: { businessSlug: slug, ...data },
+      create: { businessSlug: slug, orgId, ...data },
       update: data,
     });
   }
@@ -405,13 +432,14 @@ export class PortfolioRepository {
     });
   }
 
-  async replaceCohorts(slug: string, cohorts: CohortInput[]): Promise<number> {
+  async replaceCohorts(slug: string, orgId: string, cohorts: CohortInput[]): Promise<number> {
     return this.writer.$transaction(async (tx) => {
       await tx.portfolioCohort.deleteMany({ where: { businessSlug: slug } });
       if (cohorts.length === 0) return 0;
       await tx.portfolioCohort.createMany({
         data: cohorts.map((c) => ({
           id: uuidv7(),
+          orgId,
           businessSlug: slug,
           cohortMonth: c.cohortMonth,
           customers: c.customers,
@@ -440,13 +468,19 @@ export class PortfolioRepository {
     });
   }
 
-  async replaceHeadcount(slug: string, asOf: Date, rows: HeadcountInput[]): Promise<number> {
+  async replaceHeadcount(
+    slug: string,
+    orgId: string,
+    asOf: Date,
+    rows: HeadcountInput[],
+  ): Promise<number> {
     return this.writer.$transaction(async (tx) => {
       await tx.portfolioHeadcount.deleteMany({ where: { businessSlug: slug, asOf } });
       if (rows.length === 0) return 0;
       await tx.portfolioHeadcount.createMany({
         data: rows.map((r) => ({
           id: uuidv7(),
+          orgId,
           businessSlug: slug,
           asOf,
           function: r.function,

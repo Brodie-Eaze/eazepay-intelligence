@@ -121,7 +121,14 @@ function getOutbound(): OutboundWebhookService {
  * Trade-off accepted. A wire-format snapshot test in `tests/integration/`
  * would pin the contract; deferred to P2 alongside OpenAPI emission.
  */
-export async function publishWsEvent(event: object, redis?: Redis): Promise<void> {
+/**
+ * Phase 1 retrofit: events are tenant-scoped at publish time so the
+ * outbound webhook fan-out can only deliver to subscribers in the
+ * originating tenant. Callers must thread `orgId` (most have it from
+ * the partner row that triggered the event; the webhook signature
+ * middleware resolves orgId from the WebhookCredential match).
+ */
+export async function publishWsEvent(orgId: string, event: object, redis?: Redis): Promise<void> {
   const r = redis ?? getRedisPublisher();
   await r.publish(WS_CHANNEL, JSON.stringify(event));
 
@@ -131,10 +138,10 @@ export async function publishWsEvent(event: object, redis?: Redis): Promise<void
   const evt = event as { type?: string };
   if (!evt.type) return;
   try {
-    await getOutbound().dispatch(evt.type, event);
+    await getOutbound().dispatch(orgId, evt.type, event);
   } catch (err) {
     const log = getLogger();
-    log.error({ err, eventType: evt.type }, 'ws-publisher.outbound_dispatch_failed');
+    log.error({ err, eventType: evt.type, orgId }, 'ws-publisher.outbound_dispatch_failed');
     throw err;
   }
 }

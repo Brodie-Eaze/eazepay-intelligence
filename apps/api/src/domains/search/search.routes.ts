@@ -13,6 +13,7 @@ import { z } from 'zod';
 import { getPrismaReader, getPrismaWriter } from '../../config/database.js';
 import { requireAuth } from '../../shared/middleware/auth.middleware.js';
 import { csrfGuard } from '../../shared/middleware/csrf.middleware.js';
+import { getBootstrapOrgId } from '../../shared/tenant/bootstrap-org.js';
 import { errors } from '../../shared/errors/app-error.js';
 
 interface Hit {
@@ -163,9 +164,13 @@ export async function registerSearchRoutes(app: FastifyInstance): Promise<void> 
   app.post('/saved-views', { preHandler: [requireAuth, csrfGuard] }, async (req, reply) => {
     const auth = req.auth!;
     const input = SavedViewSchema.parse(req.body);
+    // Phase 1 retrofit: saved views are org-scoped so a multi-org user's
+    // shared views don't bleed across their tenants.
+    const orgId = auth.orgId ?? (await getBootstrapOrgId(prismaW));
     const created = await prismaW.savedView.create({
       data: {
         id: uuidv7(),
+        orgId,
         userId: auth.userId,
         name: input.name,
         resourceType: input.resourceType,

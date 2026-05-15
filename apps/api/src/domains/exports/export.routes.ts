@@ -10,6 +10,7 @@ import { requireCookieOrBearer } from '../../shared/middleware/bearer-auth.middl
 import { writeAuditLog } from '../../shared/middleware/audit-log.middleware.js';
 import { enqueueExport } from '../../shared/queues/export.queue.js';
 import { errors } from '../../shared/errors/app-error.js';
+import { getBootstrapOrgId } from '../../shared/tenant/bootstrap-org.js';
 
 const CreateSchema = z.object({
   type: z.nativeEnum(ExportType),
@@ -23,9 +24,16 @@ export async function registerExportRoutes(app: FastifyInstance): Promise<void> 
   app.post('/exports', { preHandler: [requireCookieOrBearer, csrfGuard] }, async (req, reply) => {
     const auth = req.auth!;
     const input = CreateSchema.parse(req.body);
+    // Phase 1 retrofit: exports are tenant-scoped so dispatch + download
+    // can be filtered to the requesting tenant. Source from auth.orgId
+    // (set by resolveTenantFromPath on /o/:orgSlug/ routes or by
+    // requireBearerAuth for PAT callers); bootstrap fallback during the
+    // Phase 1.3 transition window.
+    const orgId = auth.orgId ?? (await getBootstrapOrgId(prisma));
     const created = await prisma.export.create({
       data: {
         id: uuidv7(),
+        orgId,
         userId: auth.userId,
         type: input.type,
         format: input.format,

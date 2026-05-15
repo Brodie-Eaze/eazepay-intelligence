@@ -5,9 +5,11 @@ import type { Redis } from 'ioredis';
 import type { User } from '@prisma/client';
 
 import { getEnv } from '../../config/env.js';
+import { getPrisma } from '../../config/database.js';
 import { errors } from '../../shared/errors/app-error.js';
 import { verifyPassword } from '../../shared/utils/password.js';
 import { newJti, newRefreshFamilyId, signJwt, verifyJwt } from '../../shared/utils/jwt.js';
+import { getBootstrapOrgId } from '../../shared/tenant/bootstrap-org.js';
 import { AuthRepository } from './auth.repository.js';
 
 export type AuthScope = 'standard' | 'investor';
@@ -66,7 +68,14 @@ export class AuthService {
     const env = getEnv();
     const newRaw = AuthRepository.newRawRefreshToken();
     const newExpires = new Date(Date.now() + env.JWT_REFRESH_TTL_SECONDS * 1000);
+    // Phase 1 retrofit: refresh-token org is preserved across rotation.
+    // The stored row already carries orgId from when it was issued; we
+    // re-use it for the rotated row so a single refresh chain stays
+    // pinned to one tenant rather than drifting to whatever the user's
+    // oldest membership happens to be at this moment.
+    const refreshOrgId = stored.orgId;
     await this.repo.rotateRefreshToken({
+      orgId: refreshOrgId,
       oldId: stored.id,
       newRaw,
       userId: user.id,
@@ -94,7 +103,13 @@ export class AuthService {
     const familyId = newRefreshFamilyId();
     const refreshRaw = AuthRepository.newRawRefreshToken();
     const refreshExpires = new Date(Date.now() + env.JWT_REFRESH_TTL_SECONDS * 1000);
+    // Phase 1 retrofit: scope toggle inherits orgId from the user's
+    // oldest membership (same source as the access JWT). Once an explicit
+    // org-switcher endpoint lands, callers pass orgId directly.
+    const scopeMembership = await this.repo.findOldestMembership(user.id);
+    const scopeOrgId = scopeMembership?.orgId ?? (await getBootstrapOrgId(getPrisma()));
     await this.repo.createRefreshToken({
+      orgId: scopeOrgId,
       userId: user.id,
       familyId,
       rawToken: refreshRaw,
@@ -165,7 +180,13 @@ export class AuthService {
     const env = getEnv();
     const refreshRaw = AuthRepository.newRawRefreshToken();
     const refreshExpires = new Date(Date.now() + env.JWT_REFRESH_TTL_SECONDS * 1000);
+    // Phase 1 retrofit: pin the refresh token to the user's active org
+    // (oldest membership during the Phase 1.3 transition; an explicit
+    // org-switcher endpoint will replace this once it lands).
+    const sessionMembership = await this.repo.findOldestMembership(user.id);
+    const sessionOrgId = sessionMembership?.orgId ?? (await getBootstrapOrgId(getPrisma()));
     await this.repo.createRefreshToken({
+      orgId: sessionOrgId,
       userId: user.id,
       familyId,
       rawToken: refreshRaw,

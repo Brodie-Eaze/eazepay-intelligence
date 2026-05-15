@@ -125,10 +125,18 @@ export class OutboundWebhookService {
   /**
    * Fan out an event to every active subscription that wants this event type.
    * Returns the number of deliveries scheduled.
+   *
+   * Phase 1 retrofit (GAP-115): the dispatch is org-scoped. Subscribers
+   * only receive events that belong to their tenant. The caller must
+   * supply `orgId`; producers of the event know which tenant it belongs
+   * to (e.g. webhook signature verification resolves it from the
+   * WebhookCredential row that matched). Previously dispatch fanned out
+   * to every matching subscription across all tenants — a wire-level
+   * cross-tenant data leak by design.
    */
-  async dispatch(eventType: string, payload: unknown): Promise<number> {
+  async dispatch(orgId: string, eventType: string, payload: unknown): Promise<number> {
     const subs = await this.prisma.webhookSubscription.findMany({
-      where: { isActive: true, eventTypes: { has: eventType } },
+      where: { orgId, isActive: true, eventTypes: { has: eventType } },
     });
     if (subs.length === 0) return 0;
     let count = 0;
@@ -136,6 +144,7 @@ export class OutboundWebhookService {
       const delivery = await this.prisma.webhookDelivery.create({
         data: {
           id: uuidv7(),
+          orgId: sub.orgId,
           subscriptionId: sub.id,
           eventType,
           payload: payload as object,

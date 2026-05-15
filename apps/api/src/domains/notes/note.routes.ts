@@ -13,6 +13,7 @@ import { requireAuth } from '../../shared/middleware/auth.middleware.js';
 import { csrfGuard } from '../../shared/middleware/csrf.middleware.js';
 import { requireRole } from '../../shared/middleware/rbac.middleware.js';
 import { writeAuditLog } from '../../shared/middleware/audit-log.middleware.js';
+import { getBootstrapOrgId } from '../../shared/tenant/bootstrap-org.js';
 import { errors } from '../../shared/errors/app-error.js';
 
 const ALLOWED = ['customer', 'partner', 'application', 'lender_decision', 'case'] as const;
@@ -61,9 +62,13 @@ export async function registerNoteRoutes(app: FastifyInstance): Promise<void> {
     async (req, reply) => {
       const auth = req.auth!;
       const input = CreateSchema.parse(req.body);
+      // Phase 1 retrofit: notes are tenant-scoped to prevent cross-org
+      // visibility when a user holds memberships in multiple orgs.
+      const orgId = auth.orgId ?? (await getBootstrapOrgId(prisma));
       const created = await prisma.note.create({
         data: {
           id: uuidv7(),
+          orgId,
           resourceType: input.resourceType,
           resourceId: input.resourceId,
           authorUserId: auth.userId,

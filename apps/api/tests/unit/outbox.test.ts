@@ -28,6 +28,10 @@ describe('outbox append', () => {
       },
     };
     const id = await appendToOutbox(fakeTx as never, {
+      // Phase 1 retrofit: outbox rows are org-scoped. Test supplies orgId
+      // explicitly to avoid the bootstrap-org lookup path that would need a
+      // full prisma mock.
+      orgId: '00000000-0000-0000-0000-000000000001',
       kind: 'WEBHOOK_INBOUND',
       payload: { exampleKey: 'value' },
       refType: 'webhook_event',

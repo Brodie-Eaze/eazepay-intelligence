@@ -8,6 +8,7 @@ import { csrfGuard } from '../../shared/middleware/csrf.middleware.js';
 import { writeAuditLog } from '../../shared/middleware/audit-log.middleware.js';
 import { errors } from '../../shared/errors/app-error.js';
 import { OutboundWebhookService, assertPublicHostname } from './outbound-webhook.service.js';
+import { getBootstrapOrgId } from '../../shared/tenant/bootstrap-org.js';
 import { enqueueWebhookDelivery } from '../../shared/queues/webhook-delivery.queue.js';
 
 const KNOWN_EVENT_TYPES = [
@@ -72,9 +73,14 @@ export async function registerOutboundWebhookRoutes(app: FastifyInstance): Promi
         return { error: { code, message: `Webhook URL rejected: ${code}` } };
       }
       const secret = randomBytes(32).toString('hex');
+      // Phase 1 retrofit (closes GAP-115): subscriptions are org-scoped so
+      // dispatch() only fans deliveries to subscriptions belonging to the
+      // event's org. Source orgId from the authenticated principal.
+      const orgId = auth.orgId ?? (await getBootstrapOrgId(prisma));
       const created = await prisma.webhookSubscription.create({
         data: {
           id: uuidv7(),
+          orgId,
           ownerUserId: auth.userId,
           name: input.name,
           url: input.url,
@@ -178,6 +184,9 @@ export async function registerOutboundWebhookRoutes(app: FastifyInstance): Promi
       const delivery = await prisma.webhookDelivery.create({
         data: {
           id: uuidv7(),
+          // Inherit org from the subscription — delivery is scoped to the
+          // same tenant the subscription belongs to.
+          orgId: sub.orgId,
           subscriptionId: sub.id,
           eventType: 'system.test',
           payload: { test: true, at: new Date().toISOString() },
@@ -243,6 +252,9 @@ export async function registerOutboundWebhookRoutes(app: FastifyInstance): Promi
       const fresh = await prisma.webhookDelivery.create({
         data: {
           id: uuidv7(),
+          // Inherit org from the original delivery — replay stays within
+          // the same tenant.
+          orgId: delivery.orgId,
           subscriptionId: delivery.subscriptionId,
           eventType: delivery.eventType,
           payload: delivery.payload as object,

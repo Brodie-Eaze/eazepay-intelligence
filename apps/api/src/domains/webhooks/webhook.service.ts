@@ -176,6 +176,7 @@ export class WebhookProcessor {
         });
       }
       await publishWsEvent(
+        partner.orgId,
         withPartnerLabel({
           type: 'pixie.usage_reported',
           at: new Date().toISOString(),
@@ -282,6 +283,7 @@ export class WebhookProcessor {
         },
       });
       await publishWsEvent(
+        partner.orgId,
         withPartnerLabel({
           type: 'revenue.event',
           at: new Date().toISOString(),
