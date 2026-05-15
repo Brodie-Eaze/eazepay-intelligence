@@ -29,7 +29,11 @@ async function main(): Promise<void> {
     { connection: getRedis(), concurrency: getEnv().WORKER_DELIVERY_CONCURRENCY, autorun: true },
   );
 
-  worker.on('failed', async (job, err) => {
+  // Sync callback — BullMQ's `.on('failed', ...)` doesn't await its handler,
+  // so any rejection from an `async` callback would die silently on the
+  // floor. Use a non-async handler and explicit `.catch` for the DB write
+  // so the rejection is always surfaced.
+  worker.on('failed', (job, err) => {
     log.error(
       { jobId: job?.id, attempt: job?.attemptsMade, err: err.message },
       'webhook-delivery.failed',
@@ -40,22 +44,21 @@ async function main(): Promise<void> {
       // final-failure marker meant SLA-miss alerts never fired and the
       // delivery row was stuck in RETRYING / FAILED forever. Log the
       // failure with a stable errorId so on-call sees it.
-      const prisma = getPrisma();
-      try {
-        await prisma.webhookDelivery.update({
+      void getPrisma()
+        .webhookDelivery.update({
           where: { id: job.data.deliveryId },
           data: { status: 'ABANDONED' },
+        })
+        .catch((markErr: unknown) => {
+          log.error(
+            {
+              err: markErr,
+              errorId: 'webhook_delivery.mark_abandoned_failed',
+              deliveryId: job.data.deliveryId,
+            },
+            'webhook-delivery.mark_abandoned_failed — manual reconciliation needed',
+          );
         });
-      } catch (markErr) {
-        log.error(
-          {
-            err: markErr,
-            errorId: 'webhook_delivery.mark_abandoned_failed',
-            deliveryId: job.data.deliveryId,
-          },
-          'webhook-delivery.mark_abandoned_failed — manual reconciliation needed',
-        );
-      }
     }
   });
 

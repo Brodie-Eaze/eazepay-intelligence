@@ -221,9 +221,16 @@ export async function buildServer(): Promise<FastifyInstance> {
       // amplify the storm we're trying to throttle, so we stay fire-and-forget
       // and only on requests that have an authenticated principal.
       if (req.auth) {
+        // Log at debug — Redis failure here is recoverable (we lose one
+        // audit counter increment, not the rate-limit decision itself)
+        // but a silent `.catch(() => {})` would mask a Redis outage that
+        // every other path also depends on. Debug log preserves signal
+        // for on-call without amplifying the 429 storm we're throttling.
         void getRedis()
           .incr(`ratelimit:denied:${req.auth.userId}:${new Date().toISOString().slice(0, 13)}`)
-          .catch(() => {});
+          .catch((err: unknown) => {
+            req.log.debug({ err }, 'ratelimit.denied.audit.failed');
+          });
       }
       return {
         error: {

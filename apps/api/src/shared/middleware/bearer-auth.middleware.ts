@@ -56,10 +56,16 @@ export async function requireBearerAuth(req: FastifyRequest, _reply: FastifyRepl
     throw errors.unauthorized('Membership revoked for this org');
   }
 
-  // Bump last_used_at (best-effort).
+  // Bump last_used_at (best-effort). Logged at debug so a Postgres-write
+  // failure here doesn't disrupt the auth flow (the token is already
+  // validated — last_used_at is just a UI hint), but the prior silent
+  // `.catch(() => {})` would hide a wider DB outage. Debug preserves the
+  // signal without flooding the log under sustained read load.
   void getPrisma()
     .apiToken.update({ where: { id: row.id }, data: { lastUsedAt: new Date() } })
-    .catch(() => {});
+    .catch((err: unknown) => {
+      req.log.debug({ err, tokenId: row.id }, 'apiToken.lastUsedAt.bump.failed');
+    });
 
   req.auth = {
     userId: row.user.id,
