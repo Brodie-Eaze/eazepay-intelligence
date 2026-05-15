@@ -34,7 +34,7 @@ describe('PortfolioRepository — verticals', () => {
   it('upsertVertical composes a create/update body and returns the row', async () => {
     const { PortfolioRepository } =
       await import('../../src/domains/portfolio/portfolio.repository.js');
-    const captured: Array<unknown> = [];
+    const captured: unknown[] = [];
     const writer = {
       portfolioVertical: {
         upsert: vi.fn(async (args: unknown) => {
@@ -62,7 +62,7 @@ describe('PortfolioRepository — verticals', () => {
   it('upsertVertical defaults description to empty string', async () => {
     const { PortfolioRepository } =
       await import('../../src/domains/portfolio/portfolio.repository.js');
-    const captured: Array<unknown> = [];
+    const captured: unknown[] = [];
     const writer = {
       portfolioVertical: {
         upsert: vi.fn(async (args: unknown) => {
@@ -91,7 +91,7 @@ describe('PortfolioRepository — businesses', () => {
     const writer = {} as never;
     const repo = new PortfolioRepository(writer, reader);
     await repo.listBusinesses({ vertical: 'coaching' });
-    const calls = findMany.mock.calls as unknown as Array<[{ where: { verticalSlug: string } }]>;
+    const calls = findMany.mock.calls as unknown as [{ where: { verticalSlug: string } }][];
     expect(calls[0]?.[0]?.where.verticalSlug).toBe('coaching');
   });
 
@@ -103,14 +103,14 @@ describe('PortfolioRepository — businesses', () => {
     const writer = {} as never;
     const repo = new PortfolioRepository(writer, reader);
     await repo.listBusinesses();
-    const calls2 = findMany.mock.calls as unknown as Array<[{ where: Record<string, unknown> }]>;
+    const calls2 = findMany.mock.calls as unknown as [{ where: Record<string, unknown> }][];
     expect(calls2[0]?.[0]?.where).toEqual({});
   });
 
   it('upsertBusiness stringifies decimal-ish fields and uppercases currency', async () => {
     const { PortfolioRepository } =
       await import('../../src/domains/portfolio/portfolio.repository.js');
-    const captured: Array<unknown> = [];
+    const captured: unknown[] = [];
     const writer = {
       portfolioBusiness: {
         upsert: vi.fn(async (args: unknown) => {
@@ -256,9 +256,9 @@ describe('PortfolioRepository — replace-set tx semantics', () => {
     await repo.replaceChannels('apex', '00000000-0000-0000-0000-000000000001', asOf, [
       { channel: 'Paid social', revenue: 100, customers: 10, share: 0.5 },
     ]);
-    const calls = h.txOps.portfolioRevenueChannel.deleteMany.mock.calls as unknown as Array<
-      [{ where: { businessSlug: string; asOf: Date } }]
-    >;
+    const calls = h.txOps.portfolioRevenueChannel.deleteMany.mock.calls as unknown as [
+      { where: { businessSlug: string; asOf: Date } },
+    ][];
     const deleteArgs = calls[0]?.[0];
     if (!deleteArgs) throw new Error('expected delete call');
     expect(deleteArgs.where.businessSlug).toBe('apex');
@@ -273,9 +273,9 @@ describe('PortfolioRepository — replace-set tx semantics', () => {
     await repo.replaceCohorts('apex', '00000000-0000-0000-0000-000000000001', [
       { cohortMonth: new Date('2026-01-01'), customers: 100, m0: 1, m3: 0.6, m6: 0.4, m12: 0.3 },
     ]);
-    const cohortCalls = h.txOps.portfolioCohort.deleteMany.mock.calls as unknown as Array<
-      [{ where: { businessSlug: string } }]
-    >;
+    const cohortCalls = h.txOps.portfolioCohort.deleteMany.mock.calls as unknown as [
+      { where: { businessSlug: string } },
+    ][];
     const cohortDelete = cohortCalls[0]?.[0];
     if (!cohortDelete) throw new Error('expected delete call');
     expect(cohortDelete.where.businessSlug).toBe('apex');

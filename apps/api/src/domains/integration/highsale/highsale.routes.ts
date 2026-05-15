@@ -850,7 +850,7 @@ export async function registerHighsaleIntegrationRoutes(app: FastifyInstance): P
     // Columns intentionally explicit — order + naming matters for SQL
     // joins downstream. Money columns are integer cents (matches the
     // schema reference). Demographics columns only added when allowed.
-    const columns: Array<{ key: string; pick?: (r: (typeof rows)[number]) => unknown }> = [
+    const columns: { key: string; pick?: (r: (typeof rows)[number]) => unknown }[] = [
       { key: 'snapshot_id', pick: (r) => r.id },
       { key: 'highsale_transaction_id', pick: (r) => r.highsaleTransactionId },
       { key: 'external_application_id', pick: (r) => r.externalApplicationId },
@@ -1021,7 +1021,7 @@ export async function registerHighsaleIntegrationRoutes(app: FastifyInstance): P
           { key: 'ethnicity', pick: (r) => r.ethnicity },
           { key: 'ethnic_group', pick: (r) => r.ethnicGroup },
           { key: 'language', pick: (r) => r.language },
-        ] as Array<{ key: string; pick: (r: (typeof rows)[number]) => unknown }>),
+        ] as { key: string; pick: (r: (typeof rows)[number]) => unknown }[]),
       );
     }
 

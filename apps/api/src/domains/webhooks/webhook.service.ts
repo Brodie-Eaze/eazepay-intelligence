@@ -1,5 +1,4 @@
 import { Prisma, RevenueEventType, RevenueStream, WebhookSource } from '@prisma/client';
-import { v7 as uuidv7 } from 'uuid';
 import type { PrismaClient } from '@prisma/client';
 import { getEnv } from '../../config/env.js';
 import { getLogger } from '../../config/logger.js';

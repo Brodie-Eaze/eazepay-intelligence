@@ -35,7 +35,7 @@ const DEFAULTS: CircuitBreakerOptions = {
 
 export class CircuitBreaker {
   private state: State = 'CLOSED';
-  private samples: Array<'ok' | 'fail'> = [];
+  private samples: ('ok' | 'fail')[] = [];
   private openedAt = 0;
   // SEC-306 fix (Phase H round 2): a single probe-in-flight flag prevents
   // two concurrent pollers from each transitioning OPEN → HALF_OPEN on

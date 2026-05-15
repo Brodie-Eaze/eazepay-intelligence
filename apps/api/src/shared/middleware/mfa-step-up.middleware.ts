@@ -35,7 +35,7 @@ import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import type { FastifyRequest, FastifyReply, preHandlerHookHandler } from 'fastify';
 import { errors } from '../errors/app-error.js';
 import { getEnv } from '../../config/env.js';
-import { COOKIE, readCookie } from '../utils/cookies.js';
+import { readCookie } from '../utils/cookies.js';
 
 const STEP_UP_COOKIE = '__Host-mfa_stepup';
 const STEP_UP_TTL_SECONDS = 300; // 5 minutes

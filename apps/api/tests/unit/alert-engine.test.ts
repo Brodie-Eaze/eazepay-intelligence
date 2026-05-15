@@ -97,7 +97,7 @@ describe('AlertEvaluator', () => {
     const result = await e.evaluate({ metric: 'failed_login_count', op: 'gte', value: 10 }, 15);
     expect(result.hit).toBe(true);
     expect(result.observed).toBe(12);
-    const calls = fn.mock.calls as unknown as Array<[{ where: { action: string } }]>;
+    const calls = fn.mock.calls as unknown as [{ where: { action: string } }][];
     expect(calls[0]?.[0]?.where.action).toBe('USER_LOGIN_FAILED');
   });
 
@@ -133,11 +133,11 @@ describe('AlertEvaluator', () => {
 
 describe('runEvaluationCycle', () => {
   function buildHarness(opts: {
-    rules: Array<{ id: string; ruleQuery: unknown; openAlert?: { id: string } | null }>;
+    rules: { id: string; ruleQuery: unknown; openAlert?: { id: string } | null }[];
     evalReturns: (ruleId: string) => { hit: boolean; observed: number };
   }) {
-    const created: Array<{ ruleId: string; payload: unknown }> = [];
-    const updated: Array<{ id: string; data: unknown }> = [];
+    const created: { ruleId: string; payload: unknown }[] = [];
+    const updated: { id: string; data: unknown }[] = [];
     const dispatched: string[] = [];
 
     const reader = {

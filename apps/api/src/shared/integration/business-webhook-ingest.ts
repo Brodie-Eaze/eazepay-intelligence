@@ -24,7 +24,8 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { v7 as uuidv7 } from 'uuid';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
-import { WebhookSource, type PrismaClient } from '@prisma/client';
+import type { WebhookSource } from '@prisma/client';
+import { type PrismaClient } from '@prisma/client';
 import type { Redis } from 'ioredis';
 import type { z } from 'zod';
 import { errors } from '../errors/app-error.js';

@@ -40,8 +40,6 @@ import { getExportStorage } from '../../shared/storage/index.js';
 
 const PAGE_SIZE = 5_000;
 
-type OffboardingStage = 'SOFT_DELETED' | 'ARCHIVED' | 'SHREDDED' | 'OUTBOX_PURGED' | 'COMPLETE';
-
 export interface OffboardingSummary {
   orgId: string;
   orgSlug: string;

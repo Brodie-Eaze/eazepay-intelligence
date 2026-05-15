@@ -121,7 +121,7 @@ export async function buildServer(): Promise<FastifyInstance> {
   // signing input. Throwing here on parse failure preserves Fastify's
   // default 400 BAD_REQUEST behaviour for malformed JSON.
   app.addContentTypeParser('application/json', { parseAs: 'string' }, (req, body, done) => {
-    const raw = typeof body === 'string' ? body : (body as Buffer).toString('utf8');
+    const raw = typeof body === 'string' ? body : body.toString('utf8');
     req.rawBody = raw;
     if (raw.length === 0) {
       // Empty body — Fastify's default behaviour is `null`. Mirror it.
@@ -241,7 +241,7 @@ export async function buildServer(): Promise<FastifyInstance> {
 
   // ─── Decimal serialization ────────────────────────────────────────────────
   // Prisma.Decimal → string (preserves precision; no Number rounding).
-  app.setReplySerializer((payload, statusCode) => {
+  app.setReplySerializer((payload, _statusCode) => {
     return JSON.stringify(payload, (_key, value) => {
       if (
         value !== null &&

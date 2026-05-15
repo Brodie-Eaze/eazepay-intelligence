@@ -25,7 +25,7 @@
  */
 import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
 import { v7 as uuidv7 } from 'uuid';
-import { PrismaClient } from '@prisma/client';
+import type { PrismaClient } from '@prisma/client';
 import { getDekCache } from './dek-cache.js';
 import type { KmsClient } from './kms-client.interface.js';
 import { LOCAL_DEV_KEY_ID } from './local-kms-client.js';
@@ -247,7 +247,7 @@ export interface CryptoshredOrgResult {
   /** KMS keys we successfully scheduled for deletion. */
   kmsKeysScheduledForDeletion: string[];
   /** Per-DEK errors keyed by KMS keyId. The DB rows are still deactivated. */
-  errors: Array<{ kekKeyId: string; message: string }>;
+  errors: { kekKeyId: string; message: string }[];
 }
 
 /**

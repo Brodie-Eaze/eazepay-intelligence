@@ -3,7 +3,6 @@ import { v7 as uuidv7 } from 'uuid';
 import { z } from 'zod';
 import { ExportFormat, ExportStatus, ExportType } from '@prisma/client';
 import { getPrisma } from '../../config/database.js';
-import { requireAuth } from '../../shared/middleware/auth.middleware.js';
 import { csrfGuard } from '../../shared/middleware/csrf.middleware.js';
 import { requireCookieOrBearer } from '../../shared/middleware/bearer-auth.middleware.js';
 import { writeAuditLog } from '../../shared/middleware/audit-log.middleware.js';

@@ -37,7 +37,7 @@
  *   2) Vendor webhook deliveries (HMAC-signed)
  *   3) Deterministic mock fallbacks (portfolio fixtures only — for demo)
  */
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { Prisma, WebhookSource } from '@prisma/client';
 import { v7 as uuidv7 } from 'uuid';
@@ -249,7 +249,7 @@ function readIdempotencyKey(raw: string | string[] | undefined): string {
 }
 
 async function ingest(args: {
-  req: import('fastify').FastifyRequest;
+  req: FastifyRequest;
   processor: WebhookProcessor;
   source: WebhookSource;
   eventType: string;

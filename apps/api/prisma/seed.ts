@@ -14,12 +14,12 @@ const prisma = new PrismaClient();
 
 const INDUSTRIES = ['Auto Repair', 'Dental', 'Furniture', 'HVAC', 'Roofing', 'Veterinary'];
 const TIERS = ['BRONZE', 'SILVER', 'GOLD'] as const;
-const LENDERS: Array<{
+const LENDERS: {
   name: string;
   tier: 'PRIME' | 'NEAR_PRIME' | 'SUBPRIME' | 'CARD_LINKED';
   aprMin: number;
   aprMax: number;
-}> = [
+}[] = [
   { name: 'Helix Prime', tier: 'PRIME', aprMin: 6.99, aprMax: 12.5 },
   { name: 'Bridge Capital', tier: 'NEAR_PRIME', aprMin: 14.99, aprMax: 24.99 },
   { name: 'Last Chance Lending', tier: 'SUBPRIME', aprMin: 28.99, aprMax: 35.99 },
@@ -319,7 +319,7 @@ async function main(): Promise<void> {
   console.log('✓ seed complete');
 }
 
-function pickWeighted<T extends string>(weights: ReadonlyArray<readonly [T, number]>): T {
+function pickWeighted<T extends string>(weights: readonly (readonly [T, number])[]): T {
   const total = weights.reduce((s, [, w]) => s + w, 0);
   let r = Math.random() * total;
   for (const [v, w] of weights) {

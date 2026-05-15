@@ -68,7 +68,7 @@ export async function registerCustomerRoutes(app: FastifyInstance): Promise<void
       conds.length === 0 ? Prisma.sql`` : Prisma.sql`WHERE ${Prisma.join(conds, ' AND ')}`;
 
     const rows = await prisma.$queryRaw<
-      Array<{
+      {
         email_hash: Buffer;
         applications: bigint;
         partner_count: bigint;
@@ -80,7 +80,7 @@ export async function registerCustomerRoutes(app: FastifyInstance): Promise<void
         latest_income: string | null;
         latest_propensity: string | null;
         total_funded: string;
-      }>
+      }[]
     >(Prisma.sql`
       WITH apps AS (
         SELECT a.consumer_email_hash AS email_hash,
@@ -446,7 +446,7 @@ export async function registerCustomerRoutes(app: FastifyInstance): Promise<void
   // ─── Risk distribution ───────────────────────────────────────────────────
   app.get('/analytics/risk-distribution', { preHandler: requireAuth }, async () => {
     const buckets = await prisma.$queryRaw<
-      Array<{ bucket: number; n: bigint; avg_income: string | null; avg_propensity: string | null }>
+      { bucket: number; n: bigint; avg_income: string | null; avg_propensity: string | null }[]
     >(Prisma.sql`
       SELECT CASE
                WHEN credit_score IS NULL THEN -1
@@ -501,7 +501,7 @@ export async function registerCustomerRoutes(app: FastifyInstance): Promise<void
   // ─── Income / affordability distribution ─────────────────────────────────
   app.get('/analytics/income-distribution', { preHandler: requireAuth }, async () => {
     const buckets = await prisma.$queryRaw<
-      Array<{ bucket: number; n: bigint; avg_credit: number | null; avg_funded: string | null }>
+      { bucket: number; n: bigint; avg_credit: number | null; avg_funded: string | null }[]
     >(Prisma.sql`
       SELECT CASE
                WHEN noted_annual_income IS NULL THEN -1
@@ -546,7 +546,7 @@ export async function registerCustomerRoutes(app: FastifyInstance): Promise<void
   // How well does HighSale's propensity score predict actual approval / funding?
   app.get('/analytics/propensity-calibration', { preHandler: requireAuth }, async () => {
     const rows = await prisma.$queryRaw<
-      Array<{ bucket: number; n: bigint; approved: bigint; funded: bigint }>
+      { bucket: number; n: bigint; approved: bigint; funded: bigint }[]
     >(Prisma.sql`
       SELECT FLOOR(propensity_score * 10)::int AS bucket,
              COUNT(*)::bigint AS n,

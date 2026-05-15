@@ -56,7 +56,7 @@ export async function registerAnalyticsRoutes(app: FastifyInstance): Promise<voi
     const query = AnalyticsRangeQuerySchema.parse(req.query);
     const orgId = requireOrgScope(req.auth?.orgId);
     const result = (await service.partnerLeaderboard(orgId, query)) as {
-      leaderboard: Array<{
+      leaderboard: {
         partnerId: string;
         partnerName: string;
         tier: string;
@@ -64,8 +64,8 @@ export async function registerAnalyticsRoutes(app: FastifyInstance): Promise<voi
         applications: number;
         approved: number;
         funded: number;
-      }>;
-      tiers: Array<{ tier: string; count: number }>;
+      }[];
+      tiers: { tier: string; count: number }[];
     };
     const isInvestor = req.auth!.scope === 'investor';
     return {
@@ -95,14 +95,14 @@ export async function registerAnalyticsRoutes(app: FastifyInstance): Promise<voi
 
   app.get('/analytics/live', { preHandler: requireAuth }, async (req) => {
     const orgId = requireOrgScope(req.auth?.orgId);
-    const tail = (await service.liveTail(orgId)) as Array<{
+    const tail = (await service.liveTail(orgId)) as {
       eventTime: string;
       kind: string;
       partnerId: string;
       partnerName: string;
       description: string;
       amount: string | null;
-    }>;
+    }[];
     const isInvestor = req.auth!.scope === 'investor';
     return tail.map((e) => ({
       ...e,

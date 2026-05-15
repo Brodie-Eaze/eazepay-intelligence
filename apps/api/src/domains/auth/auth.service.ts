@@ -149,7 +149,7 @@ export class AuthService {
    */
   async listSessions(
     userId: string,
-  ): Promise<Array<{ sessionId: string; orgId: string; createdAt: Date; expiresAt: Date }>> {
+  ): Promise<{ sessionId: string; orgId: string; createdAt: Date; expiresAt: Date }[]> {
     return this.repo.listActiveSessions(userId);
   }
 

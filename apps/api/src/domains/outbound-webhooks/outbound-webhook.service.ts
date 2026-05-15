@@ -86,7 +86,7 @@ export async function assertPublicHostname(urlString: string): Promise<void> {
     throw new Error('webhook.url.invalid');
   }
   // Only HTTPS in production. http:// is fine for local dev / mock servers.
-  if (process.env['NODE_ENV'] === 'production' && url.protocol !== 'https:') {
+  if (process.env.NODE_ENV === 'production' && url.protocol !== 'https:') {
     throw new Error('webhook.url.https_required');
   }
   if (url.protocol !== 'http:' && url.protocol !== 'https:') {
@@ -102,7 +102,7 @@ export async function assertPublicHostname(urlString: string): Promise<void> {
   // DNS-resolve and check every returned address. Use `all: true` so we
   // don't get tricked by a multi-A-record host where one entry is public
   // and another is RFC1918.
-  let records: Array<{ address: string; family: number }>;
+  let records: { address: string; family: number }[];
   try {
     records = await lookup(host, { all: true });
   } catch {

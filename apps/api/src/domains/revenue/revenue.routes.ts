@@ -105,7 +105,7 @@ export async function registerRevenueRoutes(app: FastifyInstance): Promise<void>
       const streamTag = q.stream ? `_${q.stream.toLowerCase()}` : '';
       const filename = `revenue_ledger${streamTag}_${timestamp}.${q.format}`;
 
-      const columns: Array<{ key: string; pick?: (r: (typeof page.data)[number]) => unknown }> = [
+      const columns: { key: string; pick?: (r: (typeof page.data)[number]) => unknown }[] = [
         { key: 'idempotency_key', pick: (r) => r.idempotencyKey },
         { key: 'partner_id', pick: (r) => r.partnerId },
         { key: 'lender_decision_id', pick: (r) => r.lenderDecisionId },

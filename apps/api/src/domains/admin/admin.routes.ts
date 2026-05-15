@@ -183,12 +183,12 @@ export async function registerAdminRoutes(app: FastifyInstance): Promise<void> {
       return 'IDLE';
     };
 
-    type StatRow = {
+    interface StatRow {
       source: string;
       last24h: number;
       lastReceivedAt: string | null;
       status: 'HEALTHY' | 'STALE' | 'IDLE';
-    };
+    }
 
     const byWebhookSource = new Map<string, (typeof webhookCounts)[number]>(
       webhookCounts.map((r) => [r.source.toLowerCase(), r]),
@@ -259,17 +259,17 @@ export async function registerAdminRoutes(app: FastifyInstance): Promise<void> {
   // (cheap — no full scans) for counts and a per-table MAX(timestamp)
   // for freshness.
   app.get('/warehouse/landscape', { preHandler: requireAuth }, async () => {
-    type LandscapeRow = {
+    interface LandscapeRow {
       table: string;
       label: string;
       group: 'application' | 'credit' | 'revenue' | 'partners' | 'audit';
       rows: number;
       lastAt: string | null;
-    };
+    }
 
     // pg_stat_user_tables gives us approximate row counts without a
     // full scan. n_live_tup is sufficient for "landscape" sizing.
-    const rowCounts = await prisma.$queryRaw<Array<{ relname: string; count: bigint }>>(Prisma.sql`
+    const rowCounts = await prisma.$queryRaw<{ relname: string; count: bigint }[]>(Prisma.sql`
       SELECT relname, n_live_tup AS count
       FROM pg_stat_user_tables
       WHERE relname IN (
@@ -373,7 +373,7 @@ export async function registerAdminRoutes(app: FastifyInstance): Promise<void> {
   // ─── System health (operational telemetry) ───────────────────────────────
   app.get('/admin/health', { preHandler: [requireAuth, denyInvestorScope] }, async () => {
     const dbStart = Date.now();
-    const dbCounts = await prisma.$queryRaw<Array<{ relname: string; count: bigint }>>(Prisma.sql`
+    const dbCounts = await prisma.$queryRaw<{ relname: string; count: bigint }[]>(Prisma.sql`
         SELECT relname, n_live_tup AS count
         FROM pg_stat_user_tables
         WHERE relname IN ('partners','applications','lender_decisions','revenue_events','webhook_events','pixie_metrics','users','audit_logs','refresh_tokens')
@@ -517,7 +517,7 @@ export async function registerAdminRoutes(app: FastifyInstance): Promise<void> {
 
   // ─── Reconciliation: ledger SUM vs aggregation rollup ────────────────────
   app.get('/admin/reconciliation', { preHandler: [requireAuth, denyInvestorScope] }, async () => {
-    const ledger = await prisma.$queryRaw<Array<{ month: Date; total: string }>>(Prisma.sql`
+    const ledger = await prisma.$queryRaw<{ month: Date; total: string }[]>(Prisma.sql`
         SELECT date_trunc('month', effective_at) AS month,
                COALESCE(SUM(amount), 0)::text   AS total
         FROM revenue_events
@@ -525,7 +525,7 @@ export async function registerAdminRoutes(app: FastifyInstance): Promise<void> {
         ORDER BY month DESC
         LIMIT 12
       `);
-    const rollup = await prisma.$queryRaw<Array<{ month: Date; total: string }>>(Prisma.sql`
+    const rollup = await prisma.$queryRaw<{ month: Date; total: string }[]>(Prisma.sql`
         SELECT date_trunc('month', period_start) AS month,
                COALESCE(SUM(total_revenue), 0)::text AS total
         FROM revenue_aggregations
@@ -567,14 +567,14 @@ export async function registerAdminRoutes(app: FastifyInstance): Promise<void> {
   app.get('/lenders/:name/timeline', { preHandler: requireAuth }, async (req) => {
     const params = z.object({ name: z.string().min(1) }).parse(req.params);
     const monthly = await prisma.$queryRaw<
-      Array<{
+      {
         bucket: Date;
         submitted: bigint;
         approved: bigint;
         funded: bigint;
         avg_apr: string | null;
         funded_amount: string;
-      }>
+      }[]
     >(Prisma.sql`
         SELECT date_trunc('month', decision_timestamp) AS bucket,
                COUNT(*)::bigint AS submitted,
@@ -588,7 +588,7 @@ export async function registerAdminRoutes(app: FastifyInstance): Promise<void> {
         ORDER BY bucket DESC
         LIMIT 24
       `);
-    const aprBuckets = await prisma.$queryRaw<Array<{ bucket: number; n: bigint }>>(Prisma.sql`
+    const aprBuckets = await prisma.$queryRaw<{ bucket: number; n: bigint }[]>(Prisma.sql`
         SELECT CASE
                  WHEN apr < 10 THEN 0
                  WHEN apr < 15 THEN 10

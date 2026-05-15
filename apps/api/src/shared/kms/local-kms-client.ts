@@ -22,7 +22,7 @@ import { createCipheriv, createDecipheriv, hkdfSync, randomBytes } from 'node:cr
 import { getLogger } from '../../config/logger.js';
 import type { GeneratedDataKey, KmsClient } from './kms-client.interface.js';
 
-export const LOCAL_DEV_KEY_ID = 'local-dev' as const;
+export const LOCAL_DEV_KEY_ID = 'local-dev';
 
 const HKDF_INFO = Buffer.from('eazepay-local-kek', 'utf8');
 const IV_LEN = 12;
@@ -47,12 +47,12 @@ export class LocalKmsClient implements KmsClient {
     // misconfigured deploy with AWS_KMS_KEY_ARN unset must not silently fall
     // through to a deterministic HKDF-derived key. PII encrypted under this
     // key is recoverable by anyone with read access to process.env.
-    if (process.env['NODE_ENV'] === 'production') {
+    if (process.env.NODE_ENV === 'production') {
       throw new Error(
         'LocalKmsClient cannot be used in production. Set AWS_KMS_KEY_ARN and KMS_DRIVER=aws.',
       );
     }
-    const secret = process.env['KMS_DEV_SECRET'];
+    const secret = process.env.KMS_DEV_SECRET;
     if (!secret || secret.length < 32) {
       throw new Error(
         'LocalKmsClient: KMS_DEV_SECRET must be set and ≥32 chars. See .env.example. Never use a production value here.',

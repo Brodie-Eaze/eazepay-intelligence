@@ -185,7 +185,7 @@ export class AlertEvaluator {
       case 'replication_lag_ms': {
         // Reuses the same probe the readiness check uses — single source of
         // truth for lag measurement.
-        const rows = await this.reader.$queryRawUnsafe<Array<{ lag_ms: number | null }>>(
+        const rows = await this.reader.$queryRawUnsafe<{ lag_ms: number | null }[]>(
           `SELECT EXTRACT(EPOCH FROM (now() - pg_last_xact_replay_timestamp())) * 1000 AS lag_ms`,
         );
         const lagMs = rows[0]?.lag_ms;

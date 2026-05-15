@@ -82,7 +82,7 @@ describe.skipIf(!liveSuite)('multi-DB live (primary + streaming replica)', () =>
     const deadline = Date.now() + 5_000;
     let replicated = false;
     while (Date.now() < deadline) {
-      const rows = await reader.$queryRawUnsafe<Array<{ id: string }>>(
+      const rows = await reader.$queryRawUnsafe<{ id: string }[]>(
         `SELECT id FROM replication_smoke_test WHERE id = '${slug}'`,
       );
       if (rows.length === 1) {
@@ -130,20 +130,20 @@ describe.skipIf(!liveSuite)('multi-DB live (primary + streaming replica)', () =>
 
   it('replication-lag probe returns a number on the replica, NULL on primary', async () => {
     // Primary returns NULL (it's not a standby).
-    const onPrimary = await writer.$queryRawUnsafe<Array<{ ts: Date | null }>>(
+    const onPrimary = await writer.$queryRawUnsafe<{ ts: Date | null }[]>(
       `SELECT pg_last_xact_replay_timestamp() AS ts`,
     );
     expect(onPrimary[0]?.ts).toBeNull();
 
     // Replica returns a non-null timestamp once it's started replaying.
-    const onReplica = await reader.$queryRawUnsafe<Array<{ ts: Date | null }>>(
+    const onReplica = await reader.$queryRawUnsafe<{ ts: Date | null }[]>(
       `SELECT pg_last_xact_replay_timestamp() AS ts`,
     );
     expect(onReplica[0]?.ts).toBeInstanceOf(Date);
   });
 
   it('replication-lag in milliseconds is small and non-negative', async () => {
-    const rows = await reader.$queryRawUnsafe<Array<{ lag_ms: number | null }>>(
+    const rows = await reader.$queryRawUnsafe<{ lag_ms: number | null }[]>(
       `SELECT EXTRACT(EPOCH FROM (now() - pg_last_xact_replay_timestamp())) * 1000 AS lag_ms`,
     );
     const lagMs = rows[0]?.lag_ms != null ? Number(rows[0].lag_ms) : null;

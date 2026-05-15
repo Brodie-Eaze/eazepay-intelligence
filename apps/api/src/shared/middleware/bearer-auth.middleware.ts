@@ -18,7 +18,7 @@ import { hashesMatch, parseApiToken } from '../utils/api-token.js';
 
 export async function requireBearerAuth(req: FastifyRequest, _reply: FastifyReply): Promise<void> {
   const header = req.headers.authorization;
-  if (!header || !header.startsWith('Bearer ')) {
+  if (!header?.startsWith('Bearer ')) {
     throw errors.unauthorized('Bearer token required');
   }
   const token = header.slice('Bearer '.length).trim();

@@ -41,7 +41,7 @@ beforeAll(() => {
 describe('RtbfService.submit', () => {
   it('creates a new PENDING request when no in-flight one exists', async () => {
     const { RtbfService } = await import('../../src/domains/rtbf/rtbf.service.js');
-    const created: Array<{ data: { id: string; status: string } }> = [];
+    const created: { data: { id: string; status: string } }[] = [];
     const prisma = {
       rtbfRequest: {
         findFirst: vi.fn(async () => null),
@@ -89,7 +89,7 @@ describe('RtbfService.submit', () => {
 describe('RtbfService.process', () => {
   it('cryptoshreds matching applications + stamps COMPLETED', async () => {
     const { RtbfService } = await import('../../src/domains/rtbf/rtbf.service.js');
-    const updates: Array<{ where: { id: string }; data: Record<string, Buffer> }> = [];
+    const updates: { where: { id: string }; data: Record<string, Buffer> }[] = [];
     const initial = {
       id: 'r1',
       status: 'PENDING',
@@ -149,7 +149,7 @@ describe('RtbfService.process', () => {
 
   it('marks the request FAILED if the scrub throws and rethrows', async () => {
     const { RtbfService } = await import('../../src/domains/rtbf/rtbf.service.js');
-    const updates: Array<{ data: Record<string, unknown> }> = [];
+    const updates: { data: Record<string, unknown> }[] = [];
     const prisma = {
       rtbfRequest: {
         findUnique: vi.fn(async () => ({

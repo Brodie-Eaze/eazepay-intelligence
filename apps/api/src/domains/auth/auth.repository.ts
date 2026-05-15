@@ -161,7 +161,7 @@ export class AuthRepository {
    */
   async listActiveSessions(
     userId: string,
-  ): Promise<Array<{ sessionId: string; orgId: string; createdAt: Date; expiresAt: Date }>> {
+  ): Promise<{ sessionId: string; orgId: string; createdAt: Date; expiresAt: Date }[]> {
     const rows = await this.prisma.refreshToken.findMany({
       where: { userId, revokedAt: null, expiresAt: { gt: new Date() } },
       select: { sessionId: true, orgId: true, createdAt: true, expiresAt: true },

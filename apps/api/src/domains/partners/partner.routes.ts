@@ -86,7 +86,7 @@ export async function registerPartnerRoutes(app: FastifyInstance): Promise<void>
 
     reply.header('Content-Type', 'text/csv; charset=utf-8');
     reply.header('Content-Disposition', attachmentHeader(filename));
-    return rowsToCsv(rows as Array<Record<string, unknown>>, columns);
+    return rowsToCsv(rows as Record<string, unknown>[], columns);
   });
 
   app.post(

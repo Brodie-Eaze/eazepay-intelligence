@@ -36,7 +36,7 @@ export interface IAnalyticsRepository {
     to: Date;
     limit: number;
   }): Promise<LeaderboardRow[]>;
-  tierBreakdown(args: { orgId: string }): Promise<Array<{ tier: string; count: number }>>;
+  tierBreakdown(args: { orgId: string }): Promise<{ tier: string; count: number }[]>;
   liveTail(args: { orgId: string; limit: number }): Promise<LiveEvent[]>;
 }
 
@@ -152,13 +152,13 @@ export class AnalyticsRepository implements IAnalyticsRepository {
 
   async cohorts(args: { orgId: string }): Promise<CohortRow[]> {
     const rows = await this.prisma.$queryRaw<
-      Array<{
+      {
         cohort_month: string;
         months_since: number;
         partner_count: bigint;
         retained_count: bigint;
         revenue: string;
-      }>
+      }[]
     >(Prisma.sql`
       WITH cohorts AS (
         SELECT id AS partner_id,
@@ -225,7 +225,7 @@ export class AnalyticsRepository implements IAnalyticsRepository {
     limit: number;
   }): Promise<LeaderboardRow[]> {
     const rows = await this.prisma.$queryRaw<
-      Array<{
+      {
         partner_id: string;
         partner_name: string;
         tier: string;
@@ -233,7 +233,7 @@ export class AnalyticsRepository implements IAnalyticsRepository {
         approved: bigint;
         funded: bigint;
         revenue: string;
-      }>
+      }[]
     >(Prisma.sql`
       SELECT p.id AS partner_id,
              p.name AS partner_name,
@@ -266,7 +266,7 @@ export class AnalyticsRepository implements IAnalyticsRepository {
     }));
   }
 
-  async tierBreakdown(args: { orgId: string }): Promise<Array<{ tier: string; count: number }>> {
+  async tierBreakdown(args: { orgId: string }): Promise<{ tier: string; count: number }[]> {
     const rows = await this.prisma.partner.groupBy({
       by: ['tier'],
       where: { orgId: args.orgId, deletedAt: null, status: 'ACTIVE' },
@@ -277,14 +277,14 @@ export class AnalyticsRepository implements IAnalyticsRepository {
 
   async liveTail(args: { orgId: string; limit: number }): Promise<LiveEvent[]> {
     const rows = await this.prisma.$queryRaw<
-      Array<{
+      {
         event_time: Date;
         kind: string;
         partner_id: string;
         partner_name: string;
         description: string;
         amount: string | null;
-      }>
+      }[]
     >(Prisma.sql`
       (SELECT a.created_at AS event_time, 'application' AS kind, a.partner_id, p.name AS partner_name,
               'Application '||a.external_application_id||' · '||a.status::text AS description,

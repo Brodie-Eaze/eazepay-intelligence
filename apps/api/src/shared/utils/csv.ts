@@ -39,8 +39,8 @@ export function csvEscape(value: unknown): string {
  * doesn't mangle special characters.
  */
 export function rowsToCsv<T>(
-  rows: ReadonlyArray<T>,
-  columns: ReadonlyArray<{ key: string; label?: string; pick?: (row: T) => unknown }>,
+  rows: readonly T[],
+  columns: readonly { key: string; label?: string; pick?: (row: T) => unknown }[],
 ): string {
   const header = columns.map((c) => csvEscape(c.label ?? c.key)).join(',');
   const body = rows
@@ -55,8 +55,8 @@ export function rowsToCsv<T>(
         .join(','),
     )
     .join('\r\n');
-  // BOM (﻿) so Excel-on-Windows opens UTF-8 cleanly.
-  return `﻿${header}\r\n${body}\r\n`;
+  // BOM (U+FEFF) so Excel-on-Windows opens UTF-8 cleanly.
+  return `\uFEFF${header}\r\n${body}\r\n`;
 }
 
 /**
