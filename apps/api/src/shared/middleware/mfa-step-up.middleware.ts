@@ -116,16 +116,20 @@ export const requireMfaStepUp: preHandlerHookHandler = async (
 ) => {
   if (!req.auth) throw errors.unauthorized('Step-up requires prior auth');
   const cookie = readCookie(req, STEP_UP_COOKIE);
-  if (!cookie) throw errors.forbidden('MFA step-up required');
+  // Phase H frontend rounding: use the dedicated MFA_STEP_UP_REQUIRED
+  // error code on every failure path so the dashboard intercepts them
+  // uniformly + prompts for TOTP without parsing a free-text message.
+  if (!cookie) throw errors.mfaStepUpRequired();
   const payload = parse(cookie);
-  if (!payload) throw errors.forbidden('Invalid step-up token');
-  if (payload.sub !== req.auth.userId) throw errors.forbidden('Step-up token user mismatch');
+  if (!payload) throw errors.mfaStepUpRequired('Invalid step-up token');
+  if (payload.sub !== req.auth.userId)
+    throw errors.mfaStepUpRequired('Step-up token user mismatch');
   const ageSeconds = Math.floor(Date.now() / 1000) - payload.iat;
   if (ageSeconds < 0 || ageSeconds > STEP_UP_TTL_SECONDS) {
-    throw errors.forbidden('Step-up token expired');
+    throw errors.mfaStepUpRequired('Step-up token expired');
   }
   if (consumedJtis.has(payload.jti)) {
-    throw errors.forbidden('Step-up token already used');
+    throw errors.mfaStepUpRequired('Step-up token already used');
   }
   // Consume on success — single-use until the token's natural exp.
   const exp = payload.iat + STEP_UP_TTL_SECONDS;

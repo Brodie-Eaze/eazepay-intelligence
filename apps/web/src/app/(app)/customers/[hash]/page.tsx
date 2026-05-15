@@ -95,6 +95,43 @@ export default function CustomerDetail({ params }: { params: { hash: string } })
       api<{ data: CreditEnrichmentRow[] }>(`/customers/${params.hash}/credit-enrichments`),
   });
 
+  // GAP-119 frontend rounding: lender timeline for this customer.
+  const lenderData = useQuery({
+    queryKey: ['customer.lender-data', params.hash],
+    queryFn: () =>
+      api<{
+        applications: Array<{
+          id: string;
+          externalApplicationId: string;
+          status: string;
+          createdAt: string;
+        }>;
+        decisions: Array<{
+          id: string;
+          applicationId: string;
+          lenderName: string;
+          lenderTier: string;
+          decision: string;
+          decisionTimestamp: string;
+          approvalAmount: string | null;
+          apr: string | null;
+          term: number | null;
+          fundingStatus: string;
+          fundingAmount: string | null;
+          fundingTimestamp: string | null;
+        }>;
+        events: Array<{
+          id: string;
+          applicationId: string;
+          lenderSlug: string;
+          externalDecisionId: string | null;
+          type: string;
+          observedAt: string;
+          permanent: boolean;
+        }>;
+      }>(`/customers/${params.hash}/lender-data`),
+  });
+
   const reveal = async (): Promise<void> => {
     setPiiBusy(true);
     setPiiErr(null);
@@ -425,6 +462,72 @@ export default function CustomerDetail({ params }: { params: { hash: string } })
             </tbody>
           </table>
         </div>
+      </SectionCard>
+
+      <SectionCard
+        title="Lender timeline"
+        subtitle="Decisions + reporting events across this customer's applications (GAP-119)."
+      >
+        {lenderData.isLoading ? (
+          <p className="text-sm text-zinc-500">Loading…</p>
+        ) : lenderData.isError ? (
+          <p className="text-sm text-red-600">Failed to load lender data.</p>
+        ) : !lenderData.data || lenderData.data.applications.length === 0 ? (
+          <p className="text-sm text-zinc-500">No lender decisions for this customer yet.</p>
+        ) : (
+          <div className="space-y-4">
+            <table className="w-full text-sm">
+              <thead className="text-xs text-zinc-500">
+                <tr className="border-b">
+                  <th className="py-2 text-left">Decision</th>
+                  <th className="text-left">Lender</th>
+                  <th className="text-left">Decision</th>
+                  <th className="text-right">Approval</th>
+                  <th className="text-right">APR</th>
+                  <th className="text-left">Funding</th>
+                  <th className="text-left">When</th>
+                </tr>
+              </thead>
+              <tbody>
+                {lenderData.data.decisions.map((d) => (
+                  <tr key={d.id} className="border-b last:border-0">
+                    <td className="py-2 font-mono text-xs">{d.id.slice(0, 8)}…</td>
+                    <td>
+                      {d.lenderName} <span className="text-xs text-zinc-500">{d.lenderTier}</span>
+                    </td>
+                    <td>{d.decision}</td>
+                    <td className="text-right">
+                      {d.approvalAmount
+                        ? `$${Number(d.approvalAmount).toLocaleString(undefined, { maximumFractionDigits: 0 })}`
+                        : '—'}
+                    </td>
+                    <td className="text-right">
+                      {d.apr ? `${(Number(d.apr) * 100).toFixed(2)}%` : '—'}
+                    </td>
+                    <td>{d.fundingStatus}</td>
+                    <td className="text-xs">{new Date(d.decisionTimestamp).toLocaleString()}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            {lenderData.data.events.length > 0 && (
+              <details className="text-xs">
+                <summary className="cursor-pointer text-zinc-500">
+                  Reporting events ({lenderData.data.events.length})
+                </summary>
+                <ul className="mt-2 space-y-1">
+                  {lenderData.data.events.map((e) => (
+                    <li key={e.id} className="font-mono">
+                      [{new Date(e.observedAt).toLocaleString()}] {e.lenderSlug} ·{' '}
+                      <span className="font-semibold">{e.type}</span>{' '}
+                      {e.permanent && <span className="text-red-700">(permanent)</span>}
+                    </li>
+                  ))}
+                </ul>
+              </details>
+            )}
+          </div>
+        )}
       </SectionCard>
 
       {c.revenueEvents.length > 0 && (
