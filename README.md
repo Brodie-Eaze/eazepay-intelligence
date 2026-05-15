@@ -162,7 +162,7 @@ pnpm --filter web build           # next build (smoke before deploy)
 - Production: ✅ live on Railway (`https://eaze-intelligence.up.railway.app`).
 - 7 launch businesses seeded · 10 mock HighSale applicants · 3 inbound planes wired (App stub-only; HighSale + MiCamp + Pixie live; lender adapters planned in PLATFORM_V2 Phase 2.7).
 - See [`CHANGELOG.md`](CHANGELOG.md) for the per-commit log.
-- See [`docs/cuts/`](docs/cuts/) and [`HANDOVER.md`](HANDOVER.md) for what's queued.
+- See [`docs/cuts/`](docs/cuts/) and [`docs/HANDOVER.md`](docs/HANDOVER.md) for what's queued.
 
 ---
 

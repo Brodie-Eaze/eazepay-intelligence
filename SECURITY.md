@@ -4,9 +4,9 @@ This document is the technical security narrative — the **posture** as it stan
 
 Companion documents:
 
-- [`HARDENING.md`](HARDENING.md) — 106-finding catalogue from the five-agent pre-pen-test review + phased remediation plan. Authoritative punch list.
-- [`ENDPOINT_AUDIT.md`](ENDPOINT_AUDIT.md) — 20-gap endpoint inventory and warehouse-completeness audit.
-- [`PHASE_PROGRESS.md`](PHASE_PROGRESS.md) — what's shipped, what's queued, branch/commit pointers per phase.
+- [`docs/reviews/HARDENING.md`](docs/reviews/HARDENING.md) — 106-finding catalogue from the five-agent pre-pen-test review + phased remediation plan. Authoritative punch list.
+- [`docs/reviews/ENDPOINT_AUDIT.md`](docs/reviews/ENDPOINT_AUDIT.md) — 20-gap endpoint inventory and warehouse-completeness audit.
+- [`docs/PHASE_PROGRESS.md`](docs/PHASE_PROGRESS.md) — what's shipped, what's queued, branch/commit pointers per phase.
 
 This file describes the **current security posture**. It is not a changelog and not a plan; for either of those, see the docs above.
 
@@ -186,7 +186,7 @@ The codebase is mid-retrofit from the single-tenant v0.1 model to a row-scoped m
 
 **Queued:**
 
-- ~20 call sites still need `orgId` threaded into Prisma `create` payloads (Phase 1.5 — see HARDENING.md F1.5).
+- ~20 call sites still need `orgId` threaded into Prisma `create` payloads (Phase 1.5 — see docs/reviews/HARDENING.md F1.5).
 - `eazepay_app` Postgres role with `NOBYPASSRLS` and `REVOKE UPDATE, DELETE` on all append-only tables (Phase 1.6).
 - `FORCE ROW LEVEL SECURITY` swap-in once every retrofitted table has a policy (Phase 1.6).
 - `withTenantSession` wired as a Fastify `preHandler` that sets `app.org_id` GUC per request (Phase 1.6).
@@ -286,7 +286,7 @@ Every PR runs four scans, each gated as a required check:
 
 Each Trivy run uploads a SARIF to GitHub Code Scanning. A CycloneDX SBOM is generated from the container image and attached as a 90-day workflow artefact. Dependabot raises PRs as new advisories land; the same gates apply.
 
-**Outstanding upgrades (Phase 4):** Next.js 14 → 15.5.16+ (4 high-severity advisories), Fastify 4 → 5.7.2+ (Content-Type tab body-validation bypass), `@opentelemetry/sdk-node` 0.54 → 0.217+. Pinned in HARDENING.md F4.
+**Outstanding upgrades (Phase 4):** Next.js 14 → 15.5.16+ (4 high-severity advisories), Fastify 4 → 5.7.2+ (Content-Type tab body-validation bypass), `@opentelemetry/sdk-node` 0.54 → 0.217+. Pinned in docs/reviews/HARDENING.md F4.
 
 ---
 
