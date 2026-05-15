@@ -50,7 +50,7 @@ export const PlacementContractedSchema = z
     partnerExternalId: z.string().min(1).max(128),
     /** Annualised placement value (decimal-string). */
     annualSalary: z.string().regex(/^\d+(\.\d{1,2})?$/),
-    currency: z.string().length(3).default('AUD'),
+    currency: z.string().length(3).optional(),
     contractedAt: z.string().datetime(),
   })
   .strict();
@@ -61,7 +61,7 @@ export const CommissionEarnedSchema = z
     placementId: z.string().min(1).max(128),
     partnerExternalId: z.string().min(1).max(128),
     amount: z.string().regex(/^-?\d+(\.\d{1,4})?$/),
-    currency: z.string().length(3).default('AUD'),
+    currency: z.string().length(3).optional(),
     effectiveAt: z.string().datetime(),
     metadata: z.record(z.unknown()).optional(),
   })
@@ -74,7 +74,7 @@ export const PlacementRescindedSchema = z
     partnerExternalId: z.string().min(1).max(128),
     /** Positive clawback amount; the drain writes the negation onto the ledger. */
     clawbackAmount: z.string().regex(/^\d+(\.\d{1,4})?$/),
-    currency: z.string().length(3).default('AUD'),
+    currency: z.string().length(3).optional(),
     rescindedAt: z.string().datetime(),
     reason: z.string().min(1).max(2000).optional(),
   })

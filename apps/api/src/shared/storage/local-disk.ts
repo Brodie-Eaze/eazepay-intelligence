@@ -10,11 +10,17 @@
  */
 import { createReadStream, statSync } from 'node:fs';
 import { mkdir, writeFile } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve, sep } from 'node:path';
 import type { ExportStorage, ReadResult, StoredFile } from './storage.interface.js';
 
 export class LocalDiskStorage implements ExportStorage {
-  constructor(private readonly root: string) {}
+  // Resolved + separator-terminated so a sibling like `/tmp/exports-evil`
+  // cannot match a prefix check against `/tmp/exports` (SEC-201).
+  private readonly rootResolved: string;
+
+  constructor(private readonly root: string) {
+    this.rootResolved = resolve(root) + sep;
+  }
 
   async write(args: {
     exportId: string;
@@ -31,13 +37,15 @@ export class LocalDiskStorage implements ExportStorage {
   }
 
   async read(locator: string): Promise<ReadResult> {
-    // Defensive: reject locators that escape the storage root. The route
-    // never builds locators itself, but stale rows in the DB or a future
-    // bug shouldn't let one tenant's locator point into another's path.
-    if (!locator.startsWith(this.root)) {
+    // SEC-201 (CWE-22, path traversal defence): resolve the locator
+    // and assert it sits strictly under the configured root. Prefix
+    // check on raw strings was vulnerable to sibling paths like
+    // `/tmp/exports-evil/file.csv` passing `startsWith('/tmp/exports')`.
+    const resolved = resolve(locator);
+    if (!resolved.startsWith(this.rootResolved)) {
       throw new Error('local-disk: locator escapes storage root');
     }
-    const stat = statSync(locator);
-    return { stream: createReadStream(locator), size: stat.size };
+    const stat = statSync(resolved);
+    return { kind: 'stream', stream: createReadStream(resolved), size: stat.size };
   }
 }

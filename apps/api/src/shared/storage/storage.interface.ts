@@ -45,14 +45,15 @@ export interface StoredFile {
   size: number;
 }
 
-export interface ReadResult {
-  /** When the backend is local: a Readable stream of the file bytes. */
-  stream?: Readable;
-  /** When the backend is S3: a presigned URL the client redirects to. */
-  presignedUrl?: string;
-  /** Content-Length for the stream variant; absent for presignedUrl. */
-  size?: number;
-}
+/**
+ * Discriminated union: callers must check `kind` and TypeScript will
+ * narrow to the right shape. The previous "two optional fields" version
+ * relied on runtime presence checks and let a future S3-can-also-stream
+ * change silently break the route.
+ */
+export type ReadResult =
+  | { kind: 'stream'; stream: Readable; size: number }
+  | { kind: 'redirect'; presignedUrl: string };
 
 export interface ExportStorage {
   /**

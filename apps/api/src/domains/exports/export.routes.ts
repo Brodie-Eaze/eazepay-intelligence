@@ -85,7 +85,13 @@ export async function registerExportRoutes(app: FastifyInstance): Promise<void> 
     const auth = req.auth!;
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
     const row = await prisma.export.findUnique({ where: { id } });
-    if (!row || row.userId !== auth.userId) throw errors.notFound('Export', id);
+    // SEC-202: gate on (userId, orgId) jointly. A user who is a member
+    // of multiple orgs cannot download an export they made under org A
+    // while currently scoped to org B — membership revocation becomes
+    // effective immediately for in-flight exports.
+    if (!row || row.userId !== auth.userId || (auth.orgId != null && row.orgId !== auth.orgId)) {
+      throw errors.notFound('Export', id);
+    }
     return {
       id: row.id,
       type: row.type,
@@ -105,7 +111,10 @@ export async function registerExportRoutes(app: FastifyInstance): Promise<void> 
     const auth = req.auth!;
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
     const row = await prisma.export.findUnique({ where: { id } });
-    if (!row || row.userId !== auth.userId) throw errors.notFound('Export', id);
+    // SEC-202: pin to (userId, orgId).
+    if (!row || row.userId !== auth.userId || (auth.orgId != null && row.orgId !== auth.orgId)) {
+      throw errors.notFound('Export', id);
+    }
     if (row.status !== ExportStatus.COMPLETED) throw errors.badRequest('Export not ready');
     if (row.expiresAt && row.expiresAt.getTime() < Date.now()) {
       throw errors.badRequest('Export expired');
@@ -118,7 +127,7 @@ export async function registerExportRoutes(app: FastifyInstance): Promise<void> 
     const result = await getExportStorage().read(row.filePath);
     const ext = row.format === ExportFormat.JSON ? 'json' : 'csv';
     const filename = `eazepay-${row.type.toLowerCase()}-${row.id}.${ext}`;
-    if (result.presignedUrl) {
+    if (result.kind === 'redirect') {
       // S3 path: redirect the client to a short-lived signed URL. Audit
       // the issuance so a leaked URL in the logs is at least traceable.
       await writeAuditLog({
@@ -131,10 +140,10 @@ export async function registerExportRoutes(app: FastifyInstance): Promise<void> 
       reply.header('Cache-Control', 'no-store');
       return reply.redirect(result.presignedUrl, 302);
     }
-    if (!result.stream) throw errors.internal('Storage backend returned no readable handle');
+    // result.kind === 'stream' — TypeScript narrows automatically.
     reply.header('Content-Type', ext === 'json' ? 'application/json' : 'text/csv');
     reply.header('Content-Disposition', `attachment; filename="${filename}"`);
-    if (result.size != null) reply.header('Content-Length', result.size);
+    reply.header('Content-Length', result.size);
     return reply.send(result.stream);
   });
 }

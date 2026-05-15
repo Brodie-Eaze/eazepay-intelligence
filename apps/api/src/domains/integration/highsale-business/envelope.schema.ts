@@ -58,7 +58,7 @@ export const RevenueRecordedSchema = z
     externalEventId: z.string().min(1).max(128),
     partnerExternalId: z.string().min(1).max(128),
     amount: z.string().regex(/^-?\d+(\.\d{1,4})?$/),
-    currency: z.string().length(3).default('AUD'),
+    currency: z.string().length(3).optional(),
     eventType: z.enum(['ACCRUAL', 'COMMISSION', 'REVERSAL']),
     effectiveAt: z.string().datetime(),
     metadata: z.record(z.unknown()).optional(),

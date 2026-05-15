@@ -12,8 +12,9 @@ import { registerExportStorageFromEnv } from '../shared/storage/index.js';
 async function main(): Promise<void> {
   const log = getLogger();
   // GAP-109: storage backend wires up here too — the worker runs as a
-  // separate process and doesn't go through src/index.ts.
-  registerExportStorageFromEnv();
+  // separate process and doesn't go through src/index.ts. Async to
+  // exercise the aws-sdk dynamic import at boot.
+  await registerExportStorageFromEnv();
   // Writer for Export-row status transitions (read-after-write consistent),
   // long-running role for the bulk row extraction (5-min statement budget,
   // separate connection pool from the API request path). When

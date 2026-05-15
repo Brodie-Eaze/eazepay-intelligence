@@ -54,7 +54,8 @@ export class S3Storage implements ExportStorage {
 
   constructor(private readonly cfg: S3StorageConfig) {}
 
-  private async ensureModules(): Promise<AwsModules> {
+  /** Visible to the builder so it can warm modules at boot (fail-closed). */
+  async ensureModules(): Promise<AwsModules> {
     if (this.modules) return this.modules;
     // Lazy-load so dev builds without aws-sdk installed don't crash at
     // module-load time. The error message is intentionally direct so the
@@ -124,16 +125,19 @@ export class S3Storage implements ExportStorage {
       new mods.GetObjectCommand({ Bucket: this.cfg.bucket, Key: key }),
       { expiresIn: this.cfg.presignTtlSeconds },
     );
-    return { presignedUrl };
+    return { kind: 'redirect', presignedUrl };
   }
 }
 
 /**
  * Build an S3Storage from process.env. Throws at boot if any required
- * variable is missing — fail-closed so a misconfigured prod startup is
- * visible immediately rather than at first export attempt.
+ * variable is missing OR if the AWS SDK isn't installed — fail-closed
+ * so a misconfigured prod startup is visible immediately rather than
+ * at first export attempt (ARCH critic blocker #4: the comment in
+ * storage.interface.ts promised boot-time fail-closed; the previous
+ * lazy-import broke that promise).
  */
-export function buildS3StorageFromEnv(): S3Storage {
+export async function buildS3StorageFromEnv(): Promise<S3Storage> {
   const region = process.env.AWS_REGION;
   const bucket = process.env.EXPORT_S3_BUCKET;
   const prefix = process.env.EXPORT_S3_PREFIX ?? 'exports/';
@@ -143,5 +147,10 @@ export function buildS3StorageFromEnv(): S3Storage {
   if (!Number.isFinite(ttl) || ttl < 60 || ttl > 3600) {
     throw new Error('s3-storage: EXPORT_PRESIGN_TTL_SEC must be 60..3600');
   }
-  return new S3Storage({ region, bucket, prefix, presignTtlSeconds: ttl });
+  const storage = new S3Storage({ region, bucket, prefix, presignTtlSeconds: ttl });
+  // Eager-load the aws-sdk modules at boot. The first write/read no
+  // longer pays a dynamic-import cost AND a missing dep crashes the
+  // API at startup, not on the first export job mid-flight.
+  await storage.ensureModules();
+  return storage;
 }

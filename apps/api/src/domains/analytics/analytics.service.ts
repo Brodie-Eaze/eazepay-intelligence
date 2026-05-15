@@ -3,29 +3,31 @@ import type { Redis } from 'ioredis';
 import type { IAnalyticsRepository } from './analytics.repository.js';
 import type { AnalyticsRangeQuery } from './analytics.schemas.js';
 
-const CACHE_TTL_SECONDS = 30;
-
 /**
- * Analytics service. Reads live data, projects KPIs, caches the hot endpoints
- * for 30s. Cache is invalidated by webhook worker on relevant writes (we use
- * SET EX rather than DEL-on-write because the webhook worker doesn't need to
- * know which exact endpoints to bust).
+ * Analytics service. Reads live data and projects KPIs on every call.
  *
- * GAP-108: every public method takes `orgId` and the cache key is namespaced
- * by orgId so a tenant never sees another tenant's cached aggregates even if
- * the SET EX races. The downstream RevenueRepository is also orgId-aware.
+ * Previously cached `/analytics/overview` for 30s. The cache was dropped
+ * because there's no invalidation on the write paths that mutate the
+ * aggregates (revenue.create, lender_decision.create, etc.) — a user
+ * could fund a new application, refresh the overview, and see the old
+ * numbers for up to 30s. On a finance dashboard that's a correctness
+ * hole, not a perf nit. Re-add a Redis layer ONLY with explicit
+ * DEL-on-write from every relevant write path.
+ *
+ * GAP-108: every public method takes `orgId` and the downstream
+ * repositories filter by orgId in every WHERE clause.
  */
 export class AnalyticsService {
   constructor(
     private readonly repo: IAnalyticsRepository,
-    private readonly redis: Redis,
+    // Reserved for re-introduction of a cache when DEL-on-write is wired.
+    // The constructor signature stays compatible so route handlers don't
+    // need to change once cache invalidation lands. Prefixed with `_` so
+    // unused-locals lint stays quiet.
+    private readonly _redis: Redis,
   ) {}
 
   async overview(orgId: string, query: AnalyticsRangeQuery): Promise<unknown> {
-    const cacheKey = `cache:analytics:overview:${orgId}:${query.from ?? 'na'}:${query.to ?? 'na'}`;
-    const cached = await this.redis.get(cacheKey);
-    if (cached) return JSON.parse(cached);
-
     const to = query.to ? new Date(query.to) : new Date();
     const from = query.from ? new Date(query.from) : new Date(to.getTime() - 30 * 86_400_000);
     const priorTo = from;
@@ -53,7 +55,7 @@ export class AnalyticsService {
     const current = new Prisma.Decimal(totalRevenue);
     const momDelta = prior.isZero() ? '0' : current.minus(prior).div(prior).toFixed(4);
 
-    const body = {
+    return {
       totalRevenue,
       approvalRate,
       fundingRate,
@@ -64,8 +66,6 @@ export class AnalyticsService {
       windowTo: to.toISOString(),
       generatedAt: new Date().toISOString(),
     };
-    await this.redis.setex(cacheKey, CACHE_TTL_SECONDS, JSON.stringify(body));
-    return body;
   }
 
   async revenueBreakdown(

@@ -14,6 +14,7 @@
 import { Prisma, RevenueEventType, RevenueStream, WebhookSource } from '@prisma/client';
 import type { PrismaClient } from '@prisma/client';
 import { z } from 'zod';
+import { getEnv } from '../../../config/env.js';
 import { getLogger } from '../../../config/logger.js';
 import { writeAuditLog } from '../../../shared/middleware/audit-log.middleware.js';
 import { publishWsEvent, withPartnerLabel } from '../../../shared/utils/ws-publisher.js';
@@ -186,7 +187,7 @@ export class AureanAiProcessor {
           stream: RevenueStream.AUREAN_AI,
           eventType: this.mapEventType(data.eventType),
           amount: new Prisma.Decimal(data.amount),
-          currency: data.currency.toUpperCase(),
+          currency: (data.currency ?? getEnv().DEFAULT_CURRENCY).toUpperCase(),
           effectiveAt: new Date(data.effectiveAt),
           idempotencyKey: `aurean-ai:rev:${data.externalEventId}`,
           metadata: (data.metadata ?? {}) as Prisma.InputJsonValue,

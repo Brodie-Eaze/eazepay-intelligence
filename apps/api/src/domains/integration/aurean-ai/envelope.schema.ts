@@ -69,7 +69,7 @@ export const RevenueAccruedSchema = z
     partnerExternalId: z.string().min(1).max(128),
     /** Decimal string — never a JSON number for money. */
     amount: z.string().regex(/^-?\d+(\.\d{1,4})?$/),
-    currency: z.string().length(3).default('AUD'),
+    currency: z.string().length(3).optional(),
     /** Stream tag matching Intelligence's RevenueStream enum. */
     stream: z.literal('AUREAN_AI'),
     eventType: z.enum(['ACCRUAL', 'COMMISSION', 'REVERSAL']),

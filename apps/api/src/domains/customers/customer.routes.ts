@@ -352,6 +352,97 @@ export async function registerCustomerRoutes(app: FastifyInstance): Promise<void
     return { data: rows };
   });
 
+  // ─── Customer lender-decision timeline (GAP-119) ─────────────────────────
+  //
+  // Returns every LenderDecision tied to the customer (joined via their
+  // Application rows on consumer_email_hash) plus the most recent 50
+  // LenderReportingEvent rows. Used by the "lender timeline" view on
+  // the customer detail page.
+  app.get('/customers/:hash/lender-data', { preHandler: requireAuth }, async (req) => {
+    const params = z.object({ hash: z.string().regex(/^[a-f0-9]{64}$/) }).parse(req.params);
+    const hashBuf = Buffer.from(params.hash, 'hex');
+    const orgId = req.auth?.orgId;
+    if (!orgId) throw errors.badRequest('Active organisation required');
+
+    // Find the applications belonging to this customer in the current org.
+    const applications = await prisma.application.findMany({
+      where: { orgId, consumerEmailHash: hashBuf },
+      select: { id: true, externalApplicationId: true, status: true, createdAt: true },
+      orderBy: { createdAt: 'desc' },
+    });
+    const applicationIds = applications.map((a) => a.id);
+    if (applicationIds.length === 0) {
+      return { applications: [], decisions: [], events: [] };
+    }
+
+    const [decisions, events] = await Promise.all([
+      prisma.lenderDecision.findMany({
+        where: { orgId, applicationId: { in: applicationIds } },
+        orderBy: { decisionTimestamp: 'desc' },
+        select: {
+          id: true,
+          applicationId: true,
+          lenderName: true,
+          lenderTier: true,
+          decision: true,
+          decisionTimestamp: true,
+          approvalAmount: true,
+          apr: true,
+          term: true,
+          fundingStatus: true,
+          fundingAmount: true,
+          fundingTimestamp: true,
+        },
+      }),
+      prisma.lenderReportingEvent.findMany({
+        where: { orgId, applicationId: { in: applicationIds } },
+        orderBy: { observedAt: 'desc' },
+        take: 50,
+        select: {
+          id: true,
+          applicationId: true,
+          lenderSlug: true,
+          externalDecisionId: true,
+          type: true,
+          observedAt: true,
+          permanent: true,
+        },
+      }),
+    ]);
+
+    await writeAuditLog({
+      req,
+      action: 'PII_ACCESSED',
+      resourceType: 'customer',
+      resourceId: params.hash,
+      orgId,
+      metadata: {
+        surface: 'lender-data',
+        applicationCount: applications.length,
+        decisionCount: decisions.length,
+      },
+    });
+
+    return {
+      applications: applications.map((a) => ({
+        ...a,
+        createdAt: a.createdAt.toISOString(),
+      })),
+      decisions: decisions.map((d) => ({
+        ...d,
+        decisionTimestamp: d.decisionTimestamp.toISOString(),
+        fundingTimestamp: d.fundingTimestamp?.toISOString() ?? null,
+        approvalAmount: d.approvalAmount?.toString() ?? null,
+        apr: d.apr?.toString() ?? null,
+        fundingAmount: d.fundingAmount?.toString() ?? null,
+      })),
+      events: events.map((e) => ({
+        ...e,
+        observedAt: e.observedAt.toISOString(),
+      })),
+    };
+  });
+
   // ─── Risk distribution ───────────────────────────────────────────────────
   app.get('/analytics/risk-distribution', { preHandler: requireAuth }, async () => {
     const buckets = await prisma.$queryRaw<

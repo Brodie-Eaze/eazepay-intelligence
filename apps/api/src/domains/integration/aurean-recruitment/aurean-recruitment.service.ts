@@ -10,6 +10,7 @@
 import { Prisma, RevenueEventType, RevenueStream, WebhookSource } from '@prisma/client';
 import type { PrismaClient } from '@prisma/client';
 import { z } from 'zod';
+import { getEnv } from '../../../config/env.js';
 import { getLogger } from '../../../config/logger.js';
 import { writeAuditLog } from '../../../shared/middleware/audit-log.middleware.js';
 import { publishWsEvent, withPartnerLabel } from '../../../shared/utils/ws-publisher.js';
@@ -178,7 +179,7 @@ export class AureanRecruitmentProcessor {
           stream: RevenueStream.AUREAN_RECRUITMENT,
           eventType: RevenueEventType.COMMISSION,
           amount: new Prisma.Decimal(data.amount),
-          currency: data.currency.toUpperCase(),
+          currency: (data.currency ?? getEnv().DEFAULT_CURRENCY).toUpperCase(),
           effectiveAt: new Date(data.effectiveAt),
           idempotencyKey: `aurean-recruitment:commission:${data.externalEventId}`,
           metadata: {
@@ -218,7 +219,7 @@ export class AureanRecruitmentProcessor {
           stream: RevenueStream.AUREAN_RECRUITMENT,
           eventType: RevenueEventType.CLAWBACK,
           amount: new Prisma.Decimal(data.clawbackAmount).neg(),
-          currency: data.currency.toUpperCase(),
+          currency: (data.currency ?? getEnv().DEFAULT_CURRENCY).toUpperCase(),
           effectiveAt: new Date(data.rescindedAt),
           idempotencyKey: `aurean-recruitment:rescind:${data.externalEventId}`,
           metadata: {

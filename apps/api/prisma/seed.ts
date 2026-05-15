@@ -38,32 +38,25 @@ async function main(): Promise<void> {
   // Phase 1 retrofit: every tenant-scoped row needs an org_id. The seed
   // attaches everything it creates to the bootstrap org (slug='default')
   // which is created by migration 20260508145000.
+  // SEC-203 (production-safety): refuse to seed against a prod-tagged
+  // database. The blocks below provision demo users (admin/operator/
+  // viewer/investor) with literal password 'Demo!1234' — running them
+  // against prod would create four known-password backdoor accounts.
+  // The 7 launch-business orgs that real prod needs are provisioned
+  // by migration 20260515200000_gap103_provision_launch_business_orgs,
+  // not by this seed. Prod deploys run `prisma migrate deploy`, not
+  // `db:seed`.
+  if (process.env.NODE_ENV === 'production') {
+    console.log('▶ NODE_ENV=production — refusing to seed demo data.');
+    console.log('  Launch-business orgs are provisioned by the migration.');
+    return;
+  }
+
   const bootstrapOrg = await prisma.organization.findUniqueOrThrow({
     where: { slug: 'default' },
     select: { id: true },
   });
   const orgId = bootstrapOrg.id;
-
-  // GAP-103/104/105: ensure the 7 launch-business orgs exist. The KPI
-  // endpoints + business webhook routes resolve into these slugs at
-  // ingest time; without the rows, fail-closed kicks in and every
-  // request returns 401.
-  const LAUNCH_BUSINESSES = [
-    { slug: 'medpay', name: 'medpay' },
-    { slug: 'tradepay', name: 'tradepay' },
-    { slug: 'coachpay', name: 'coachpay' },
-    { slug: 'aurean-ai', name: 'Aurean AI' },
-    { slug: 'aurean-recruitment', name: 'Aurean Recruitment' },
-    { slug: 'micamp-processing', name: 'MiCamp Processing' },
-    { slug: 'highsale', name: 'HighSale' },
-  ];
-  for (const b of LAUNCH_BUSINESSES) {
-    await prisma.organization.upsert({
-      where: { slug: b.slug },
-      create: { id: uuidv7(), slug: b.slug, name: b.name, dataRegion: 'au' },
-      update: {},
-    });
-  }
 
   // ─── Users ────────────────────────────────────────────────────────────────
   const adminHash = await argon2.hash('Demo!1234', { type: argon2.argon2id });

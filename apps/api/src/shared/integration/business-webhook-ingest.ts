@@ -28,6 +28,7 @@ import { WebhookSource, type PrismaClient } from '@prisma/client';
 import type { Redis } from 'ioredis';
 import type { z } from 'zod';
 import { errors } from '../errors/app-error.js';
+import { getLogger } from '../../config/logger.js';
 import { writeAuditLog } from '../middleware/audit-log.middleware.js';
 import { webhookRateLimit } from '../middleware/rate-limit-tiers.js';
 import { appendToOutbox } from '../utils/outbox.js';
@@ -91,12 +92,23 @@ export async function registerBusinessWebhookIngest<
   cfg: BusinessWebhookConfig<Envelope>,
 ): Promise<void> {
   app.post(cfg.routePath, { config: webhookRateLimit() }, async (req, reply) => {
+    const log = getLogger();
+    // ARCH-1 (Wave C critic): the original implementation returned a
+    // single `invalidSignature` for every rejection path. At 3am the
+    // operator cannot tell whether the secret env var is missing, the
+    // org row was never provisioned, the vendor's clock skewed, or
+    // the HMAC genuinely failed. Each rejection path now logs a
+    // stable `errorId` while still returning the same 401 to the
+    // caller (so a probing attacker can't enumerate distinct failure
+    // modes from the response shape).
+    const fail = (errorId: string, meta: Record<string, unknown> = {}): never => {
+      log.warn({ errorId, source: cfg.source, ...meta }, `business_webhook.reject.${errorId}`);
+      throw errors.invalidSignature();
+    };
+
     const secret = cfg.getSecret();
     if (!secret) {
-      // The webhook is provisioned but the secret isn't set yet — reject
-      // every request with a clean error rather than crashing on undefined.
-      // Operator sees the gap in metrics + logs.
-      throw errors.invalidSignature();
+      return fail('secret_missing');
     }
 
     const ts = firstHeader(req, TS_HEADER);
@@ -113,41 +125,48 @@ export async function registerBusinessWebhookIngest<
       }
     }
     if (!sig || !ts || !idempotencyKey || !eventIdHeader || !eventTypeHeader) {
-      throw errors.invalidSignature();
+      return fail('missing_headers');
     }
     if (!IDEMPOTENCY_KEY_RE.test(idempotencyKey)) {
-      throw errors.invalidSignature();
+      return fail('malformed_idempotency_key');
     }
 
     const tsNum = Number.parseInt(ts, 10);
-    if (!Number.isFinite(tsNum)) throw errors.invalidSignature();
+    if (!Number.isFinite(tsNum)) return fail('malformed_timestamp');
     const skew = Math.abs(Math.floor(Date.now() / 1000) - tsNum);
-    if (skew > TOLERANCE_SECONDS) throw errors.invalidSignature();
+    if (skew > TOLERANCE_SECONDS) return fail('clock_skew_exceeded', { skew });
 
     const rawBody = req.rawBody;
     if (rawBody == null) {
-      throw errors.invalidSignature();
+      return fail('raw_body_missing');
     }
     // Fastify's rawBody is registered as `string` (see server.ts content-type
     // parser), so no Buffer coercion needed. Defensive cast preserves the
     // contract if a future refactor switches the parser to Buffer mode.
     const rawString = typeof rawBody === 'string' ? rawBody : (rawBody as Buffer).toString('utf8');
     if (!verifySignature(rawString, ts, sig, secret)) {
-      throw errors.invalidSignature();
+      return fail('hmac_mismatch');
     }
 
     const parsed = cfg.envelopeSchema.safeParse(req.body);
     if (!parsed.success) {
+      // SEC-206: don't echo Zod issues to the caller — they leak field
+      // shape + regex sources + unknown-key lists. Log the issues server-
+      // side under a stable errorId so on-call still has the detail.
+      log.warn(
+        {
+          errorId: 'business_webhook.invalid_envelope',
+          source: cfg.source,
+          issues: parsed.error.issues.slice(0, 5),
+        },
+        'business_webhook.invalid_envelope',
+      );
       reply.status(400);
-      return {
-        accepted: false,
-        reason: 'invalid_envelope',
-        issues: parsed.error.issues,
-      };
+      return { accepted: false, reason: 'invalid_envelope' };
     }
     const env_ = parsed.data;
     if (env_.eventId !== eventIdHeader || env_.eventType !== eventTypeHeader) {
-      throw errors.invalidSignature();
+      return fail('header_body_mismatch');
     }
 
     const org = await prisma.organization.findUnique({
@@ -157,7 +176,7 @@ export async function registerBusinessWebhookIngest<
     if (!org || org.deletedAt) {
       // Misconfigured: source provisioned but the receiving org isn't
       // in the DB. Same fail-closed posture as a missing secret.
-      throw errors.invalidSignature();
+      return fail('org_missing', { slug: cfg.orgSlug });
     }
     const orgId = org.id;
 
