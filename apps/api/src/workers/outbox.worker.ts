@@ -31,6 +31,7 @@ import { enqueueWebhook } from '../shared/queues/webhook.queue.js';
 import { enqueueWebhookDelivery } from '../shared/queues/webhook-delivery.queue.js';
 import { getRedisPublisher } from '../config/redis.js';
 import { WS_CHANNEL } from '../shared/utils/ws-publisher.js';
+import { outboxSweptTotal, outboxLagSeconds } from '../shared/metrics/metrics.js';
 
 // Outbox sweep cadence + batch size. Defaults are deliberately conservative —
 // at 100 events / 1s sweep we drain 6,000 events/min per replica, scaling
@@ -93,6 +94,7 @@ async function processOnce(): Promise<number> {
           where: { id: row.id },
           data: { publishedAt: new Date(), publishError: null },
         });
+        outboxSweptTotal.inc({ kind: row.kind, outcome: 'published' });
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         const nextAttempt = row.attempt_count + 1;
@@ -126,6 +128,7 @@ async function processOnce(): Promise<number> {
             dlqedAt: dlq ? new Date() : undefined,
           },
         });
+        outboxSweptTotal.inc({ kind: row.kind, outcome: dlq ? 'dlq' : 'failed' });
       }
     }
 

@@ -35,7 +35,8 @@
     "worker:pii-reencryption": "tsx src/workers/pii-reencryption.worker.ts",
     "worker:scheduled-report": "tsx src/workers/scheduled-report.worker.ts",
     "worker:correlation-linker": "tsx src/workers/correlation-linker.worker.ts",
-    "worker:lender-polling": "tsx src/workers/lender-polling.worker.ts"
+    "worker:lender-polling": "tsx src/workers/lender-polling.worker.ts",
+    "worker:retention": "tsx src/workers/retention.worker.ts"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"

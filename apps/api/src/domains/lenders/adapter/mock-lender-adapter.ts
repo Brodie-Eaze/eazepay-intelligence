@@ -20,6 +20,7 @@
 import { createHash } from 'node:crypto';
 import type {
   LenderAdapter,
+  LenderAdapterCapabilities,
   LenderApplicationInput,
   LenderPollResult,
   LenderSubmitResult,
@@ -36,12 +37,19 @@ interface MockState {
   fundingAmount: string | null;
 }
 
-const state = new Map<string, MockState>();
-
 export class MockLenderAdapter implements LenderAdapter {
   readonly slug = 'mock';
   readonly displayName = 'Mock Lender';
   readonly tier = 'PRIME' as const;
+  readonly capabilities: LenderAdapterCapabilities = {
+    synchronousSubmit: true,
+    asyncDecisionWebhook: false,
+    supportsTimeout: true,
+  };
+  // Phase H: state is per-instance (was module-level — racy under parallel
+  // test runs). The polling worker creates one adapter instance per process;
+  // tests can mint isolated instances to avoid cross-test contamination.
+  private readonly state = new Map<string, MockState>();
 
   isReady(): boolean {
     return true;
@@ -79,7 +87,7 @@ export class MockLenderAdapter implements LenderAdapter {
       decision === 'APPROVED'
         ? (Number(input.requestedAmount) * approvalMultiplier).toFixed(2)
         : null;
-    state.set(externalDecisionId, {
+    this.state.set(externalDecisionId, {
       submittedAt: new Date(),
       decision,
       approvalAmount,
@@ -98,7 +106,7 @@ export class MockLenderAdapter implements LenderAdapter {
   }
 
   async pollDecision(externalDecisionId: string): Promise<LenderPollResult> {
-    const s = state.get(externalDecisionId);
+    const s = this.state.get(externalDecisionId);
     if (!s) {
       throw new Error(`mock-lender: unknown decision id ${externalDecisionId}`);
     }
@@ -131,6 +139,11 @@ export class MockLenderAdapter implements LenderAdapter {
   }
 }
 
+/**
+ * Phase H: state is now per-instance — tests just mint a fresh
+ * `new MockLenderAdapter()`. Kept as a no-op so existing callers don't
+ * break; will remove in a follow-up once the test files are updated.
+ */
 export function __resetMockLenderStateForTests(): void {
-  state.clear();
+  /* no-op — state is per-instance, instantiate a new adapter instead */
 }

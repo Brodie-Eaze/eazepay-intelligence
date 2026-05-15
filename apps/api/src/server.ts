@@ -28,6 +28,8 @@ import { getRedis } from './config/redis.js';
 import { AppError, errors, isAppError } from './shared/errors/app-error.js';
 
 import { registerHealthRoute } from './domains/health.routes.js';
+import { registerMetricsRoutes } from './shared/metrics/metrics.routes.js';
+import { httpRequestsTotal, httpRequestDurationSeconds } from './shared/metrics/metrics.js';
 import { registerAuthRoutes } from './domains/auth/auth.routes.js';
 import { registerOAuthRoutes } from './domains/auth/oauth.routes.js';
 import { registerInvitationRoutes } from './domains/users/invitation.routes.js';
@@ -310,9 +312,35 @@ export async function buildServer(): Promise<FastifyInstance> {
     });
   });
 
+  // ─── Metrics: per-request counter + latency histogram ────────────────────
+  // Mounted as Fastify hooks so every route (including health + metrics
+  // itself) is tracked. Labels are bounded — route pattern (not URL) and
+  // status code. status_code is bucketed by hundreds to cap cardinality.
+  app.addHook('onRequest', async (req) => {
+    (req as unknown as { __metricsStart?: bigint }).__metricsStart = process.hrtime.bigint();
+  });
+  app.addHook('onResponse', async (req, reply) => {
+    const start = (req as unknown as { __metricsStart?: bigint }).__metricsStart;
+    const route =
+      (req as unknown as { routeOptions?: { url?: string } }).routeOptions?.url ??
+      req.routerPath ??
+      '<unknown>';
+    const statusBucket = `${Math.floor(reply.statusCode / 100)}xx`;
+    httpRequestsTotal.inc({ method: req.method, route, status: statusBucket });
+    if (start) {
+      const seconds = Number(process.hrtime.bigint() - start) / 1e9;
+      httpRequestDurationSeconds.observe(seconds, {
+        method: req.method,
+        route,
+        status: statusBucket,
+      });
+    }
+  });
+
   // ─── Routes ──────────────────────────────────────────────────────────────
   await app.register(async (instance) => {
     registerHealthRoute(instance);
+    await registerMetricsRoutes(instance);
   });
 
   await app.register(

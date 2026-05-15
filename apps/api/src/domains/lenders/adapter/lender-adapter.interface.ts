@@ -83,6 +83,30 @@ export interface LenderPollResult {
   observedAt: Date;
 }
 
+/**
+ * Capability flags declared by each adapter so the platform can route
+ * around the lender's I/O model. Phase H extension — the original
+ * interface assumed synchronous-poll lenders only.
+ */
+export interface LenderAdapterCapabilities {
+  /** Lender confirms submissions synchronously (most adapters today). */
+  synchronousSubmit: boolean;
+  /** Lender pushes decision updates via webhook → we don't poll. */
+  asyncDecisionWebhook: boolean;
+  /** Lender supports per-call timeout (otherwise platform's default fires). */
+  supportsTimeout: boolean;
+}
+
+/**
+ * Body shape pushed by the lender's webhook when `asyncDecisionWebhook=true`.
+ * The platform unwraps this to call `onDecisionWebhook` on the adapter.
+ */
+export interface LenderWebhookBody {
+  externalDecisionId: string;
+  headers: Record<string, string | undefined>;
+  rawBody: Buffer | string;
+}
+
 export interface LenderAdapter {
   /** Stable identifier (lower-case kebab). LenderDecision.lender_name uses the display form. */
   readonly slug: string;
@@ -90,6 +114,8 @@ export interface LenderAdapter {
   readonly displayName: string;
   /** Tier the adapter classifies into — drives the waterfall ordering. */
   readonly tier: 'PRIME' | 'NEAR_PRIME' | 'SUBPRIME' | 'CARD_LINKED';
+  /** Capability declaration — Phase H. Default to synchronous-poll for back-compat. */
+  readonly capabilities: LenderAdapterCapabilities;
 
   /** True if the adapter is fully wired (creds + endpoint available). */
   isReady(): boolean;
@@ -105,6 +131,17 @@ export interface LenderAdapter {
   /**
    * Poll for the current decision. Idempotent — same answer for the
    * same externalDecisionId until the lender flips state.
+   * Adapters that set `capabilities.asyncDecisionWebhook=true` MAY
+   * throw `not-supported`; the polling worker skips them.
    */
   pollDecision(externalDecisionId: string): Promise<LenderPollResult>;
+
+  /**
+   * Optional: handle an inbound webhook from the lender. Validates the
+   * signature (per the adapter's wire contract) and emits the parsed
+   * LenderPollResult so the submission service can reconcile the row.
+   * Only adapters with `capabilities.asyncDecisionWebhook=true` need
+   * to implement this; others throw or omit.
+   */
+  onDecisionWebhook?(body: LenderWebhookBody): Promise<LenderPollResult>;
 }

@@ -5,15 +5,13 @@ import {
   listLenderAdapters,
   __resetLenderRegistryForTests,
 } from '../../src/domains/lenders/adapter/lender-adapter-registry.js';
-import {
-  MockLenderAdapter,
-  __resetMockLenderStateForTests,
-} from '../../src/domains/lenders/adapter/mock-lender-adapter.js';
+import { MockLenderAdapter } from '../../src/domains/lenders/adapter/mock-lender-adapter.js';
 
 describe('lender-adapter registry', () => {
   beforeEach(() => {
     __resetLenderRegistryForTests();
-    __resetMockLenderStateForTests();
+    // Phase H: MockLenderAdapter state is per-instance now — each test
+    // mints its own. Module-level state was racy under parallel tests.
   });
 
   it('registers and resolves the mock adapter', () => {
@@ -32,7 +30,7 @@ describe('lender-adapter registry', () => {
 });
 
 describe('MockLenderAdapter — submit', () => {
-  beforeEach(() => __resetMockLenderStateForTests());
+  // (no-op: state is per-instance)
 
   it('APPROVES at PRIME terms when credit_score ≥ 720', async () => {
     const a = new MockLenderAdapter();
@@ -106,7 +104,7 @@ describe('MockLenderAdapter — submit', () => {
 });
 
 describe('MockLenderAdapter — pollDecision', () => {
-  beforeEach(() => __resetMockLenderStateForTests());
+  // (no-op: state is per-instance)
 
   it('returns APPROVED immediately for a high-score applicant', async () => {
     const a = new MockLenderAdapter();

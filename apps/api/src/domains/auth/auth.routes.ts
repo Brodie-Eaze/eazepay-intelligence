@@ -8,6 +8,11 @@ import { errors } from '../../shared/errors/app-error.js';
 import { COOKIE, clearCookie, readCookie, setCookie } from '../../shared/utils/cookies.js';
 import { writeAuditLog } from '../../shared/middleware/audit-log.middleware.js';
 import { denyJti, denySession, requireAuth } from '../../shared/middleware/auth.middleware.js';
+import {
+  issueStepUpToken,
+  STEP_UP_COOKIE_NAME,
+  STEP_UP_TTL,
+} from '../../shared/middleware/mfa-step-up.middleware.js';
 import { verifyJwt } from '../../shared/utils/jwt.js';
 import { csrfGuard } from '../../shared/middleware/csrf.middleware.js';
 import { compositeRateLimit } from '../../shared/middleware/rate-limit.middleware.js';
@@ -302,6 +307,51 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
         metadata: { rowsRevoked: count },
       });
       reply.status(204).send();
+    },
+  );
+
+  // ─── MFA step-up (Phase H) ───────────────────────────────────────────────
+  //
+  // Critical SUPER actions (cryptoshred, impersonate-token, DLQ replay,
+  // tenant offboarding, quarantine replay) require a fresh MFA proof
+  // on top of the session cookie. POST /auth/mfa/step-up/verify with a
+  // current TOTP issues a single-use, 5-minute __Host-mfa_stepup cookie
+  // that requireMfaStepUp() consumes.
+  app.post(
+    '/auth/mfa/step-up/verify',
+    { preHandler: [requireAuth, csrfGuard] },
+    async (req, reply) => {
+      const auth = req.auth!;
+      const body = z.object({ code: z.string().regex(/^\d{6}$/) }).parse(req.body);
+      const user = await prisma.user.findUniqueOrThrow({ where: { id: auth.userId } });
+      if (!user.mfaEnabled || !user.mfaSecret) {
+        throw errors.badRequest('MFA must be enabled before step-up is available');
+      }
+      if (!authenticator.verify({ token: body.code, secret: user.mfaSecret })) {
+        await writeAuditLog({
+          req,
+          userId: user.id,
+          action: 'USER_MFA_FAILED',
+          resourceType: 'user',
+          resourceId: user.id,
+          metadata: { surface: 'step_up' },
+        });
+        throw errors.unauthorized('Invalid MFA code');
+      }
+      const { token, expiresAt } = issueStepUpToken(user.id);
+      setCookie(reply, STEP_UP_COOKIE_NAME, token, {
+        maxAgeSeconds: STEP_UP_TTL,
+        httpOnly: true,
+      });
+      await writeAuditLog({
+        req,
+        userId: user.id,
+        action: 'USER_MFA_ENABLED',
+        resourceType: 'user',
+        resourceId: user.id,
+        metadata: { surface: 'step_up.issued' },
+      });
+      return { token, expiresAt: expiresAt.toISOString() };
     },
   );
 

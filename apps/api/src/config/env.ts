@@ -42,6 +42,10 @@ const EnvSchema = z.object({
     .optional(),
   CSRF_SIGNING_SECRET: z.string().min(32, 'CSRF_SIGNING_SECRET must be ≥32 chars').optional(),
   OAUTH_STATE_SECRET: z.string().min(32, 'OAUTH_STATE_SECRET must be ≥32 chars').optional(),
+  /// MFA step-up signing key (Phase H). Used by /auth/mfa/step-up/verify
+  /// to issue short-lived (5min) re-auth tokens for SUPER actions.
+  /// Production refuses to boot if unset.
+  MFA_STEP_UP_SECRET: z.string().min(32, 'MFA_STEP_UP_SECRET must be ≥32 chars').optional(),
   // Pepper for API-token storage. Replaces the previous bare SHA-256 of the
   // token secret (CR-103). Optional during migration window — when unset,
   // hashes fall back to plain SHA-256 so existing tokens still verify; new
@@ -84,6 +88,12 @@ const EnvSchema = z.object({
   // Same pattern as AUREAN_AI above. Optional during the migration window.
   AUREAN_RECRUITMENT_WEBHOOK_SECRET: z.string().min(32).optional(),
 
+  /**
+   * Phase H: explicit-domain CORS allowlist. Wildcards (`*`, `*.example.com`)
+   * are REJECTED at boot — a wildcard on `*.up.railway.app` would let any
+   * sibling deploy hit the API. Each entry must be a full origin (scheme +
+   * host + optional port).
+   */
   CORS_ORIGINS: z
     .string()
     .default('http://localhost:3011')
@@ -92,6 +102,17 @@ const EnvSchema = z.object({
         .split(',')
         .map((s) => s.trim())
         .filter(Boolean),
+    )
+    .refine((origins) => origins.every((o) => !o.includes('*')), {
+      message: 'CORS_ORIGINS must be an explicit list of origins; wildcards are not permitted',
+    })
+    .refine(
+      (origins) =>
+        origins.every((o) => /^https?:\/\/[a-z0-9.-]+(:\d+)?$/i.test(o.replace(/\/$/, ''))),
+      {
+        message:
+          'CORS_ORIGINS entries must be scheme + host + optional port (e.g. https://app.eazepay.com)',
+      },
     ),
 
   // Tiered rate limits — see docs/COMPUTE_LIMITS.md for sizing rationale.
@@ -251,6 +272,8 @@ export function getEnv(): Env {
       ['CSRF_SIGNING_SECRET', parsed.data.CSRF_SIGNING_SECRET],
       ['OAUTH_STATE_SECRET', parsed.data.OAUTH_STATE_SECRET],
       ['API_TOKEN_HASH_SECRET', parsed.data.API_TOKEN_HASH_SECRET],
+      // Phase H: MFA step-up + SUPER-action re-auth.
+      ['MFA_STEP_UP_SECRET', parsed.data.MFA_STEP_UP_SECRET],
     ];
     for (const [name, value] of requiredPerKind) {
       if (!value) {

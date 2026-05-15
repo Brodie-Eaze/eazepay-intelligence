@@ -35,10 +35,12 @@ import { getPrisma } from '../../config/database.js';
 import { requireAuth } from '../../shared/middleware/auth.middleware.js';
 import { csrfGuard } from '../../shared/middleware/csrf.middleware.js';
 import { requirePlatformRole } from '../../shared/middleware/rbac.middleware.js';
+import { requireMfaStepUp } from '../../shared/middleware/mfa-step-up.middleware.js';
 import { writeAuditLog } from '../../shared/middleware/audit-log.middleware.js';
 import { errors } from '../../shared/errors/app-error.js';
 import { rotateDek, cryptoshredOrg } from '../../shared/kms/tenant-dek.js';
 import { LOCAL_DEV_KEY_ID } from '../../shared/kms/local-kms-client.js';
+import { TenantOffboardingService } from './tenant-offboarding.service.js';
 
 const SLUG_RE = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
 
@@ -296,7 +298,15 @@ export async function registerPlatformRoutes(app: FastifyInstance): Promise<void
    */
   app.post(
     '/platform/orgs/:id/cryptoshred',
-    { preHandler: [requireAuth, csrfGuard, requirePlatformRole('SUPER')] },
+    {
+      preHandler: [
+        requireAuth,
+        csrfGuard,
+        requirePlatformRole('SUPER'),
+        // Phase H: irreversible PII destruction requires fresh MFA proof.
+        requireMfaStepUp,
+      ],
+    },
     async (req) => {
       const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
       const body = z
@@ -363,6 +373,50 @@ export async function registerPlatformRoutes(app: FastifyInstance): Promise<void
           `Cryptoshred initiated. KMS keys will be permanently destroyed after ${body.pendingDays} days. ` +
           'Within that window, an admin with kms:CancelKeyDeletion can reverse this action.',
       };
+    },
+  );
+
+  /**
+   * Phase H: Full tenant offboarding workflow.
+   *   1. Soft-delete the org
+   *   2. Archive audit + revenue + lender_decision rows to export storage
+   *   3. Cryptoshred the org DEK (irreversibly destroys PII)
+   *   4. Delete outbox rows + quarantine remaining webhook_events
+   *   5. Write the offboarding audit row
+   *
+   * Distinct from the bare cryptoshred endpoint — offboarding is a
+   * planned deletion event, cryptoshred is an emergency tool.
+   *
+   * Requires SUPER + MFA step-up + the X-Offboard-Confirm header equal
+   * to the org slug.
+   */
+  app.post(
+    '/platform/orgs/:id/offboard',
+    {
+      preHandler: [requireAuth, csrfGuard, requirePlatformRole('SUPER'), requireMfaStepUp],
+    },
+    async (req) => {
+      const auth = req.auth!;
+      const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
+      const org = await prisma.organization.findUnique({
+        where: { id },
+        select: { slug: true },
+      });
+      if (!org) throw errors.notFound('Organization not found');
+      const confirmHeader = req.headers['x-offboard-confirm'];
+      const confirmValue = Array.isArray(confirmHeader) ? confirmHeader[0] : confirmHeader;
+      if (confirmValue !== org.slug) {
+        throw errors.badRequest(
+          `Confirmation header X-Offboard-Confirm must equal the org slug "${org.slug}"`,
+        );
+      }
+      const svc = new TenantOffboardingService(prisma);
+      const summary = await svc.offboard({
+        orgId: id,
+        confirmSlug: org.slug,
+        operatorUserId: auth.userId,
+      });
+      return summary;
     },
   );
 
@@ -583,7 +637,15 @@ export async function registerPlatformRoutes(app: FastifyInstance): Promise<void
   // _ACCESS row with the staff userId + target orgId + reason.
   app.post(
     '/platform/orgs/:id/impersonate-token',
-    { preHandler: [requireAuth, requirePlatformRole('SUPER'), csrfGuard] },
+    {
+      preHandler: [
+        requireAuth,
+        requirePlatformRole('SUPER'),
+        csrfGuard,
+        // Phase H: cross-tenant access requires fresh MFA proof.
+        requireMfaStepUp,
+      ],
+    },
     async (req) => {
       const params = z.object({ id: z.string().uuid() }).parse(req.params);
       const body = z
@@ -699,7 +761,15 @@ export async function registerPlatformRoutes(app: FastifyInstance): Promise<void
   // only — replays alter normalised tables and can be destructive.
   app.post(
     '/platform/eazepay-app/quarantine/:id/replay',
-    { preHandler: [requireAuth, requirePlatformRole('SUPER'), csrfGuard] },
+    {
+      preHandler: [
+        requireAuth,
+        requirePlatformRole('SUPER'),
+        csrfGuard,
+        // Phase H: replay can mutate normalised tables across orgs.
+        requireMfaStepUp,
+      ],
+    },
     async (req) => {
       const params = z.object({ id: z.string().uuid() }).parse(req.params);
       const body = z
@@ -788,7 +858,15 @@ export async function registerPlatformRoutes(app: FastifyInstance): Promise<void
   // root cause is fixed before unblocking the row.
   app.post(
     '/platform/outbox/dlq/:id/replay',
-    { preHandler: [requireAuth, requirePlatformRole('SUPER'), csrfGuard] },
+    {
+      preHandler: [
+        requireAuth,
+        requirePlatformRole('SUPER'),
+        csrfGuard,
+        // Phase H: replaying a DLQ row can re-emit financial events.
+        requireMfaStepUp,
+      ],
+    },
     async (req) => {
       const params = z.object({ id: z.string().uuid() }).parse(req.params);
       const row = await prisma.outboxEvent.findUnique({ where: { id: params.id } });

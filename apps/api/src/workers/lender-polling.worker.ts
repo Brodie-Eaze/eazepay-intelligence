@@ -28,16 +28,50 @@ import { getPrisma } from '../config/database.js';
 import { LenderSubmissionService } from '../domains/lenders/lender-submission.service.js';
 import { getLenderAdapter } from '../domains/lenders/adapter/lender-adapter-registry.js';
 import { bootstrapLenderAdapters } from '../domains/lenders/adapter/bootstrap.js';
+import { CircuitBreaker } from '../domains/lenders/adapter/circuit-breaker.js';
+import { lenderPollsTotal, lenderPollDurationSeconds } from '../shared/metrics/metrics.js';
 
 const POLL_INTERVAL_MS = Number(process.env.LENDER_POLL_INTERVAL_MS ?? 60_000);
 const BATCH_SIZE = Number(process.env.LENDER_POLL_BATCH_SIZE ?? 200);
 const MAX_PARALLEL = Number(process.env.LENDER_POLL_MAX_PARALLEL ?? 8);
+const PER_CALL_TIMEOUT_MS = Number(process.env.LENDER_POLL_TIMEOUT_MS ?? 10_000);
+
+// Per-lender circuit breakers. Keyed by adapter slug. Process-local — each
+// worker replica tracks independently which is acceptable since the
+// breaker's purpose is to protect *this* worker from looping on a dead
+// adapter, not to coordinate across replicas.
+const breakers = new Map<string, CircuitBreaker>();
+function breakerFor(slug: string): CircuitBreaker {
+  let b = breakers.get(slug);
+  if (!b) {
+    b = new CircuitBreaker(slug);
+    breakers.set(slug, b);
+  }
+  return b;
+}
 
 function slugifyLenderName(name: string): string {
   return name
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-|-$/g, '');
+}
+
+/** Race a promise against a timeout. Rejects with `lender.poll.timeout` on miss. */
+function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`lender.poll.timeout after ${ms}ms`)), ms);
+    p.then(
+      (v) => {
+        clearTimeout(timer);
+        resolve(v);
+      },
+      (err) => {
+        clearTimeout(timer);
+        reject(err);
+      },
+    );
+  });
 }
 
 async function processBatch(prisma: PrismaClient): Promise<number> {
@@ -63,7 +97,8 @@ async function processBatch(prisma: PrismaClient): Promise<number> {
       while (queue.length > 0) {
         const decision = queue.shift();
         if (!decision) return;
-        const adapter = getLenderAdapter(slugifyLenderName(decision.lenderName));
+        const slug = slugifyLenderName(decision.lenderName);
+        const adapter = getLenderAdapter(slug);
         if (!adapter) {
           log.warn(
             {
@@ -73,9 +108,42 @@ async function processBatch(prisma: PrismaClient): Promise<number> {
             },
             'lender.poll.no_adapter',
           );
+          lenderPollsTotal.inc({ adapter: slug, outcome: 'no_adapter' });
           continue;
         }
-        await service.pollOne(adapter, decision.id);
+        // Skip async-webhook adapters — they push decisions, we don't poll.
+        if (adapter.capabilities.asyncDecisionWebhook) {
+          lenderPollsTotal.inc({ adapter: slug, outcome: 'skipped_async' });
+          continue;
+        }
+        const breaker = breakerFor(slug);
+        if (breaker.shouldSkip()) {
+          lenderPollsTotal.inc({ adapter: slug, outcome: 'breaker_open' });
+          continue;
+        }
+        const endTimer = lenderPollDurationSeconds.startTimer({ adapter: slug });
+        try {
+          // Per-call timeout wrapper. Adapter contracts that respect it
+          // get a clean abort; ones that don't are torn down by the timer.
+          await withTimeout(service.pollOne(adapter, decision.id), PER_CALL_TIMEOUT_MS);
+          breaker.recordSuccess();
+          lenderPollsTotal.inc({ adapter: slug, outcome: 'ok' });
+        } catch (err) {
+          breaker.recordFailure();
+          lenderPollsTotal.inc({ adapter: slug, outcome: 'fail' });
+          log.error(
+            {
+              errorId: 'lender.poll.fail',
+              adapter: slug,
+              decisionId: decision.id,
+              err: err instanceof Error ? err.message : String(err),
+              breakerState: breaker.getState(),
+            },
+            'lender.poll.fail',
+          );
+        } finally {
+          endTimer();
+        }
       }
     }),
   );
