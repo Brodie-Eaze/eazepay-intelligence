@@ -7,7 +7,8 @@ import { getRedis } from '../../config/redis.js';
 import { errors } from '../../shared/errors/app-error.js';
 import { COOKIE, clearCookie, readCookie, setCookie } from '../../shared/utils/cookies.js';
 import { writeAuditLog } from '../../shared/middleware/audit-log.middleware.js';
-import { requireAuth } from '../../shared/middleware/auth.middleware.js';
+import { denyJti, requireAuth } from '../../shared/middleware/auth.middleware.js';
+import { verifyJwt } from '../../shared/utils/jwt.js';
 import { csrfGuard } from '../../shared/middleware/csrf.middleware.js';
 import { compositeRateLimit } from '../../shared/middleware/rate-limit.middleware.js';
 import { AuthRepository } from './auth.repository.js';
@@ -86,6 +87,24 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
   app.post('/auth/logout', { preHandler: csrfGuard }, async (req, reply) => {
     const raw = readCookie(req, COOKIE.REFRESH);
     await service.logout(raw);
+
+    // Phase 4 (SEC-113): mark the in-flight access JWT's jti as revoked
+    // until its natural expiry. Before this, the access cookie remained
+    // valid for up to JWT_ACCESS_TTL_SECONDS (15min default) after logout
+    // — a stolen access token via XSS/log-leak survived the user clicking
+    // logout. We parse the access cookie here (best-effort; the cookie
+    // may already be gone if cleared by an earlier flow) and add its jti
+    // to the Redis deny-list.
+    const accessRaw = readCookie(req, COOKIE.ACCESS);
+    if (accessRaw) {
+      try {
+        const payload = verifyJwt(accessRaw, 'access');
+        await denyJti(payload.jti, new Date(payload.exp * 1000));
+      } catch {
+        // Invalid / expired access cookie — nothing to deny.
+      }
+    }
+
     const userId = req.auth?.userId;
     clearCookie(reply, COOKIE.ACCESS);
     clearCookie(reply, COOKIE.REFRESH);

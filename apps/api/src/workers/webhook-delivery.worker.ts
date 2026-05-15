@@ -35,11 +35,27 @@ async function main(): Promise<void> {
       'webhook-delivery.failed',
     );
     if (job?.attemptsMade && job.opts.attempts && job.attemptsMade >= job.opts.attempts) {
-      // Final failure → mark abandoned in DB
+      // Final failure → mark abandoned in DB. SF-015: previously silently
+      // swallowed any error here, so a Postgres outage during the
+      // final-failure marker meant SLA-miss alerts never fired and the
+      // delivery row was stuck in RETRYING / FAILED forever. Log the
+      // failure with a stable errorId so on-call sees it.
       const prisma = getPrisma();
-      await prisma.webhookDelivery
-        .update({ where: { id: job.data.deliveryId }, data: { status: 'ABANDONED' } })
-        .catch(() => {});
+      try {
+        await prisma.webhookDelivery.update({
+          where: { id: job.data.deliveryId },
+          data: { status: 'ABANDONED' },
+        });
+      } catch (markErr) {
+        log.error(
+          {
+            err: markErr,
+            errorId: 'webhook_delivery.mark_abandoned_failed',
+            deliveryId: job.data.deliveryId,
+          },
+          'webhook-delivery.mark_abandoned_failed — manual reconciliation needed',
+        );
+      }
     }
   });
 

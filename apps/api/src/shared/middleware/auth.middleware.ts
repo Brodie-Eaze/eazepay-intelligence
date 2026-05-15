@@ -4,6 +4,36 @@ import { errors } from '../errors/app-error.js';
 import { COOKIE, readCookie } from '../utils/cookies.js';
 import { verifyJwt } from '../utils/jwt.js';
 import { getPrisma } from '../../config/database.js';
+import { getRedis } from '../../config/redis.js';
+
+/**
+ * Phase 4 (SEC-113): access-token deny-list. /auth/logout marks the access
+ * JWT's jti revoked with TTL = remaining token lifetime; this middleware
+ * checks the deny-list on every request and rejects revoked tokens with
+ * 401. Closes the "stolen-access-token-survives-logout" window where the
+ * 15-min access cookie remained valid after the user clicked logout.
+ *
+ * Redis key shape: `denyJti:<jti>` → "1", expiring at the JWT's natural
+ * expiry. Cheap on the hot path: one Redis GET per authenticated request,
+ * sub-ms typical.
+ */
+const DENY_JTI_PREFIX = 'denyJti:';
+
+/**
+ * Mark an access-token jti as revoked until its natural expiry. Called
+ * from /auth/logout and password-change paths.
+ */
+export async function denyJti(jti: string, expiresAt: Date): Promise<void> {
+  const ttlSeconds = Math.max(1, Math.floor((expiresAt.getTime() - Date.now()) / 1000));
+  if (ttlSeconds === 0) return; // already expired naturally
+  await getRedis().setex(`${DENY_JTI_PREFIX}${jti}`, ttlSeconds, '1');
+}
+
+/** Check whether an access-token jti has been revoked. */
+async function isJtiDenied(jti: string): Promise<boolean> {
+  const v = await getRedis().get(`${DENY_JTI_PREFIX}${jti}`);
+  return v !== null;
+}
 
 /**
  * Hydrate `req.auth` from the access cookie. Throws 401 if missing/invalid.
@@ -20,6 +50,14 @@ export async function requireAuth(req: FastifyRequest, _reply: FastifyReply): Pr
   const token = readCookie(req, COOKIE.ACCESS);
   if (!token) throw errors.unauthorized('Missing access cookie');
   const payload = verifyJwt(token, 'access');
+
+  // Phase 4 (SEC-113): deny-list check. Tokens marked revoked by /auth/logout
+  // (and future password-change / hostile-revocation flows) are rejected
+  // even though the JWT signature still validates. Sub-millisecond Redis
+  // GET on the hot path.
+  if (await isJtiDenied(payload.jti)) {
+    throw errors.unauthorized('Token revoked');
+  }
 
   // Soft-deleted users lose access immediately. We re-read role +
   // platformRole on every request rather than trusting the JWT — those
