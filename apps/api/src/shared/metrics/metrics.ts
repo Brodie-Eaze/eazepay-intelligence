@@ -161,7 +161,7 @@ export class Histogram {
       if (m.series.size >= MAX_SERIES_PER_METRIC) return;
       s = {
         labels: { ...(labels ?? {}) },
-        counts: new Array(m.buckets.length + 1).fill(0),
+        counts: new Array<number>(m.buckets.length + 1).fill(0),
         sum: 0,
         count: 0,
       };

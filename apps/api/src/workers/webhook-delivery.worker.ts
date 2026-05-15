@@ -59,12 +59,20 @@ async function main(): Promise<void> {
     }
   });
 
-  const shutdown = async (): Promise<void> => {
-    await worker.close();
-    process.exit(0);
+  const shutdown = async (signal: NodeJS.Signals): Promise<void> => {
+    try {
+      log.info({ signal }, 'webhook-delivery.worker.shutdown.begin');
+      await worker.close();
+      process.exit(0);
+    } catch (err) {
+      // Hard-fail on close rejection rather than hang; orchestrator restart
+      // is preferable to a half-shut pod silently dropping deliveries.
+      log.error({ err, signal }, 'webhook-delivery.worker.shutdown.failed');
+      process.exit(1);
+    }
   };
-  process.on('SIGTERM', () => void shutdown());
-  process.on('SIGINT', () => void shutdown());
+  process.on('SIGTERM', () => void shutdown('SIGTERM'));
+  process.on('SIGINT', () => void shutdown('SIGINT'));
 }
 
 void main();

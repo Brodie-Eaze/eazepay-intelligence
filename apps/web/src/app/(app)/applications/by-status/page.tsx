@@ -1,6 +1,6 @@
 'use client';
 
-import { useQuery } from '@tanstack/react-query';
+import { useQueries } from '@tanstack/react-query';
 import Link from 'next/link';
 import { api } from '@/lib/api';
 import { formatDateTime } from '@/lib/format';
@@ -23,18 +23,18 @@ interface AppRow {
 const STATUSES = ['PENDING', 'SUBMITTED', 'IN_REVIEW', 'APPROVED', 'DECLINED', 'FUNDED'] as const;
 
 export default function AppsByStatusPage(): JSX.Element {
-  // STATUSES is a frozen `as const` array — the iteration order + count
-  // never changes between renders, so hooks-in-loop is safe here despite
-  // the lint rule. The rule is appropriately conservative; this is the
-  // documented exception.
-  // eslint-disable-next-line react-hooks/rules-of-hooks
-  const queries = STATUSES.map((s) =>
-    // eslint-disable-next-line react-hooks/rules-of-hooks
-    useQuery({
+  // Use `useQueries` (TanStack Query's plural form) — a SINGLE hook call
+  // that fans out into N parallel queries. This is the canonical pattern
+  // for "render one query per item in a fixed list" and removes the
+  // hooks-in-loop concern entirely. Earlier code used `STATUSES.map(s =>
+  // useQuery(...))` which works because the array is `as const` but
+  // requires `eslint-disable react-hooks/rules-of-hooks` — bad signal.
+  const queries = useQueries({
+    queries: STATUSES.map((s) => ({
       queryKey: ['applications.by-status', s],
       queryFn: () => api<{ data: AppRow[] }>(`/applications?status=${s}&limit=20`),
-    }),
-  );
+    })),
+  });
 
   return (
     <div className="space-y-6">

@@ -43,9 +43,17 @@ async function main(): Promise<void> {
   });
 
   const shutdown = async (signal: NodeJS.Signals): Promise<void> => {
-    log.info({ signal }, 'webhook.worker.shutdown.begin');
-    await worker.close();
-    process.exit(0);
+    try {
+      log.info({ signal }, 'webhook.worker.shutdown.begin');
+      await worker.close();
+      process.exit(0);
+    } catch (err) {
+      // worker.close() rejecting (e.g. Redis-disconnect race during pod
+      // termination) would otherwise dangle shutdown. Force a non-zero exit
+      // so the orchestrator restarts rather than leaving a half-shut pod.
+      log.error({ err, signal }, 'webhook.worker.shutdown.failed');
+      process.exit(1);
+    }
   };
   process.on('SIGTERM', () => void shutdown('SIGTERM'));
   process.on('SIGINT', () => void shutdown('SIGINT'));
