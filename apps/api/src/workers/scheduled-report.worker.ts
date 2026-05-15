@@ -135,7 +135,15 @@ async function processOnce(prisma: PrismaClient): Promise<number> {
             status: ExportStatus.PENDING,
           },
         });
-        const next = advanceCron(sr.cronExpression, now);
+        // Advance nextRunAt from the previously-scheduled time, not from
+        // `now` — otherwise a worker downtime of >cron-interval silently
+        // skips runs (1h cron + 3h downtime = 2 runs lost). Loop until
+        // we're strictly in the future so a recovering worker doesn't
+        // immediately re-fire a stale slot.
+        let next = advanceCron(sr.cronExpression, sr.nextRunAt ?? now);
+        while (next.getTime() <= now.getTime()) {
+          next = advanceCron(sr.cronExpression, next);
+        }
         await tx.scheduledReport.update({
           where: { id: sr.id },
           data: { lastRunAt: now, nextRunAt: next },

@@ -715,6 +715,16 @@ export async function registerPlatformRoutes(app: FastifyInstance): Promise<void
       if (event.source !== 'EAZEPAY_APP' || event.status !== 'QUARANTINED') {
         throw errors.badRequest('Event is not an EazePay App quarantine row');
       }
+      // SEC-006: validate reassignToOrgId exists + isn't soft-deleted
+      // before allowing a cross-tenant write. Otherwise a typo lands the
+      // outbox row under a ghost orgId and the drain worker fails forever.
+      if (body.reassignToOrgId) {
+        const target = await prisma.organization.findFirst({
+          where: { id: body.reassignToOrgId, deletedAt: null },
+          select: { id: true },
+        });
+        if (!target) throw errors.badRequest('reassignToOrgId not found');
+      }
       const targetOrgId = body.reassignToOrgId ?? event.orgId;
       // Reset status + (optionally) reassign org, then re-emit an outbox
       // row so the drain worker picks it up again on the next sweep.
@@ -755,6 +765,20 @@ export async function registerPlatformRoutes(app: FastifyInstance): Promise<void
           reassignedTo: body.reassignToOrgId ?? null,
         },
       });
+      // SEC-006: cross-tenant audit row when reassigning between orgs.
+      if (body.reassignToOrgId && body.reassignToOrgId !== event.orgId) {
+        await writeAuditLog({
+          req,
+          action: 'PLATFORM_CROSS_TENANT_ACCESS',
+          resourceType: 'webhook_event',
+          resourceId: event.id,
+          metadata: {
+            route: 'POST /platform/eazepay-app/quarantine/:id/replay',
+            fromOrgId: event.orgId,
+            toOrgId: body.reassignToOrgId,
+          },
+        });
+      }
       return { ok: true, eventId: event.id, orgId: targetOrgId };
     },
   );

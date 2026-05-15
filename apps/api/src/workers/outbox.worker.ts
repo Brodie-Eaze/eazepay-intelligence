@@ -64,6 +64,13 @@ async function processOnce(): Promise<number> {
   // for the whole batch. BullMQ enqueue is sub-ms in practice, so the
   // serialised dispatch loop is not a meaningful contention source.
   return prisma.$transaction(async (tx) => {
+    // Phase 1.6 (RLS): the eazepay_app runtime role is NOBYPASSRLS and
+    // outbox_events is policy-gated on app.org_id OR app.outbox_sweeper.
+    // The sweeper claims rows cross-tenant so we set the escape GUC; the
+    // RLS migration explicitly carves this out for the sweeper alone.
+    // Without this, post-role-deploy every sweep returns zero rows and
+    // webhooks accumulate forever.
+    await tx.$executeRaw`SELECT set_config('app.outbox_sweeper', 'true', true)`;
     // Phase 7 (SF-006): exclude DLQ'd rows. Poison-pill rows that crossed
     // MAX_ATTEMPTS were stamped dlqed_at and are out of the sweep set
     // until an operator clears the marker.

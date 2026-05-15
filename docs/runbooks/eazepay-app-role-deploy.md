@@ -83,6 +83,20 @@ REVOKE DELETE ON credit_enrichments FROM eazepay_app;
 REVOKE UPDATE, DELETE ON tenant_encryption_keys FROM eazepay_app;
 GRANT UPDATE (is_active, retired_at) ON tenant_encryption_keys TO eazepay_app;
 
+-- 3a. SEC-001 carve-outs — runtime needs to mutate operational columns
+-- on webhook_events + outbox_events even though the rows are append-only
+-- at the business-data level. Without these GRANTs, every ingest/drain
+-- attempt fails with `permission denied` under the role.
+--   webhook_events.status / processed_at / processing_error — drain
+--     transitions RECEIVED → PROCESSED / FAILED / QUARANTINED.
+--   webhook_events.org_id — operator-triggered quarantine replay can
+--     reassign brand=direct events to a real org (cross-tenant audit
+--     row written alongside).
+--   outbox_events.published_at / publish_error / attempt_count / dlqed_at
+--     — sweeper marks rows published, bumps retry counter, stamps DLQ.
+GRANT UPDATE (status, processed_at, processing_error, org_id) ON webhook_events TO eazepay_app;
+GRANT UPDATE (published_at, publish_error, attempt_count, dlqed_at) ON outbox_events TO eazepay_app;
+
 -- 4. Operator note
 COMMENT ON ROLE eazepay_app IS
   'EazePay Intelligence runtime role. NOBYPASSRLS — every query subject to '

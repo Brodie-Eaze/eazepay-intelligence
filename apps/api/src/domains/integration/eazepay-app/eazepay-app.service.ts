@@ -36,6 +36,7 @@ import { writeAuditLog } from '../../../shared/middleware/audit-log.middleware.j
 import { publishWsEvent, withPartnerLabel } from '../../../shared/utils/ws-publisher.js';
 import { encryptForOrg } from '../../../shared/kms/tenant-dek.js';
 import { hashPII } from '../../../shared/utils/encryption.js';
+import { withTenantSession } from '../../../shared/tenant/tenant-context.js';
 import { resolveBrandToOrgSlug } from './brand-org-mapping.js';
 import { EAZEPAY_APP_EVENT_TYPES, type EazepayAppEventType } from './event-types.js';
 
@@ -151,6 +152,32 @@ export class EazepayAppProcessor {
   async process(job: EazepayAppJob): Promise<void> {
     const log = getLogger();
     const env = job.envelope;
+    // Phase 1.6 (RLS): under the eazepay_app runtime role, every Prisma
+    // query needs app.org_id set or RLS returns zero rows / refuses writes.
+    // The WebhookEvent row already carries the orgId resolved at ingest;
+    // wrap the drain in withTenantSession so all downstream writes
+    // (Application, Partner, RevenueEvent, etc.) pass RLS. We do this at
+    // the entry point rather than inside every handler so the contract is
+    // explicit: "draining an EazePay App event is a tenant operation".
+    const evt = await this.prisma.webhookEvent.findUnique({
+      where: { id: job.webhookEventId },
+      select: { orgId: true },
+    });
+    if (!evt) {
+      log.warn({ webhookEventId: job.webhookEventId }, 'eazepay_app.webhook_event_not_found');
+      return;
+    }
+    await withTenantSession(this.prisma, { orgId: evt.orgId }, async (tx) => {
+      await this.processInner(job, log, tx as unknown as PrismaClient);
+    });
+  }
+
+  private async processInner(
+    job: EazepayAppJob,
+    log: ReturnType<typeof getLogger>,
+    db: PrismaClient,
+  ): Promise<void> {
+    const env = job.envelope;
     const knownType = (EAZEPAY_APP_EVENT_TYPES as readonly string[]).includes(env.eventType);
     if (!knownType) {
       // Unknown event-type. Don't throw — the BullMQ retry envelope would
@@ -175,29 +202,29 @@ export class EazepayAppProcessor {
     try {
       switch (env.eventType as EazepayAppEventType) {
         case 'application.offers_presented':
-          await this.handleOffersPresented(job);
+          await this.handleOffersPresented(job, db);
           return;
         case 'application.contracted':
-          await this.handleContracted(job);
+          await this.handleContracted(job, db);
           return;
         case 'application.declined':
-          await this.handleDeclined(job);
+          await this.handleDeclined(job, db);
           return;
         case 'application.funded':
-          await this.handleFunded(job);
+          await this.handleFunded(job, db);
           return;
         case 'merchant.onboarded':
-          await this.handleMerchantOnboarded(job);
+          await this.handleMerchantOnboarded(job, db);
           return;
         case 'merchant.status_changed':
-          await this.handleMerchantStatusChanged(job);
+          await this.handleMerchantStatusChanged(job, db);
           return;
         case 'revenue.recorded':
-          await this.handleRevenueRecorded(job);
+          await this.handleRevenueRecorded(job, db);
           return;
         case 'loan.repayment.collected':
         case 'loan.repayment.failed':
-          await this.handleLoanRepayment(job);
+          await this.handleLoanRepayment(job, db);
           return;
       }
     } catch (err) {
@@ -233,10 +260,10 @@ export class EazepayAppProcessor {
 
   // ─── Org resolution ───────────────────────────────────────────────────────
 
-  private async resolveOrgId(brand: string): Promise<string | null> {
+  private async resolveOrgId(brand: string, db: PrismaClient): Promise<string | null> {
     const res = resolveBrandToOrgSlug(brand);
     if (!res.orgSlug) return null;
-    const org = await this.prisma.organization.findUnique({
+    const org = await db.organization.findUnique({
       where: { slug: res.orgSlug },
       select: { id: true, deletedAt: true },
     });
@@ -246,24 +273,24 @@ export class EazepayAppProcessor {
 
   // ─── application.offers_presented ────────────────────────────────────────
 
-  private async handleOffersPresented(job: EazepayAppJob): Promise<void> {
+  private async handleOffersPresented(job: EazepayAppJob, db: PrismaClient): Promise<void> {
     const data = OffersPresentedSchema.parse(job.envelope.data);
-    const orgId = await this.resolveOrgId(data.brand);
+    const orgId = await this.resolveOrgId(data.brand, db);
     // GAP-120: brand=direct (or any unmapped brand) lands in QUARANTINE.
     // We still persist the WebhookEvent (already done by ingest) but skip
     // domain normalisation — the row stays raw and operator-reviewable.
     if (!orgId) {
-      await this.quarantine(job, 'unmapped_brand');
+      await this.quarantine(job, db, 'unmapped_brand');
       return;
     }
     const partner = data.partnerExternalId
-      ? await this.prisma.partner.findFirst({
+      ? await db.partner.findFirst({
           where: { orgId, externalId: data.partnerExternalId, deletedAt: null },
           select: { id: true },
         })
       : null;
     if (!partner) {
-      await this.quarantine(job, 'unknown_partner');
+      await this.quarantine(job, db, 'unknown_partner');
       return;
     }
 
@@ -273,12 +300,12 @@ export class EazepayAppProcessor {
     const email = (data.consumerEmail ?? data.consumerEmailLower ?? '').toLowerCase();
     const phone = data.consumerPhoneE164 ?? '';
     const [nameCt, emailCt, phoneCt] = await Promise.all([
-      encryptForOrg(this.prisma, name, orgId),
-      encryptForOrg(this.prisma, email, orgId),
-      encryptForOrg(this.prisma, phone, orgId),
+      encryptForOrg(db, name, orgId),
+      encryptForOrg(db, email, orgId),
+      encryptForOrg(db, phone, orgId),
     ]);
 
-    await this.prisma.application.upsert({
+    await db.application.upsert({
       where: {
         orgId_externalApplicationId: {
           orgId,
@@ -316,28 +343,28 @@ export class EazepayAppProcessor {
 
   // ─── application.contracted ──────────────────────────────────────────────
 
-  private async handleContracted(job: EazepayAppJob): Promise<void> {
+  private async handleContracted(job: EazepayAppJob, db: PrismaClient): Promise<void> {
     const data = ContractedSchema.parse(job.envelope.data);
-    const orgId = await this.resolveOrgId(data.brand);
+    const orgId = await this.resolveOrgId(data.brand, db);
     if (!orgId) {
-      await this.quarantine(job, 'unmapped_brand');
+      await this.quarantine(job, db, 'unmapped_brand');
       return;
     }
-    const existing = await this.prisma.application.findFirst({
+    const existing = await db.application.findFirst({
       where: { orgId, externalApplicationId: data.applicationId },
     });
     if (!existing) {
-      await this.quarantine(job, 'unknown_application');
+      await this.quarantine(job, db, 'unknown_application');
       return;
     }
-    await this.prisma.application.update({
+    await db.application.update({
       where: { id: existing.id },
       data: {
         status: ApplicationStatus.CONTRACTED,
       },
     });
     if (data.lenderName) {
-      await this.prisma.lenderDecision.create({
+      await db.lenderDecision.create({
         data: {
           id: uuidv7(),
           orgId,
@@ -362,21 +389,21 @@ export class EazepayAppProcessor {
 
   // ─── application.declined ────────────────────────────────────────────────
 
-  private async handleDeclined(job: EazepayAppJob): Promise<void> {
+  private async handleDeclined(job: EazepayAppJob, db: PrismaClient): Promise<void> {
     const data = DeclinedSchema.parse(job.envelope.data);
-    const orgId = await this.resolveOrgId(data.brand);
+    const orgId = await this.resolveOrgId(data.brand, db);
     if (!orgId) {
-      await this.quarantine(job, 'unmapped_brand');
+      await this.quarantine(job, db, 'unmapped_brand');
       return;
     }
-    const existing = await this.prisma.application.findFirst({
+    const existing = await db.application.findFirst({
       where: { orgId, externalApplicationId: data.applicationId },
     });
     if (!existing) {
-      await this.quarantine(job, 'unknown_application');
+      await this.quarantine(job, db, 'unknown_application');
       return;
     }
-    await this.prisma.application.update({
+    await db.application.update({
       where: { id: existing.id },
       data: { status: ApplicationStatus.DECLINED },
     });
@@ -384,29 +411,29 @@ export class EazepayAppProcessor {
 
   // ─── application.funded ──────────────────────────────────────────────────
 
-  private async handleFunded(job: EazepayAppJob): Promise<void> {
+  private async handleFunded(job: EazepayAppJob, db: PrismaClient): Promise<void> {
     const data = FundedSchema.parse(job.envelope.data);
-    const orgId = await this.resolveOrgId(data.brand);
+    const orgId = await this.resolveOrgId(data.brand, db);
     if (!orgId) {
-      await this.quarantine(job, 'unmapped_brand');
+      await this.quarantine(job, db, 'unmapped_brand');
       return;
     }
-    const existing = await this.prisma.application.findFirst({
+    const existing = await db.application.findFirst({
       where: { orgId, externalApplicationId: data.applicationId },
       include: { partner: true },
     });
     if (!existing) {
-      await this.quarantine(job, 'unknown_application');
+      await this.quarantine(job, db, 'unknown_application');
       return;
     }
-    await this.prisma.application.update({
+    await db.application.update({
       where: { id: existing.id },
       data: { status: ApplicationStatus.FUNDED },
     });
     // Record the funding as a revenue event keyed on the application —
     // the merchant fee is computed downstream by the aggregation worker.
     const amount = new Prisma.Decimal(data.fundedAmount.toString());
-    await this.recordRevenue({
+    await this.recordRevenue(db, {
       orgId,
       partnerId: existing.partnerId,
       source: WebhookSource.EAZEPAY_APP,
@@ -422,14 +449,14 @@ export class EazepayAppProcessor {
 
   // ─── merchant.onboarded ──────────────────────────────────────────────────
 
-  private async handleMerchantOnboarded(job: EazepayAppJob): Promise<void> {
+  private async handleMerchantOnboarded(job: EazepayAppJob, db: PrismaClient): Promise<void> {
     const data = MerchantOnboardedSchema.parse(job.envelope.data);
-    const orgId = await this.resolveOrgId(data.brand);
+    const orgId = await this.resolveOrgId(data.brand, db);
     if (!orgId) {
-      await this.quarantine(job, 'unmapped_brand');
+      await this.quarantine(job, db, 'unmapped_brand');
       return;
     }
-    await this.prisma.partner.upsert({
+    await db.partner.upsert({
       where: { orgId_externalId: { orgId, externalId: data.merchantExternalId } },
       create: {
         id: uuidv7(),
@@ -450,25 +477,25 @@ export class EazepayAppProcessor {
 
   // ─── merchant.status_changed ─────────────────────────────────────────────
 
-  private async handleMerchantStatusChanged(job: EazepayAppJob): Promise<void> {
+  private async handleMerchantStatusChanged(job: EazepayAppJob, db: PrismaClient): Promise<void> {
     const data = MerchantStatusChangedSchema.parse(job.envelope.data);
-    const orgId = await this.resolveOrgId(data.brand);
+    const orgId = await this.resolveOrgId(data.brand, db);
     if (!orgId) {
-      await this.quarantine(job, 'unmapped_brand');
+      await this.quarantine(job, db, 'unmapped_brand');
       return;
     }
-    const existing = await this.prisma.partner.findFirst({
+    const existing = await db.partner.findFirst({
       where: { orgId, externalId: data.merchantExternalId },
     });
     if (!existing) {
-      await this.quarantine(job, 'unknown_partner');
+      await this.quarantine(job, db, 'unknown_partner');
       return;
     }
     // OFFBOARDED → soft-delete (audit-safe). Other statuses kept on a
     // lifecycle metadata field; the Partner table doesn't currently have
     // a status enum so we record it as JSON metadata on the partner.
     if (data.status === 'OFFBOARDED') {
-      await this.prisma.partner.update({
+      await db.partner.update({
         where: { id: existing.id },
         data: { deletedAt: new Date() },
       });
@@ -477,24 +504,24 @@ export class EazepayAppProcessor {
 
   // ─── revenue.recorded ────────────────────────────────────────────────────
 
-  private async handleRevenueRecorded(job: EazepayAppJob): Promise<void> {
+  private async handleRevenueRecorded(job: EazepayAppJob, db: PrismaClient): Promise<void> {
     const data = RevenueRecordedSchema.parse(job.envelope.data);
-    const orgId = await this.resolveOrgId(data.brand);
+    const orgId = await this.resolveOrgId(data.brand, db);
     if (!orgId) {
-      await this.quarantine(job, 'unmapped_brand');
+      await this.quarantine(job, db, 'unmapped_brand');
       return;
     }
-    const partner = await this.prisma.partner.findFirst({
+    const partner = await db.partner.findFirst({
       where: { orgId, externalId: data.partnerExternalId, deletedAt: null },
       select: { id: true },
     });
     if (!partner) {
-      await this.quarantine(job, 'unknown_partner');
+      await this.quarantine(job, db, 'unknown_partner');
       return;
     }
     const stream = mapRevenueStream(data.stream);
     const eventType = mapRevenueEventType(data.eventType);
-    await this.recordRevenue({
+    await this.recordRevenue(db, {
       orgId,
       partnerId: partner.id,
       source: WebhookSource.EAZEPAY_APP,
@@ -510,26 +537,26 @@ export class EazepayAppProcessor {
 
   // ─── loan.repayment.* ────────────────────────────────────────────────────
 
-  private async handleLoanRepayment(job: EazepayAppJob): Promise<void> {
+  private async handleLoanRepayment(job: EazepayAppJob, db: PrismaClient): Promise<void> {
     const data = LoanRepaymentSchema.parse(job.envelope.data);
-    const orgId = await this.resolveOrgId(data.brand);
+    const orgId = await this.resolveOrgId(data.brand, db);
     if (!orgId) {
-      await this.quarantine(job, 'unmapped_brand');
+      await this.quarantine(job, db, 'unmapped_brand');
       return;
     }
     const partner = data.partnerExternalId
-      ? await this.prisma.partner.findFirst({
+      ? await db.partner.findFirst({
           where: { orgId, externalId: data.partnerExternalId, deletedAt: null },
           select: { id: true },
         })
       : null;
     if (!partner) {
-      await this.quarantine(job, 'unknown_partner');
+      await this.quarantine(job, db, 'unknown_partner');
       return;
     }
     const failed = job.envelope.eventType === 'loan.repayment.failed';
     const amount = new Prisma.Decimal(data.amount.toString());
-    await this.recordRevenue({
+    await this.recordRevenue(db, {
       orgId,
       partnerId: partner.id,
       source: WebhookSource.EAZEPAY_APP,
@@ -545,20 +572,23 @@ export class EazepayAppProcessor {
 
   // ─── helpers ─────────────────────────────────────────────────────────────
 
-  private async recordRevenue(args: {
-    orgId: string;
-    partnerId: string;
-    source: WebhookSource;
-    stream: RevenueStream;
-    eventType: RevenueEventType;
-    amount: Prisma.Decimal;
-    currency: string;
-    effectiveAt: Date;
-    idempotencyKey: string;
-    metadata: Record<string, unknown>;
-  }): Promise<void> {
+  private async recordRevenue(
+    db: PrismaClient,
+    args: {
+      orgId: string;
+      partnerId: string;
+      source: WebhookSource;
+      stream: RevenueStream;
+      eventType: RevenueEventType;
+      amount: Prisma.Decimal;
+      currency: string;
+      effectiveAt: Date;
+      idempotencyKey: string;
+      metadata: Record<string, unknown>;
+    },
+  ): Promise<void> {
     try {
-      await this.prisma.revenueEvent.create({
+      await db.revenueEvent.create({
         data: {
           orgId: args.orgId,
           partnerId: args.partnerId,
@@ -604,8 +634,8 @@ export class EazepayAppProcessor {
    * cannot map to a domain object (no org, no partner, etc.). Operator
    * can later use /platform/orgs/:id/eazepay-app/quarantine to triage.
    */
-  private async quarantine(job: EazepayAppJob, reason: string): Promise<void> {
-    await this.prisma.webhookEvent.update({
+  private async quarantine(job: EazepayAppJob, db: PrismaClient, reason: string): Promise<void> {
+    await db.webhookEvent.update({
       where: { id: job.webhookEventId },
       data: {
         status: 'QUARANTINED',

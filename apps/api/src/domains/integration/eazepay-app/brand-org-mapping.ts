@@ -57,7 +57,11 @@ export interface BrandResolution {
 }
 
 export function resolveBrandToOrgSlug(brand: string): BrandResolution {
-  if (brand in BRAND_TO_ORG_SLUG) {
+  // SEC-002 defense: `in` walks the prototype chain. A hostile/buggy
+  // upstream sending `brand: "toString"` or `"__proto__"` would pass that
+  // check and return a function reference. Use hasOwnProperty.call to
+  // confine the lookup to the map's own keys.
+  if (typeof brand === 'string' && Object.prototype.hasOwnProperty.call(BRAND_TO_ORG_SLUG, brand)) {
     const slug = BRAND_TO_ORG_SLUG[brand as AppBrandCode];
     return { orgSlug: slug, resolved: slug !== null, brand };
   }

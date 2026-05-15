@@ -106,7 +106,7 @@ export async function registerOAuthRoutes(app: FastifyInstance): Promise<void> {
     // challenge and rejects if it doesn't match.
     const codeVerifier = randomBytes(64).toString('base64url');
     const codeChallenge = createHash('sha256').update(codeVerifier).digest('base64url');
-    const pkceSig = signState(codeVerifier);
+    const pkceSig = signPkce(codeVerifier);
     setCookie(reply, PKCE_COOKIE, `${codeVerifier}.${pkceSig}`, {
       maxAgeSeconds: STATE_TTL_SECONDS,
       httpOnly: true,
@@ -287,19 +287,30 @@ function readPkceCookie(req: { headers: { cookie?: string } }): string | null {
 }
 
 /**
+ * Domain-separated PKCE HMAC. Same secret material as state (OAUTH_STATE
+ * _SECRET) but the input is prefixed with "pkce:" so a captured state
+ * cookie cannot be swapped into the PKCE cookie slot — they hash to
+ * different bytes despite sharing the key.
+ */
+function signPkce(verifier: string): string {
+  const env = getEnv();
+  const secret = env.OAUTH_STATE_SECRET ?? env.JWT_ACCESS_SECRET;
+  return createHmac('sha256', secret).update(`pkce:${verifier}`).digest('base64url');
+}
+
+/**
  * Verify the PKCE cookie's HMAC and return the plaintext code_verifier.
  * Returns null on signature mismatch or malformed value.
  *
- * The cookie format is `<code_verifier>.<sig>` where sig is an HMAC over
- * code_verifier with OAUTH_STATE_SECRET (same key as state — they share
- * the OAuth-flow trust boundary). Without the HMAC, an attacker who
- * could write the cookie (XSS) could swap the verifier for one they
- * control and pair it with an intercepted authorization code.
+ * The cookie format is `<code_verifier>.<sig>` where sig is the
+ * domain-separated PKCE HMAC. Without this, an attacker who could
+ * write either cookie (XSS) could swap an intercepted authorization
+ * code's verifier for one they control.
  */
 function verifyPkceCookie(cookieValue: string): string | null {
   const [verifier, sig] = cookieValue.split('.') as [string, string];
   if (!verifier || !sig) return null;
-  const expected = signState(verifier); // re-use the OAuth state secret
+  const expected = signPkce(verifier);
   const a = Buffer.from(sig);
   const b = Buffer.from(expected);
   if (a.length !== b.length) return null;
