@@ -62,6 +62,8 @@ JWT_REFRESH_SECRET="$(node -e 'process.stdout.write("b".repeat(32))')" \
 BUZZPAY_WEBHOOK_SECRET="$(node -e 'process.stdout.write("c".repeat(32))')" \
 PIXIE_WEBHOOK_SECRET="$(node -e 'process.stdout.write("d".repeat(32))')" \
 MICAMP_WEBHOOK_SECRET="$(node -e 'process.stdout.write("e".repeat(32))')" \
+EAZEPAY_APP_WEBHOOK_SECRET="$(node -e 'process.stdout.write("f".repeat(32))')" \
+HIGHSALE_WEBHOOK_SECRET="$(node -e 'process.stdout.write("g".repeat(32))')" \
 NODE_ENV=test \
   pnpm --filter api exec vitest run tests/integration/database-multi-live.test.ts
 
