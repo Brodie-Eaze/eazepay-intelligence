@@ -13,6 +13,7 @@ import { getPrisma } from '../../config/database.js';
 import { requireAuth } from '../../shared/middleware/auth.middleware.js';
 import { csrfGuard } from '../../shared/middleware/csrf.middleware.js';
 import { requireRole } from '../../shared/middleware/rbac.middleware.js';
+import { getBootstrapOrgId } from '../../shared/tenant/bootstrap-org.js';
 import { errors } from '../../shared/errors/app-error.js';
 
 const COLORS = ['slate', 'blue', 'navy', 'red', 'amber', 'green', 'purple'] as const;
@@ -62,12 +63,21 @@ export async function registerTagRoutes(app: FastifyInstance): Promise<void> {
     '/tags',
     { preHandler: [requireAuth, csrfGuard, requireRole('ADMIN', 'OPERATOR')] },
     async (req, reply) => {
+      const auth = req.auth!;
       const input = TagSchema.parse(req.body);
-      const exists = await prisma.tag.findUnique({ where: { name: input.name } });
+      // Phase 1 retrofit: tag names are unique per-org. Source orgId from
+      // the authenticated principal; fall back to bootstrap during Phase 1.3
+      // transition when session-only flows haven't yet been moved under
+      // /o/:orgSlug/. Once Phase 1.3 lands the fallback is unreachable.
+      const orgId = auth.orgId ?? (await getBootstrapOrgId(prisma));
+      const exists = await prisma.tag.findUnique({
+        where: { orgId_name: { orgId, name: input.name } },
+      });
       if (exists) throw errors.conflict('Tag name already in use', { name: input.name });
       const created = await prisma.tag.create({
         data: {
           id: uuidv7(),
+          orgId,
           name: input.name,
           color: input.color,
           description: input.description ?? null,
@@ -117,6 +127,9 @@ export async function registerTagRoutes(app: FastifyInstance): Promise<void> {
       const created = await prisma.tagAssignment.create({
         data: {
           id: uuidv7(),
+          // Inherit org from the parent tag — assignments are tenant-scoped
+          // via the tag they reference.
+          orgId: tag.orgId,
           tagId: input.tagId,
           resourceType: input.resourceType,
           resourceId: input.resourceId,

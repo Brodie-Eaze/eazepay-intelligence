@@ -41,6 +41,7 @@ import { errors } from '../errors/app-error.js';
 import { getEnv } from '../../config/env.js';
 import { getPrisma } from '../../config/database.js';
 import { getRedis } from '../../config/redis.js';
+import { getBootstrapOrgId } from '../tenant/bootstrap-org.js';
 import { writeAuditLog } from './audit-log.middleware.js';
 import { WebhookSource } from '@prisma/client';
 
@@ -87,6 +88,18 @@ function secretFor(source: WebhookSource): string {
       // Retired vendor — see docs/cuts/buzzpay-removal.md. Routes are gone;
       // this branch is unreachable unless an old queued job is replayed.
       throw new Error('BUZZPAY webhook source is retired');
+    case WebhookSource.EAZEPAY_APP:
+    case WebhookSource.HIGHSALE:
+    case WebhookSource.AUREAN_AI:
+    case WebhookSource.AUREAN_RECRUITMENT:
+      // These sources don't go through this generic webhook signature
+      // middleware — EAZEPAY_APP has its own inline HMAC in
+      // /integration/eazepay-app/events; HIGHSALE has its own inline HMAC
+      // in /integration/highsale/snapshots; AUREAN_AI / AUREAN_RECRUITMENT
+      // are PAT-authenticated via /ingestion/* with no HMAC at all.
+      // Reaching this branch would mean a misconfigured route registered
+      // verifyWebhookSignature(source) for a source that has no env secret.
+      throw new Error(`secretFor: ${source} does not use webhook signature middleware`);
   }
 }
 
@@ -156,12 +169,22 @@ export function verifyWebhookSignature(source: WebhookSource): preHandlerHookHan
       return;
     }
 
-    // Idempotency layer 2: durable Postgres constraint.
-    // findUnique on (source, key) — if it exists, this is a replay that
-    // outlived the Redis TTL or evaded the cache.
+    // Phase 1 retrofit: WebhookEvent now carries org_id. Resolve via the
+    // WebhookCredential row that matched this signature where possible;
+    // fall back to the bootstrap org (current pre-1.2f behaviour) for the
+    // env-based secrets used by PIXIE / MICAMP today. Once
+    // WebhookCredential-based verification lands fully (Phase 1.2f
+    // expansion), the bootstrap fallback becomes unreachable.
     const prisma = getPrisma();
+    const orgId = await getBootstrapOrgId(prisma);
+
+    // Idempotency layer 2: durable Postgres constraint.
+    // findUnique on (orgId, source, key) — if it exists, this is a replay
+    // that outlived the Redis TTL or evaded the cache.
     const prior = await prisma.webhookEvent.findUnique({
-      where: { source_idempotencyKey: { source, idempotencyKey: keyStr } },
+      where: {
+        orgId_source_idempotencyKey: { orgId, source, idempotencyKey: keyStr },
+      },
     });
     if (prior) {
       // Re-warm Redis with a 202 ack so future hot-path replays are sub-ms.
@@ -176,6 +199,7 @@ export function verifyWebhookSignature(source: WebhookSource): preHandlerHookHan
     const event = await prisma.webhookEvent.create({
       data: {
         id: uuidv7(),
+        orgId,
         source,
         eventType: deriveEventTypeFromUrl(req.url),
         idempotencyKey: keyStr,

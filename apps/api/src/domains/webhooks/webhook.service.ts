@@ -137,6 +137,7 @@ export class WebhookProcessor {
           },
         },
         create: {
+          orgId: partner.orgId,
           partnerId: partner.id,
           period: 'DAILY',
           periodStart: dayStart,
@@ -255,8 +256,19 @@ export class WebhookProcessor {
   }): Promise<void> {
     try {
       const currency = (args.currency ?? getEnv().DEFAULT_CURRENCY).toUpperCase();
+      // Phase 1 retrofit: revenue_events now carry org_id. Resolve from the
+      // partner row (the unique (orgId, externalId) means there is exactly
+      // one partner per id).
+      const partner = await this.prisma.partner.findUnique({
+        where: { id: args.partnerId },
+        select: { orgId: true },
+      });
+      if (!partner) {
+        throw new Error(`recordRevenue: partner ${args.partnerId} not found`);
+      }
       await this.prisma.revenueEvent.create({
         data: {
+          orgId: partner.orgId,
           partnerId: args.partnerId,
           lenderDecisionId: args.lenderDecisionId ?? null,
           source: args.source,
