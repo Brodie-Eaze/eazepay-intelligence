@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "license": "UNLICENSED",
-  "description": "EazePay Intelligence — unified analytics + investor reporting plane for the EazePay platform",
+  "description": "EazePay Intelligence — the data warehouse for every business in the EazePay group. HighSale credit data, lender outcomes, MiCamp processing, Pixie usage. Read-only by design.",
   "packageManager": "pnpm@9.12.0",
   "engines": {
     "node": ">=20.10.0",
