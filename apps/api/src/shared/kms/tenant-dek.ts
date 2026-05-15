@@ -303,6 +303,20 @@ export async function cryptoshredOrg(
   const kms = getKmsClient();
   const cache = getDekCache();
 
+  // P0 safety gate (SF-004): refuse to mutate durable state when wired to
+  // a dev-grade KMS. Without this, an operator who runs cryptoshred against
+  // a staging environment that uses LocalKmsClient gets a "success" result —
+  // the DB rows are deactivated but the KMS key material is intact and the
+  // plaintext is recoverable. That's a GDPR Art. 17 / APP 11 lie if the
+  // shred was claimed as completing an erasure request. Better to error
+  // before any state changes than to half-complete and audit-log a falsehood.
+  if (!kms.isProductionGrade) {
+    throw new Error(
+      'cryptoshredOrg refuses to run against a non-production-grade KMS. ' +
+        'AwsKmsClient is required. See ADR-002 §9 and SEC-108.',
+    );
+  }
+
   const allKeys = await prisma.tenantEncryptionKey.findMany({
     where: { orgId },
     select: { id: true, kekKeyId: true, isActive: true },

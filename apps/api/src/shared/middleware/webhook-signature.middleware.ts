@@ -49,6 +49,15 @@ const TS_HEADER = 'x-eazepay-timestamp';
 const KEY_HEADER = 'idempotency-key';
 const TOLERANCE_SECONDS = 300; // 5-min replay window
 
+/**
+ * SEC-133: idempotency-key shape gate. Caps key length so a malicious sender
+ * can't fill Redis with multi-MB keys, and confines the character set so the
+ * key cannot break Redis key parsing or collide with other namespaces.
+ * Matches what `ingestion.routes.ts` already enforces — we keep the two
+ * surfaces in sync.
+ */
+const IDEMPOTENCY_KEY_RE = /^[A-Za-z0-9_-]{16,128}$/;
+
 declare module 'fastify' {
   interface FastifyRequest {
     webhook?: {
@@ -56,6 +65,14 @@ declare module 'fastify' {
       idempotencyKey: string;
       eventId: string; // WebhookEvent.id we created
     };
+    /**
+     * Raw request body captured by the JSON content-type parser configured
+     * in `server.ts`. Set on every request whose Content-Type is
+     * `application/json` so HMAC verification middlewares can sign against
+     * the exact bytes received — JSON.stringify(parsedBody) is NOT byte-
+     * exact and would defeat HMAC verification (SEC-004 / CR-104 / SEC-100).
+     */
+    rawBody?: string;
   }
 }
 
@@ -90,6 +107,10 @@ export function verifyWebhookSignature(source: WebhookSource): preHandlerHookHan
     const tsStr = Array.isArray(ts) ? ts[0] : ts;
     const keyStr = Array.isArray(key) ? key[0] : key;
     if (!sigStr || !tsStr || !keyStr) throw errors.invalidSignature();
+    // SEC-133: reject malformed/oversized idempotency keys BEFORE any Redis or
+    // Postgres lookup. Unbounded key length lets an attacker amplify memory
+    // pressure via SETNX with multi-MB keys.
+    if (!IDEMPOTENCY_KEY_RE.test(keyStr)) throw errors.invalidSignature();
 
     // Timestamp tolerance — caps replay window even if attacker steals a payload.
     const tsNum = Number.parseInt(tsStr, 10);
@@ -97,16 +118,30 @@ export function verifyWebhookSignature(source: WebhookSource): preHandlerHookHan
     const skew = Math.abs(Math.floor(Date.now() / 1000) - tsNum);
     if (skew > TOLERANCE_SECONDS) throw errors.invalidSignature();
 
-    // Compute expected signature over `${ts}.${rawBody}`.
-    const raw = typeof req.body === 'string' ? req.body : JSON.stringify(req.body ?? {});
-    const data = `${tsStr}.${raw}`;
-    const expected = createHmac('sha256', secretFor(source)).update(data).digest();
-    let provided: Buffer;
-    try {
-      provided = Buffer.from(sigStr, 'hex');
-    } catch {
+    // SEC-004 / CR-104 / SEC-100: compute expected signature over the RAW
+    // request body bytes, not a re-serialised JSON form. Fastify exposes the
+    // pre-parse buffer via the rawBody content-type parser configured in
+    // server.ts. `JSON.stringify(req.body)` reorders keys, normalises
+    // numbers, and strips whitespace — it is NOT a byte-exact round-trip
+    // of the vendor's signed bytes, so any non-canonical JSON (almost all
+    // real-world JSON) would either fail verification or, worse, let a
+    // crafted payload pass because the server re-serialises to match.
+    const rawBody = (req as unknown as { rawBody?: string | Buffer }).rawBody;
+    if (rawBody == null) {
+      // Defensive: rawBody capture is wired in server.ts. If a future
+      // refactor drops it, fail closed — every webhook becomes 401 until
+      // the wiring is restored. Better than silently re-serialising.
       throw errors.invalidSignature();
     }
+    const rawString = typeof rawBody === 'string' ? rawBody : rawBody.toString('utf8');
+    const data = `${tsStr}.${rawString}`;
+    const expected = createHmac('sha256', secretFor(source)).update(data).digest();
+    // SF-018: dropped the `try { Buffer.from(sigStr, 'hex') } catch …`
+    // wrapper — Node's Buffer.from with 'hex' encoding doesn't throw on
+    // invalid input, it silently returns a shorter buffer. The length
+    // check below catches that. Keeping the try/catch made the next
+    // reader think it was load-bearing.
+    const provided = Buffer.from(sigStr, 'hex');
     if (provided.length !== expected.length || !timingSafeEqual(provided, expected)) {
       throw errors.invalidSignature();
     }

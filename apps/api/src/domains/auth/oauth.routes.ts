@@ -205,8 +205,14 @@ export async function registerOAuthRoutes(app: FastifyInstance): Promise<void> {
 // ─── helpers ──────────────────────────────────────────────────────────────
 
 function signState(nonce: string): string {
+  // P0 fix (SEC-115): OAuth state HMAC uses OAUTH_STATE_SECRET, not the JWT
+  // access secret. Sharing the JWT key meant a single secret compromise
+  // forged JWTs, CSRF tokens, AND OAuth state simultaneously. Fallback to
+  // JWT_ACCESS_SECRET during the migration window so in-flight OAuth flows
+  // complete; production startup requires OAUTH_STATE_SECRET to be set.
   const env = getEnv();
-  return createHmac('sha256', env.JWT_ACCESS_SECRET).update(nonce).digest('base64url');
+  const stateSecret = env.OAUTH_STATE_SECRET ?? env.JWT_ACCESS_SECRET;
+  return createHmac('sha256', stateSecret).update(nonce).digest('base64url');
 }
 
 function verifyState(nonce: string, cookieValue: string): boolean {

@@ -2,6 +2,7 @@ import { Prisma, RevenueEventType, RevenueStream, WebhookSource } from '@prisma/
 import { v7 as uuidv7 } from 'uuid';
 import type { PrismaClient } from '@prisma/client';
 import { getEnv } from '../../config/env.js';
+import { getLogger } from '../../config/logger.js';
 import { encryptPII } from '../../shared/utils/encryption.js';
 import { errors } from '../../shared/errors/app-error.js';
 import { publishWsEvent, withPartnerLabel } from '../../shared/utils/ws-publisher.js';
@@ -36,7 +37,23 @@ export class WebhookProcessor {
         case WebhookSource.BUZZPAY:
           // Retired vendor — see docs/cuts/buzzpay-removal.md. Routes are
           // gone; this branch only fires if an old queued job is replayed.
-          // Drop silently so it doesn't poison the queue.
+          // SF-017: log + audit the drop instead of silently swallowing so
+          // a misconfiguration (someone re-enabling BUZZPAY ingress) is
+          // visible in the metric stream.
+          getLogger().warn(
+            {
+              webhookEventId: job.webhookEventId,
+              idempotencyKey: job.idempotencyKey,
+              errorId: 'webhook.buzzpay.drop_retired',
+            },
+            'webhook.buzzpay.drop_retired',
+          );
+          await writeAuditLog({
+            action: 'WEBHOOK_FAILED',
+            resourceType: 'webhook_event',
+            resourceId: job.webhookEventId,
+            metadata: { source: 'BUZZPAY', reason: 'retired_vendor', eventType: job.eventType },
+          });
           break;
       }
       await this.prisma.webhookEvent.update({

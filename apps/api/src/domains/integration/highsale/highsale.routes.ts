@@ -98,7 +98,11 @@ export async function registerHighsaleIntegrationRoutes(app: FastifyInstance): P
       throw errors.invalidSignature();
     }
 
-    const rawBody = typeof req.body === 'string' ? req.body : JSON.stringify(req.body ?? {});
+    // P0 fix (SEC-004 / CR-104 / SEC-100): sign over the raw request bytes
+    // not a re-serialised JSON form. See server.ts content-type parser and
+    // webhook-signature.middleware.ts for the wider fix.
+    const rawBody = req.rawBody;
+    if (rawBody == null) throw errors.invalidSignature();
     if (!verifySignature(rawBody, ts, sig, env.HIGHSALE_WEBHOOK_SECRET)) {
       throw errors.invalidSignature();
     }

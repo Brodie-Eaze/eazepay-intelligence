@@ -7,7 +7,7 @@ import { requireAuth } from '../../shared/middleware/auth.middleware.js';
 import { csrfGuard } from '../../shared/middleware/csrf.middleware.js';
 import { writeAuditLog } from '../../shared/middleware/audit-log.middleware.js';
 import { errors } from '../../shared/errors/app-error.js';
-import { OutboundWebhookService } from './outbound-webhook.service.js';
+import { OutboundWebhookService, assertPublicHostname } from './outbound-webhook.service.js';
 import { enqueueWebhookDelivery } from '../../shared/queues/webhook-delivery.queue.js';
 
 const KNOWN_EVENT_TYPES = [
@@ -61,6 +61,16 @@ export async function registerOutboundWebhookRoutes(app: FastifyInstance): Promi
     async (req, reply) => {
       const auth = req.auth!;
       const input = CreateSchema.parse(req.body);
+      // SEC-110 defense-in-depth: reject SSRF-prone URLs at registration,
+      // before any secret is minted. The delivery-time guard catches DNS
+      // results that change later; this catches obvious targets immediately.
+      try {
+        await assertPublicHostname(input.url);
+      } catch (err) {
+        const code = err instanceof Error ? err.message : 'webhook.url.rejected';
+        reply.status(400);
+        return { error: { code, message: `Webhook URL rejected: ${code}` } };
+      }
       const secret = randomBytes(32).toString('hex');
       const created = await prisma.webhookSubscription.create({
         data: {
@@ -93,35 +103,49 @@ export async function registerOutboundWebhookRoutes(app: FastifyInstance): Promi
     },
   );
 
-  app.patch('/webhook-subscriptions/:id', { preHandler: [requireAuth, csrfGuard] }, async (req) => {
-    const auth = req.auth!;
-    const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
-    const input = UpdateSchema.parse(req.body);
-    const existing = await prisma.webhookSubscription.findUnique({ where: { id } });
-    if (!existing || existing.ownerUserId !== auth.userId)
-      throw errors.notFound('WebhookSubscription', id);
-    const updated = await prisma.webhookSubscription.update({
-      where: { id },
-      data: {
-        url: input.url ?? undefined,
-        eventTypes: input.eventTypes as string[] | undefined,
-        isActive: input.isActive ?? undefined,
-      },
-    });
-    await writeAuditLog({
-      req,
-      action: 'USER_UPDATED',
-      resourceType: 'webhook_subscription',
-      resourceId: id,
-      metadata: { fields: Object.keys(input) },
-    });
-    return {
-      id: updated.id,
-      isActive: updated.isActive,
-      eventTypes: updated.eventTypes,
-      url: updated.url,
-    };
-  });
+  app.patch(
+    '/webhook-subscriptions/:id',
+    { preHandler: [requireAuth, csrfGuard] },
+    async (req, reply) => {
+      const auth = req.auth!;
+      const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
+      const input = UpdateSchema.parse(req.body);
+      const existing = await prisma.webhookSubscription.findUnique({ where: { id } });
+      if (!existing || existing.ownerUserId !== auth.userId)
+        throw errors.notFound('WebhookSubscription', id);
+      // SEC-110: if the caller is updating the URL, re-run the SSRF guard.
+      if (input.url) {
+        try {
+          await assertPublicHostname(input.url);
+        } catch (err) {
+          const code = err instanceof Error ? err.message : 'webhook.url.rejected';
+          reply.status(400);
+          return { error: { code, message: `Webhook URL rejected: ${code}` } };
+        }
+      }
+      const updated = await prisma.webhookSubscription.update({
+        where: { id },
+        data: {
+          url: input.url ?? undefined,
+          eventTypes: input.eventTypes as string[] | undefined,
+          isActive: input.isActive ?? undefined,
+        },
+      });
+      await writeAuditLog({
+        req,
+        action: 'USER_UPDATED',
+        resourceType: 'webhook_subscription',
+        resourceId: id,
+        metadata: { fields: Object.keys(input) },
+      });
+      return {
+        id: updated.id,
+        isActive: updated.isActive,
+        eventTypes: updated.eventTypes,
+        url: updated.url,
+      };
+    },
+  );
 
   app.delete(
     '/webhook-subscriptions/:id',

@@ -1,4 +1,10 @@
-import { createCipheriv, createDecipheriv, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
+import {
+  createCipheriv,
+  createDecipheriv,
+  createHmac,
+  randomBytes,
+  timingSafeEqual,
+} from 'node:crypto';
 import { getEnv } from '../../config/env.js';
 
 /**
@@ -34,7 +40,9 @@ function loadKeyVersions(): ReadonlyMap<number, KeyVersion> {
     key: Buffer.from(env.PII_ENCRYPTION_KEY, 'base64'),
   };
   if (current.key.length !== 32) {
-    throw new Error('PII_ENCRYPTION_KEY must decode to exactly 32 bytes (validated in env, defensive guard)');
+    throw new Error(
+      'PII_ENCRYPTION_KEY must decode to exactly 32 bytes (validated in env, defensive guard)',
+    );
   }
   keyVersionsCache = new Map([[current.version, current]]);
   return keyVersionsCache;
@@ -61,21 +69,47 @@ export function encryptPII(plaintext: string): EncryptedPII {
   return { ciphertext: out, hash: hashPII(plaintext) };
 }
 
+/**
+ * SEC-129 note: every thrown error message is intentionally generic
+ * (`'pii.decrypt_failed'`). The previous implementation threw
+ * `'encryption.unknown_key_version:${versionByte}'` and
+ * `'encryption.envelope_too_short'`, which leaked envelope structure to an
+ * attacker who can submit ciphertext (e.g., via a round-tripped field) and
+ * observe error messages — especially useful for probing key versions to
+ * find rollover boundaries. Internal logging is the place for the specific
+ * cause; the thrown error stays opaque.
+ */
 export function decryptPII(envelope: Buffer): string {
+  const fail = (cause: string): never => {
+    // Keep the specific cause in `error.cause` so callers/log capture can
+    // pull it out structurally without surfacing it in the throw message.
+    const err = new Error('pii.decrypt_failed') as Error & { cause?: unknown };
+    err.cause = cause;
+    throw err;
+  };
   if (envelope.length < 1 + IV_LEN + TAG_LEN) {
-    throw new Error('encryption.envelope_too_short');
+    fail('envelope_too_short');
   }
   const versionByte = envelope.readUInt8(0);
   const versions = loadKeyVersions();
   const kv = versions.get(versionByte);
-  if (!kv) throw new Error(`encryption.unknown_key_version:${versionByte}`);
+  if (!kv) fail(`unknown_key_version:${versionByte}`);
   const iv = envelope.subarray(1, 1 + IV_LEN);
   const tag = envelope.subarray(1 + IV_LEN, 1 + IV_LEN + TAG_LEN);
   const ct = envelope.subarray(1 + IV_LEN + TAG_LEN);
-  const decipher = createDecipheriv('aes-256-gcm', kv.key, iv);
-  decipher.setAuthTag(tag);
-  const plain = Buffer.concat([decipher.update(ct), decipher.final()]);
-  return plain.toString('utf8');
+  try {
+    // Non-null assertion safe — fail() above is `never`-returning. TS narrows.
+    const decipher = createDecipheriv('aes-256-gcm', kv!.key, iv);
+    decipher.setAuthTag(tag);
+    const plain = Buffer.concat([decipher.update(ct), decipher.final()]);
+    return plain.toString('utf8');
+  } catch (cause) {
+    // GCM auth-tag mismatch / malformed ciphertext / wrong key. Don't echo
+    // the underlying error message to the throw site.
+    const err = new Error('pii.decrypt_failed') as Error & { cause?: unknown };
+    err.cause = cause instanceof Error ? cause.message : 'cipher_failed';
+    throw err;
+  }
 }
 
 export function hashPII(plaintext: string): Buffer {

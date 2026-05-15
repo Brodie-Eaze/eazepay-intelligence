@@ -33,8 +33,25 @@ const WRAPPED_LEN = IV_LEN + TAG_LEN + DEK_LEN;
 export class LocalKmsClient implements KmsClient {
   private readonly kek: Buffer;
 
-  /** @throws If KMS_DEV_SECRET is unset or shorter than 32 chars. */
+  /**
+   * Hard-coded property surfaced via the KmsClient interface so callers
+   * (`cryptoshredOrg` in particular) can assert they are NOT running against
+   * the dev client before mutating durable state. The AWS-backed client sets
+   * this to true; this one is always false.
+   */
+  readonly isProductionGrade = false as const;
+
+  /** @throws If NODE_ENV is 'production' (cannot use dev KMS in prod) or KMS_DEV_SECRET is unset / shorter than 32 chars. */
   constructor() {
+    // P0 security guard (SEC-108): refuse to construct in production. A
+    // misconfigured deploy with AWS_KMS_KEY_ARN unset must not silently fall
+    // through to a deterministic HKDF-derived key. PII encrypted under this
+    // key is recoverable by anyone with read access to process.env.
+    if (process.env['NODE_ENV'] === 'production') {
+      throw new Error(
+        'LocalKmsClient cannot be used in production. Set AWS_KMS_KEY_ARN and KMS_DRIVER=aws.',
+      );
+    }
     const secret = process.env['KMS_DEV_SECRET'];
     if (!secret || secret.length < 32) {
       throw new Error(
