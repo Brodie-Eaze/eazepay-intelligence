@@ -141,49 +141,98 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
     return { otpauthUrl, secretBase32: secret };
   });
 
-  const VerifySchema = z.object({ code: z.string().regex(/^\d{6}$/) });
-  app.post('/auth/mfa/verify', { preHandler: [requireAuth, csrfGuard] }, async (req) => {
-    const auth = req.auth!;
-    const { code } = VerifySchema.parse(req.body);
-    const secret = await redis.get(`mfa:setup:${auth.userId}`);
-    if (!secret) throw errors.badRequest('MFA setup not in progress');
-    if (!authenticator.verify({ token: code, secret })) throw errors.unauthorized('Invalid code');
-    await prisma.user.update({
-      where: { id: auth.userId },
-      data: { mfaEnabled: true, mfaSecret: secret },
-    });
-    await redis.del(`mfa:setup:${auth.userId}`);
-    await writeAuditLog({
-      req,
-      userId: auth.userId,
-      action: 'USER_MFA_ENABLED',
-      resourceType: 'user',
-      resourceId: auth.userId,
-    });
-    return { ok: true };
+  // P0 fix (CR-106 + SEC-130): dedicated per-user rate limit on MFA-code
+  // verification. The previous setup relied on the global per-user budget
+  // (1000/min) which is wholly insufficient for a 6-digit TOTP code space
+  // (10^6 possibilities → ~16 min to enumerate a single user's space). The
+  // bucket below caps at 5 attempts per 90 seconds per user. Beyond that:
+  // the composite rate limiter throws 429, the request never reaches the
+  // verify call, and the audit log records `USER_MFA_RATE_LIMITED` so
+  // brute-force attempts surface in monitoring.
+  const mfaRateLimit = compositeRateLimit({
+    prefix: 'auth:mfa',
+    windowSeconds: 90,
+    max: 5,
+    keys: (req) => {
+      // The MFA routes run after requireAuth so req.auth is populated.
+      // Bucket on userId; never on IP, because a single user behind a
+      // shared NAT shouldn't be locked out by another user's typing
+      // mistakes.
+      const userId = req.auth?.userId ?? 'anonymous';
+      return [`user:${userId}`];
+    },
   });
 
-  app.post('/auth/mfa/disable', { preHandler: [requireAuth, csrfGuard] }, async (req) => {
-    const auth = req.auth!;
-    const { code } = VerifySchema.parse(req.body);
-    const user = await prisma.user.findUniqueOrThrow({ where: { id: auth.userId } });
-    if (!user.mfaEnabled || !user.mfaSecret) throw errors.badRequest('MFA not enabled');
-    if (!authenticator.verify({ token: code, secret: user.mfaSecret })) {
-      throw errors.unauthorized('Invalid code');
-    }
-    await prisma.user.update({
-      where: { id: auth.userId },
-      data: { mfaEnabled: false, mfaSecret: null },
-    });
-    await writeAuditLog({
-      req,
-      userId: auth.userId,
-      action: 'USER_MFA_DISABLED',
-      resourceType: 'user',
-      resourceId: auth.userId,
-    });
-    return { ok: true };
-  });
+  const VerifySchema = z.object({ code: z.string().regex(/^\d{6}$/) });
+  app.post(
+    '/auth/mfa/verify',
+    { preHandler: [requireAuth, csrfGuard, mfaRateLimit] },
+    async (req) => {
+      const auth = req.auth!;
+      const { code } = VerifySchema.parse(req.body);
+      const secret = await redis.get(`mfa:setup:${auth.userId}`);
+      if (!secret) throw errors.badRequest('MFA setup not in progress');
+      if (!authenticator.verify({ token: code, secret })) {
+        // Surface the failed attempt before throwing so the audit trail
+        // distinguishes "code typo" from "real attack" via volume.
+        await writeAuditLog({
+          req,
+          userId: auth.userId,
+          action: 'USER_MFA_FAILED',
+          resourceType: 'user',
+          resourceId: auth.userId,
+        });
+        throw errors.unauthorized('Invalid code');
+      }
+      await prisma.user.update({
+        where: { id: auth.userId },
+        data: { mfaEnabled: true, mfaSecret: secret },
+      });
+      await redis.del(`mfa:setup:${auth.userId}`);
+      await writeAuditLog({
+        req,
+        userId: auth.userId,
+        action: 'USER_MFA_ENABLED',
+        resourceType: 'user',
+        resourceId: auth.userId,
+      });
+      return { ok: true };
+    },
+  );
+
+  app.post(
+    '/auth/mfa/disable',
+    { preHandler: [requireAuth, csrfGuard, mfaRateLimit] },
+    async (req) => {
+      const auth = req.auth!;
+      const { code } = VerifySchema.parse(req.body);
+      const user = await prisma.user.findUniqueOrThrow({ where: { id: auth.userId } });
+      if (!user.mfaEnabled || !user.mfaSecret) throw errors.badRequest('MFA not enabled');
+      if (!authenticator.verify({ token: code, secret: user.mfaSecret })) {
+        await writeAuditLog({
+          req,
+          userId: auth.userId,
+          action: 'USER_MFA_FAILED',
+          resourceType: 'user',
+          resourceId: auth.userId,
+          metadata: { op: 'disable' },
+        });
+        throw errors.unauthorized('Invalid code');
+      }
+      await prisma.user.update({
+        where: { id: auth.userId },
+        data: { mfaEnabled: false, mfaSecret: null },
+      });
+      await writeAuditLog({
+        req,
+        userId: auth.userId,
+        action: 'USER_MFA_DISABLED',
+        resourceType: 'user',
+        resourceId: auth.userId,
+      });
+      return { ok: true };
+    },
+  );
 
   // ─── WS Ticket ────────────────────────────────────────────────────────────
   app.post('/auth/ws/ticket', { preHandler: [requireAuth, csrfGuard] }, async (req) => {

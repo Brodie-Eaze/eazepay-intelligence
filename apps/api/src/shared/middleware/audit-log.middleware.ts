@@ -56,6 +56,7 @@ export type AuditAction =
   | 'USER_SCOPE_CHANGED'
   | 'USER_MFA_ENABLED'
   | 'USER_MFA_DISABLED'
+  | 'USER_MFA_FAILED'
   | 'USER_CREATED'
   | 'USER_UPDATED'
   | 'USER_DELETED'
