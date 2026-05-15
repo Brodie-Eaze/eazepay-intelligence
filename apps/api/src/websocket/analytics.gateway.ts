@@ -60,7 +60,11 @@ export async function registerAnalyticsWebSocket(app: FastifyInstance): Promise<
     });
 
     socket.send(
-      JSON.stringify({ type: 'system.heartbeat', at: new Date().toISOString(), serverTime: new Date().toISOString() }),
+      JSON.stringify({
+        type: 'system.heartbeat',
+        at: new Date().toISOString(),
+        serverTime: new Date().toISOString(),
+      }),
     );
 
     socket.on('close', async () => {
@@ -83,8 +87,20 @@ export async function registerAnalyticsWebSocket(app: FastifyInstance): Promise<
         for (const c of clients) {
           c.send(JSON.stringify(c.scope === 'investor' ? scopeForInvestor(event) : event));
         }
-      } catch {
-        // ignore malformed messages — never crash the gateway on input.
+      } catch (err) {
+        // SF-012: malformed pubsub messages used to disappear silently,
+        // masking publisher bugs (workers, outbox, anything with Redis
+        // write). Log a truncated preview so investigators have something
+        // to grep without flooding logs on a poison-pill loop.
+        app.log.warn(
+          {
+            err,
+            channel,
+            previewBytes: raw.slice(0, 200),
+            errorId: 'ws.malformed_pubsub_payload',
+          },
+          'ws.malformed_pubsub_payload',
+        );
       }
     });
     subscriberWired = true;

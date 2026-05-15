@@ -31,7 +31,12 @@
     "worker:webhook-delivery": "tsx src/workers/webhook-delivery.worker.ts",
     "worker:outbox": "tsx src/workers/outbox.worker.ts",
     "worker:alert": "tsx src/workers/alert.worker.ts",
-    "worker:lifecycle": "tsx src/workers/lifecycle.worker.ts"
+    "worker:lifecycle": "tsx src/workers/lifecycle.worker.ts",
+    "worker:pii-reencryption": "tsx src/workers/pii-reencryption.worker.ts",
+    "worker:scheduled-report": "tsx src/workers/scheduled-report.worker.ts",
+    "worker:correlation-linker": "tsx src/workers/correlation-linker.worker.ts",
+    "worker:lender-polling": "tsx src/workers/lender-polling.worker.ts",
+    "worker:retention": "tsx src/workers/retention.worker.ts"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"

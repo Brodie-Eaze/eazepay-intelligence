@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import { getPrismaReader } from '../../config/database.js';
+import { getPrisma, getPrismaReader } from '../../config/database.js';
 import { requireAuth } from '../../shared/middleware/auth.middleware.js';
 import { csrfGuard } from '../../shared/middleware/csrf.middleware.js';
 import { denyInvestorScope, requireRole } from '../../shared/middleware/rbac.middleware.js';
@@ -14,16 +14,21 @@ import { decryptApplicationPii, toApplicationResponse } from './application.type
 const IdParamSchema = z.object({ id: z.string().uuid() });
 
 export async function registerApplicationRoutes(app: FastifyInstance): Promise<void> {
-  const prisma = getPrismaReader();
-  const repo = new ApplicationRepository(prisma);
+  // Read-replica for the list/get queries; writer (primary) for decrypt
+  // dispatch because decryptEnvelopeAuto needs to look up TenantEncryptionKey
+  // rows. Reader may lag for fresh DEK rotations, so we use the writer.
+  const prismaReader = getPrismaReader();
+  const prisma = getPrisma();
+  const repo = new ApplicationRepository(prismaReader);
   const service = new ApplicationService(repo);
 
   // List — operators+ in standard scope; investor scope is forbidden (route hidden).
   app.get('/applications', { preHandler: [requireAuth, denyInvestorScope] }, async (req) => {
     const query = ListApplicationsQuerySchema.parse(req.query);
     const page = await service.list(query);
+    const data = await Promise.all(page.data.map((a) => toApplicationResponse(a, prisma)));
     return {
-      data: page.data.map(toApplicationResponse),
+      data,
       nextCursor: page.nextCursor,
       hasMore: page.hasMore,
     };
@@ -32,12 +37,12 @@ export async function registerApplicationRoutes(app: FastifyInstance): Promise<v
   app.get('/applications/:id', { preHandler: [requireAuth, denyInvestorScope] }, async (req) => {
     const { id } = IdParamSchema.parse(req.params);
     const a = await service.getById(id);
-    const decisions = await prisma.lenderDecision.findMany({
+    const decisions = await prismaReader.lenderDecision.findMany({
       where: { applicationId: id },
       orderBy: { decisionTimestamp: 'desc' },
     });
     return {
-      application: toApplicationResponse(a),
+      application: await toApplicationResponse(a, prisma),
       decisions: decisions.map((d) => ({
         id: d.id,
         lenderName: d.lenderName,
@@ -65,7 +70,7 @@ export async function registerApplicationRoutes(app: FastifyInstance): Promise<v
       const a = await service.getById(id);
       let pii;
       try {
-        pii = decryptApplicationPii(a);
+        pii = await decryptApplicationPii(a, prisma);
       } catch {
         throw errors.internal('PII decryption failed');
       }

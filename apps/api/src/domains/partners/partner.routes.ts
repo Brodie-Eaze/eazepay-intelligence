@@ -6,6 +6,7 @@ import { csrfGuard } from '../../shared/middleware/csrf.middleware.js';
 import { requireRole } from '../../shared/middleware/rbac.middleware.js';
 import { writeAuditLog } from '../../shared/middleware/audit-log.middleware.js';
 import { rowsToCsv, attachmentHeader } from '../../shared/utils/csv.js';
+import { getBootstrapOrgId } from '../../shared/tenant/bootstrap-org.js';
 import { PartnerRepository } from './partner.repository.js';
 import { PartnerService } from './partner.service.js';
 import {
@@ -56,7 +57,12 @@ export async function registerPartnerRoutes(app: FastifyInstance): Promise<void>
         source: 'partners',
         format: fmt,
         rowCount: rows.length,
-        scope: req.auth!.scope ?? 'operator',
+        // Fix (TD-121): `req.auth.scope` is the non-optional AuthScope union
+        // 'standard' | 'investor' — there's no 'operator' member, so the
+        // `?? 'operator'` fallback was dead code that masked a confusion
+        // between AuthScope and some other role enum. Drop the fallback;
+        // the value is always populated.
+        scope: req.auth!.scope,
       },
     });
 
@@ -87,8 +93,12 @@ export async function registerPartnerRoutes(app: FastifyInstance): Promise<void>
     '/partners',
     { preHandler: [requireAuth, csrfGuard, requireRole('ADMIN', 'OPERATOR')] },
     async (req, reply) => {
+      const auth = req.auth!;
       const input = CreatePartnerSchema.parse(req.body);
-      const partner = await service.create(input);
+      // Phase 1 retrofit: thread orgId from the authenticated principal
+      // into the partner create. Bootstrap fallback during Phase 1.3.
+      const orgId = auth.orgId ?? (await getBootstrapOrgId(prisma));
+      const partner = await service.create({ ...input, orgId });
       await writeAuditLog({
         req,
         action: 'PARTNER_CREATED',

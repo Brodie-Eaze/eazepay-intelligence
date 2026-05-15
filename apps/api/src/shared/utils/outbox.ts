@@ -29,12 +29,21 @@
  */
 import { v7 as uuidv7 } from 'uuid';
 import type { OutboxKind, Prisma, PrismaClient } from '@prisma/client';
+import { getBootstrapOrgId } from '../tenant/bootstrap-org.js';
 
 export interface OutboxAppend {
   kind: OutboxKind;
   payload: object;
   refType?: string;
   refId?: string;
+  /**
+   * Phase 1 retrofit: tenant scope for the outbox row. Optional during the
+   * Phase 1.3 transition — callers that don't yet have orgId in scope get
+   * the bootstrap org as a fallback (matches the previous behaviour where
+   * outbox rows were globally namespaced). Once every call site is
+   * retrofitted, drop the optionality.
+   */
+  orgId?: string;
 }
 
 export async function appendToOutbox(
@@ -42,9 +51,16 @@ export async function appendToOutbox(
   entry: OutboxAppend,
 ): Promise<string> {
   const id = uuidv7();
+  // `tx` may be a TransactionClient (no $-prefixed lifecycle methods) or a
+  // bare PrismaClient. Both have organization.findUnique, so the bootstrap
+  // lookup works either way. Cast through unknown for the bootstrap call to
+  // satisfy the union.
+  const orgId =
+    entry.orgId ?? (await getBootstrapOrgId(tx as unknown as PrismaClient));
   await tx.outboxEvent.create({
     data: {
       id,
+      orgId,
       kind: entry.kind,
       payload: entry.payload as Prisma.InputJsonValue,
       refType: entry.refType ?? null,

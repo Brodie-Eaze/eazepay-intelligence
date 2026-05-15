@@ -1,6 +1,7 @@
-import type { Application } from '@prisma/client';
+import type { Application, PrismaClient } from '@prisma/client';
 import type { ApplicationResponse } from './application.schemas.js';
 import { decryptPII } from '../../shared/utils/encryption.js';
+import { decryptEnvelopeAuto } from '../../shared/kms/tenant-dek.js';
 import { getLogger } from '../../config/logger.js';
 
 function maskEmail(email: string): string {
@@ -25,15 +26,32 @@ function maskName(name: string): string {
     .join(' ');
 }
 
-/** Decrypt PII once and emit a masked-by-default response. */
-export function toApplicationResponse(a: Application): ApplicationResponse {
+/**
+ * Decrypt PII once and emit a masked-by-default response.
+ *
+ * Phase 3 continued: uses `decryptEnvelopeAuto` so both v1 (global key)
+ * and v2 (per-org DEK) ciphertexts read correctly. Existing rows written
+ * before per-org DEK rollout decode via the legacy path; new rows decode
+ * via the per-tenant path. The Phase 3 background re-encryption worker
+ * eventually flips every row to v2 — once it's drained, the v1 branch
+ * dead-ends and can be removed.
+ */
+export async function toApplicationResponse(
+  a: Application,
+  prisma: PrismaClient,
+): Promise<ApplicationResponse> {
   let nameMasked = '*****';
   let emailMasked = '*****';
   let phoneMasked = '****';
   try {
-    nameMasked = maskName(decryptPII(a.consumerNameCiphertext));
-    emailMasked = maskEmail(decryptPII(a.consumerEmailCiphertext));
-    phoneMasked = maskPhone(decryptPII(a.consumerPhoneCiphertext));
+    const [n, e, p] = await Promise.all([
+      decryptEnvelopeAuto(prisma, a.consumerNameCiphertext, decryptPII),
+      decryptEnvelopeAuto(prisma, a.consumerEmailCiphertext, decryptPII),
+      decryptEnvelopeAuto(prisma, a.consumerPhoneCiphertext, decryptPII),
+    ]);
+    nameMasked = maskName(n);
+    emailMasked = maskEmail(e);
+    phoneMasked = maskPhone(p);
   } catch (err) {
     // Decryption failure on the dashboard hot path. Surface masked
     // placeholders so the read path stays available — but ALWAYS log,
@@ -77,14 +95,18 @@ export function toApplicationResponse(a: Application): ApplicationResponse {
   };
 }
 
-export function decryptApplicationPii(a: Application): {
-  name: string;
-  email: string;
-  phone: string;
-} {
-  return {
-    name: decryptPII(a.consumerNameCiphertext),
-    email: decryptPII(a.consumerEmailCiphertext),
-    phone: decryptPII(a.consumerPhoneCiphertext),
-  };
+/**
+ * Reveal-path Application PII (admin/operator only). Phase 3 continued:
+ * uses `decryptEnvelopeAuto` so v1 + v2 ciphertexts both decrypt.
+ */
+export async function decryptApplicationPii(
+  a: Application,
+  prisma: PrismaClient,
+): Promise<{ name: string; email: string; phone: string }> {
+  const [name, email, phone] = await Promise.all([
+    decryptEnvelopeAuto(prisma, a.consumerNameCiphertext, decryptPII),
+    decryptEnvelopeAuto(prisma, a.consumerEmailCiphertext, decryptPII),
+    decryptEnvelopeAuto(prisma, a.consumerPhoneCiphertext, decryptPII),
+  ]);
+  return { name, email, phone };
 }

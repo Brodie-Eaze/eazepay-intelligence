@@ -5,8 +5,9 @@ import type { LenderRangeQuery, WaterfallRow } from './lender.schemas.js';
 export class LenderService {
   constructor(private readonly repo: ILenderRepository) {}
 
-  async waterfall(query: LenderRangeQuery): Promise<WaterfallRow[]> {
+  async waterfall(orgId: string, query: LenderRangeQuery): Promise<WaterfallRow[]> {
     const rows = await this.repo.waterfall({
+      orgId,
       from: query.from ? new Date(query.from) : undefined,
       to: query.to ? new Date(query.to) : undefined,
       tier: query.tier,
@@ -14,8 +15,10 @@ export class LenderService {
     return rows.map((r) => {
       const submitted = r.submitted || 0;
       const approved = r.approved;
-      const approvalRate = submitted === 0 ? '0' : new Prisma.Decimal(approved).div(submitted).toFixed(4);
-      const fundingRate = approved === 0 ? '0' : new Prisma.Decimal(r.funded).div(approved).toFixed(4);
+      const approvalRate =
+        submitted === 0 ? '0' : new Prisma.Decimal(approved).div(submitted).toFixed(4);
+      const fundingRate =
+        approved === 0 ? '0' : new Prisma.Decimal(r.funded).div(approved).toFixed(4);
       return {
         lenderName: r.lenderName,
         lenderTier: r.lenderTier,

@@ -1,8 +1,48 @@
 # Handover · EazePay Intelligence
 
-**Snapshot:** 2026-05-14 · branch `feat/portfolio-silos` · production live.
+**Snapshot:** 2026-05-15 · branch `phase-1.5/callsite-retrofit-v2` (PR #3) · ready to merge to `main`.
 
-This is the Monday-morning briefing for the incoming engineering team. Read it once, then read [`README.md`](README.md) and [`docs/architecture/data-warehouse-overview.md`](docs/architecture/data-warehouse-overview.md).
+This is the Monday-morning briefing for the incoming engineering team. Read it once, then read [`README.md`](../README.md) and [`architecture/data-warehouse-overview.md`](architecture/data-warehouse-overview.md).
+
+## What changed since the last snapshot
+
+PR #3 (`phase-1.5/callsite-retrofit-v2`) collapsed every Phase 0-7 security
+item + 14 endpoint-audit gaps onto one mergeable PR. Full per-phase
+breakdown in [`PHASE_PROGRESS.md`](PHASE_PROGRESS.md). Headlines:
+
+- **All PII writes use per-tenant DEK** (Phase 3 + Phase 3 continued).
+  Cryptoshred-on-RTBF actually destroys data now.
+- **Postgres RLS** on every tenant table (Phase 1.6); runtime `eazepay_app`
+  role with NOBYPASSRLS set up via the operator runbook at
+  [`runbooks/eazepay-app-role-deploy.md`](runbooks/eazepay-app-role-deploy.md).
+- **OAuth hardened** — local JWKS RS256 verification replacing the
+  deprecated `/tokeninfo`, PKCE S256 with domain-separated HMAC.
+- **Sessions** — refresh-token `session_id` + JWT `sid` claim + Redis
+  deny-list so `/auth/sessions/:id DELETE` revokes within one request
+  instead of waiting 15 min for the access cookie to expire.
+- **EazePay App sink** built end-to-end (was silently dropping medpay /
+  tradepay / coachpay traffic). Plus three new business-event sinks
+  (Aurean AI, Aurean Recruitment, HighSale business events) with KPI
+  endpoints.
+- **Storage abstraction** — local-disk + S3 (production-safe). Driver
+  picked at boot; aws-sdk eager-loaded so a missing dep crashes startup,
+  not the first export. Required-in-prod `EXPORT_STORAGE_DRIVER` env.
+- **Lender adapter framework** (GAP-101) — `LenderAdapter` interface +
+  `MockLenderAdapter` reference impl + polling worker + `LenderReportingEvent`
+  audit trail. Real lender integrations plug into the same contract.
+- **Customer lender-data view** (GAP-119) — `GET /customers/:hash/lender-data`
+  surfaces a customer's full timeline across applications + decisions +
+  reporting events.
+- **Demo password is gone from prod** — `seed.ts` refuses to run when
+  `NODE_ENV=production`; the 7 launch-business orgs are now provisioned
+  by a Prisma migration (`20260515200000_gap103_provision_launch_business_orgs`),
+  not the dev seed.
+
+Two adversarial security + architecture reviews ran against the branch
+pre-merge. All critical findings addressed in-branch.
+
+`pnpm --filter api typecheck` clean · `pnpm --filter web typecheck` clean
+· 137/143 tests pass (6 pre-existing skips).
 
 ---
 

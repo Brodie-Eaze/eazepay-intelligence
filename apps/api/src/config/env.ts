@@ -25,6 +25,40 @@ const EnvSchema = z.object({
 
   JWT_ACCESS_SECRET: z.string().min(32, 'JWT_ACCESS_SECRET must be ≥32 chars'),
   JWT_REFRESH_SECRET: z.string().min(32, 'JWT_REFRESH_SECRET must be ≥32 chars'),
+  // P0 fix (CR-102 + SEC-115): distinct secrets per JWT kind. Previously
+  // access / ws_ticket / investor_scope all shared JWT_ACCESS_SECRET, which
+  // meant an attacker with a legitimate access JWT could rewrite `kind` to
+  // `ws_ticket` and re-sign — `verifyJwt` would accept it because the kind
+  // check runs after a signature that's valid for both kinds. Similarly,
+  // CSRF token and OAuth state were both HMACed under JWT_ACCESS_SECRET,
+  // making one key the universal forgery key. Each purpose now has its own
+  // secret. All optional during the migration window — `secretFor()` falls
+  // back to JWT_ACCESS_SECRET if unset so existing deployments keep working
+  // until they rotate. In production, all four MUST be set (asserted below).
+  JWT_WS_TICKET_SECRET: z.string().min(32, 'JWT_WS_TICKET_SECRET must be ≥32 chars').optional(),
+  JWT_INVESTOR_SCOPE_SECRET: z
+    .string()
+    .min(32, 'JWT_INVESTOR_SCOPE_SECRET must be ≥32 chars')
+    .optional(),
+  CSRF_SIGNING_SECRET: z.string().min(32, 'CSRF_SIGNING_SECRET must be ≥32 chars').optional(),
+  OAUTH_STATE_SECRET: z.string().min(32, 'OAUTH_STATE_SECRET must be ≥32 chars').optional(),
+  /// MFA step-up signing key (Phase H). Used by /auth/mfa/step-up/verify
+  /// to issue short-lived (5min) re-auth tokens for SUPER actions.
+  /// Production refuses to boot if unset.
+  MFA_STEP_UP_SECRET: z.string().min(32, 'MFA_STEP_UP_SECRET must be ≥32 chars').optional(),
+
+  /// Bearer token for the /metrics scrape endpoint (Phase H reviewer fix).
+  /// Railway's HTTPS endpoints are public-Internet reachable; without this
+  /// the metric labels (lender slugs, orgs, error ids, etc.) are an
+  /// attacker recon goldmine. Required in production; optional in dev
+  /// where /metrics is consumed by a local Prometheus.
+  METRICS_BEARER_TOKEN: z.string().min(32, 'METRICS_BEARER_TOKEN must be ≥32 chars').optional(),
+  // Pepper for API-token storage. Replaces the previous bare SHA-256 of the
+  // token secret (CR-103). Optional during migration window — when unset,
+  // hashes fall back to plain SHA-256 so existing tokens still verify; new
+  // tokens prefer the HMAC form. Required in production once rotation is
+  // complete.
+  API_TOKEN_HASH_SECRET: z.string().min(32, 'API_TOKEN_HASH_SECRET must be ≥32 chars').optional(),
   JWT_ACCESS_TTL_SECONDS: z.coerce.number().int().positive().default(900),
   JWT_REFRESH_TTL_SECONDS: z.coerce.number().int().positive().default(604_800),
 
@@ -51,6 +85,22 @@ const EnvSchema = z.object({
   // See docs/architecture/data-warehouse-overview.md § Plane 2.
   HIGHSALE_WEBHOOK_SECRET: z.string().min(32),
 
+  // GAP-103: Aurean AI business-events webhook signing secret. Verifies
+  // HMAC-SHA-256 for POST /integration/aurean-ai/events. Optional in
+  // dev (the integration starts as PAT-driven /ingestion/*); required
+  // once the Aurean platform begins emitting native webhooks.
+  AUREAN_AI_WEBHOOK_SECRET: z.string().min(32).optional(),
+
+  // GAP-104: Aurean Recruitment business-events webhook signing secret.
+  // Same pattern as AUREAN_AI above. Optional during the migration window.
+  AUREAN_RECRUITMENT_WEBHOOK_SECRET: z.string().min(32).optional(),
+
+  /**
+   * Phase H: explicit-domain CORS allowlist. Wildcards (`*`, `*.example.com`)
+   * are REJECTED at boot — a wildcard on `*.up.railway.app` would let any
+   * sibling deploy hit the API. Each entry must be a full origin (scheme +
+   * host + optional port).
+   */
   CORS_ORIGINS: z
     .string()
     .default('http://localhost:3011')
@@ -59,6 +109,17 @@ const EnvSchema = z.object({
         .split(',')
         .map((s) => s.trim())
         .filter(Boolean),
+    )
+    .refine((origins) => origins.every((o) => !o.includes('*')), {
+      message: 'CORS_ORIGINS must be an explicit list of origins; wildcards are not permitted',
+    })
+    .refine(
+      (origins) =>
+        origins.every((o) => /^https?:\/\/[a-z0-9.-]+(:\d+)?$/i.test(o.replace(/\/$/, ''))),
+      {
+        message:
+          'CORS_ORIGINS entries must be scheme + host + optional port (e.g. https://app.eazepay.com)',
+      },
     ),
 
   // Tiered rate limits — see docs/COMPUTE_LIMITS.md for sizing rationale.
@@ -169,6 +230,77 @@ export function getEnv(): Env {
     console.error('[env] invalid configuration:', parsed.error.flatten().fieldErrors);
     process.exit(1);
   }
+
+  // P0 production-only assertions (SEC-104, SEC-108). Each check refuses to
+  // boot rather than silently weaken security in production. All non-fatal
+  // in dev/test to keep local DX simple.
+  if (parsed.data.NODE_ENV === 'production') {
+    const productionErrors: string[] = [];
+
+    // Refuse predictable-shape secrets. A 32-character string of 'a' repeated
+    // satisfies min(32) but is brute-forceable in seconds. We require the
+    // top-tier secrets to NOT contain the literal substring 'local-dev' (the
+    // shape used in .env.example) and to have at least 24 distinct characters
+    // (a basic entropy floor — Shannon ≥ ~4.5 bits/char on a 32-char string).
+    const sensitiveSecrets: Array<[string, string]> = [
+      ['JWT_ACCESS_SECRET', parsed.data.JWT_ACCESS_SECRET],
+      ['JWT_REFRESH_SECRET', parsed.data.JWT_REFRESH_SECRET],
+      ['PII_HASH_SECRET', parsed.data.PII_HASH_SECRET],
+      ['EAZEPAY_APP_WEBHOOK_SECRET', parsed.data.EAZEPAY_APP_WEBHOOK_SECRET],
+      ['HIGHSALE_WEBHOOK_SECRET', parsed.data.HIGHSALE_WEBHOOK_SECRET],
+    ];
+    for (const [name, value] of sensitiveSecrets) {
+      if (value.toLowerCase().includes('local-dev')) {
+        productionErrors.push(
+          `${name} appears to be a development placeholder ('local-dev' substring)`,
+        );
+      }
+      if (new Set(value).size < 16) {
+        productionErrors.push(
+          `${name} has insufficient character diversity for production (<16 distinct chars)`,
+        );
+      }
+    }
+
+    // KMS: AWS_KMS_KEY_ARN must be set so the factory binds AwsKmsClient
+    // not LocalKmsClient. The LocalKmsClient constructor also refuses to
+    // load in production (SEC-108), but enforcing the env here gives a
+    // clear, actionable startup error rather than a runtime KMS-call failure.
+    if (!parsed.data.AWS_KMS_KEY_ARN) {
+      productionErrors.push('AWS_KMS_KEY_ARN is required in production (Phase 1.5 KMS).');
+    }
+
+    // P0 fix (CR-102 + SEC-115): per-kind JWT/CSRF/OAuth secrets must all
+    // be set in production. The Zod schema makes them optional for dev
+    // back-compat; here we promote to required.
+    const requiredPerKind: Array<[string, string | undefined]> = [
+      ['JWT_WS_TICKET_SECRET', parsed.data.JWT_WS_TICKET_SECRET],
+      ['JWT_INVESTOR_SCOPE_SECRET', parsed.data.JWT_INVESTOR_SCOPE_SECRET],
+      ['CSRF_SIGNING_SECRET', parsed.data.CSRF_SIGNING_SECRET],
+      ['OAUTH_STATE_SECRET', parsed.data.OAUTH_STATE_SECRET],
+      ['API_TOKEN_HASH_SECRET', parsed.data.API_TOKEN_HASH_SECRET],
+      // Phase H: MFA step-up + SUPER-action re-auth.
+      ['MFA_STEP_UP_SECRET', parsed.data.MFA_STEP_UP_SECRET],
+      // Phase H reviewer fix: /metrics MUST be bearer-protected in prod.
+      ['METRICS_BEARER_TOKEN', parsed.data.METRICS_BEARER_TOKEN],
+    ];
+    for (const [name, value] of requiredPerKind) {
+      if (!value) {
+        productionErrors.push(
+          `${name} is required in production (per-kind secret split, CR-102 / SEC-115 / CR-103).`,
+        );
+      }
+    }
+
+    if (productionErrors.length > 0) {
+      // eslint-disable-next-line no-console
+      console.error(
+        '[env] production safety checks failed:\n  - ' + productionErrors.join('\n  - '),
+      );
+      process.exit(1);
+    }
+  }
+
   cached = parsed.data;
   return cached;
 }

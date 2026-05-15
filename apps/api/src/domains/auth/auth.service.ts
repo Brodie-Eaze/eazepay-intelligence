@@ -5,9 +5,11 @@ import type { Redis } from 'ioredis';
 import type { User } from '@prisma/client';
 
 import { getEnv } from '../../config/env.js';
+import { getPrisma } from '../../config/database.js';
 import { errors } from '../../shared/errors/app-error.js';
 import { verifyPassword } from '../../shared/utils/password.js';
 import { newJti, newRefreshFamilyId, signJwt, verifyJwt } from '../../shared/utils/jwt.js';
+import { getBootstrapOrgId } from '../../shared/tenant/bootstrap-org.js';
 import { AuthRepository } from './auth.repository.js';
 
 export type AuthScope = 'standard' | 'investor';
@@ -46,7 +48,10 @@ export class AuthService {
     }
 
     await this.repo.recordLogin(user.id);
-    return this.issueSession(user, 'standard', newRefreshFamilyId());
+    const familyId = newRefreshFamilyId();
+    // Phase 4c: 1:1 session-to-family for now. Once "trust this device"
+    // lands, sessionId persists across family rotations on the same device.
+    return this.issueSession(user, 'standard', familyId, familyId);
   }
 
   async refresh(rawRefreshToken: string): Promise<IssuedTokens> {
@@ -66,14 +71,24 @@ export class AuthService {
     const env = getEnv();
     const newRaw = AuthRepository.newRawRefreshToken();
     const newExpires = new Date(Date.now() + env.JWT_REFRESH_TTL_SECONDS * 1000);
+    // Phase 1 retrofit: refresh-token org is preserved across rotation.
+    // The stored row already carries orgId from when it was issued; we
+    // re-use it for the rotated row so a single refresh chain stays
+    // pinned to one tenant rather than drifting to whatever the user's
+    // oldest membership happens to be at this moment.
+    const refreshOrgId = stored.orgId;
     await this.repo.rotateRefreshToken({
+      orgId: refreshOrgId,
       oldId: stored.id,
       newRaw,
       userId: user.id,
       familyId: stored.familyId,
+      // Phase 4c: preserve sessionId across rotation so the session
+      // identity stays stable for the user-facing /auth/sessions surface.
+      sessionId: stored.sessionId,
       expiresAt: newExpires,
     });
-    const access = await this.signAccess(user, 'standard');
+    const access = await this.signAccess(user, 'standard', stored.sessionId);
     return {
       access,
       refresh: { token: newRaw, expiresAt: newExpires },
@@ -92,15 +107,26 @@ export class AuthService {
     const env = getEnv();
     // Scope toggle re-issues a fresh access token under a new family for clean revocation.
     const familyId = newRefreshFamilyId();
+    // Phase 4c: scope toggle starts a new session (different family,
+    // different session) so revoking the toggled session doesn't kill
+    // the user's other devices.
+    const sessionId = familyId;
     const refreshRaw = AuthRepository.newRawRefreshToken();
     const refreshExpires = new Date(Date.now() + env.JWT_REFRESH_TTL_SECONDS * 1000);
+    // Phase 1 retrofit: scope toggle inherits orgId from the user's
+    // oldest membership (same source as the access JWT). Once an explicit
+    // org-switcher endpoint lands, callers pass orgId directly.
+    const scopeMembership = await this.repo.findOldestMembership(user.id);
+    const scopeOrgId = scopeMembership?.orgId ?? (await getBootstrapOrgId(getPrisma()));
     await this.repo.createRefreshToken({
+      orgId: scopeOrgId,
       userId: user.id,
       familyId,
+      sessionId,
       rawToken: refreshRaw,
       expiresAt: refreshExpires,
     });
-    const access = await this.signAccess(user, requestedScope);
+    const access = await this.signAccess(user, requestedScope, sessionId);
     return {
       access,
       refresh: { token: refreshRaw, expiresAt: refreshExpires },
@@ -114,6 +140,25 @@ export class AuthService {
     if (!rawRefreshToken) return;
     const stored = await this.repo.findRefreshTokenByRaw(rawRefreshToken);
     if (stored) await this.repo.revokeFamily(stored.familyId);
+  }
+
+  /**
+   * Phase 4c: enumerate the user's active refresh-token sessions.
+   * Surfaces sessionId, the org the session is acting under, and the
+   * createdAt / expiresAt of the most recent rotation in that session.
+   */
+  async listSessions(
+    userId: string,
+  ): Promise<Array<{ sessionId: string; orgId: string; createdAt: Date; expiresAt: Date }>> {
+    return this.repo.listActiveSessions(userId);
+  }
+
+  /**
+   * Phase 4c: revoke a single session (all refresh rows sharing that
+   * sessionId). Returns the count of refresh rows revoked.
+   */
+  async revokeSession(userId: string, sessionId: string): Promise<number> {
+    return this.repo.revokeSession(userId, sessionId);
   }
 
   async issueWsTicket(
@@ -152,7 +197,8 @@ export class AuthService {
    */
   async issueSessionForUser(user: User, scope: AuthScope = 'standard'): Promise<IssuedTokens> {
     await this.repo.recordLogin(user.id);
-    return this.issueSession(user, scope, newRefreshFamilyId());
+    const familyId = newRefreshFamilyId();
+    return this.issueSession(user, scope, familyId, familyId);
   }
 
   // ─── internal ──────────────────────────────────────────────────────────────
@@ -161,17 +207,25 @@ export class AuthService {
     user: User,
     scope: AuthScope,
     familyId: string,
+    sessionId: string,
   ): Promise<IssuedTokens> {
     const env = getEnv();
     const refreshRaw = AuthRepository.newRawRefreshToken();
     const refreshExpires = new Date(Date.now() + env.JWT_REFRESH_TTL_SECONDS * 1000);
+    // Phase 1 retrofit: pin the refresh token to the user's active org
+    // (oldest membership during the Phase 1.3 transition; an explicit
+    // org-switcher endpoint will replace this once it lands).
+    const sessionMembership = await this.repo.findOldestMembership(user.id);
+    const sessionOrgId = sessionMembership?.orgId ?? (await getBootstrapOrgId(getPrisma()));
     await this.repo.createRefreshToken({
+      orgId: sessionOrgId,
       userId: user.id,
       familyId,
+      sessionId,
       rawToken: refreshRaw,
       expiresAt: refreshExpires,
     });
-    const access = await this.signAccess(user, scope);
+    const access = await this.signAccess(user, scope, sessionId);
     return {
       access,
       refresh: { token: refreshRaw, expiresAt: refreshExpires },
@@ -184,6 +238,7 @@ export class AuthService {
   private async signAccess(
     user: User,
     scope: AuthScope,
+    sessionId: string,
   ): Promise<{ token: string; expiresAt: Date }> {
     const env = getEnv();
     // Phase 1.3: embed the user's active organisation + per-org role in the
@@ -192,6 +247,8 @@ export class AuthService {
     // (Phase 1.3 expansion) lets the user change active org later.
     // Platform staff are embedded so requireAuth can short-circuit
     // platform-route checks without an extra DB hit.
+    // Phase 4c: embed `sid` (sessionId) so the access JWT can be denied
+    // immediately when the refresh-token session is revoked.
     const membership = await this.repo.findOldestMembership(user.id);
     const token = signJwt(
       {
@@ -202,6 +259,7 @@ export class AuthService {
         platformRole: user.platformRole ?? null,
         kind: 'access',
         jti: newJti(),
+        sid: sessionId,
         scope,
       },
       env.JWT_ACCESS_TTL_SECONDS,
@@ -210,10 +268,18 @@ export class AuthService {
   }
 
   private newCsrfToken(): string {
-    // Bound to the access secret so server can verify without DB lookup.
+    // P0 fix (SEC-115): CSRF token HMAC uses CSRF_SIGNING_SECRET, not the
+    // JWT access secret. Sharing the JWT key meant any compromise of the
+    // access secret (e.g., offline brute-force on a captured cookie)
+    // immediately compromised CSRF protection too. Fallback to
+    // JWT_ACCESS_SECRET during the migration window so existing CSRF
+    // cookies remain valid until rotation; production startup enforces
+    // CSRF_SIGNING_SECRET to be set.
     const random = randomBytes(24).toString('base64url');
     const env = getEnv();
-    const sig = createHmac('sha256', env.JWT_ACCESS_SECRET).update(random).digest('base64url');
+    const sig = createHmac('sha256', env.CSRF_SIGNING_SECRET ?? env.JWT_ACCESS_SECRET)
+      .update(random)
+      .digest('base64url');
     return `${random}.${sig}`;
   }
 }
@@ -224,7 +290,11 @@ export function verifyCsrfToken(token: string | undefined): boolean {
   if (parts.length !== 2) return false;
   const [random, sig] = parts as [string, string];
   const env = getEnv();
-  const expected = createHmac('sha256', env.JWT_ACCESS_SECRET).update(random).digest('base64url');
+  // Match the secret used in `newCsrfToken` — CSRF_SIGNING_SECRET if set,
+  // JWT_ACCESS_SECRET otherwise. Once production rotates, the fallback path
+  // is unreachable because env.ts requires CSRF_SIGNING_SECRET to be set.
+  const csrfSecret = env.CSRF_SIGNING_SECRET ?? env.JWT_ACCESS_SECRET;
+  const expected = createHmac('sha256', csrfSecret).update(random).digest('base64url');
   // Constant-time compare. A naive `sig === expected` short-circuits on the
   // first byte mismatch and would leak the signature byte-by-byte under a
   // chatty attacker. Use timingSafeEqual with a length-equality pre-check.

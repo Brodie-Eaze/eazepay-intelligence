@@ -6,9 +6,10 @@ beforeAll(() => {
   process.env.PII_HASH_SECRET = 'unit-test-pepper-min-16';
   process.env.JWT_ACCESS_SECRET = 'a'.repeat(32);
   process.env.JWT_REFRESH_SECRET = 'b'.repeat(32);
-  process.env.BUZZPAY_WEBHOOK_SECRET = 'c'.repeat(32);
   process.env.PIXIE_WEBHOOK_SECRET = 'd'.repeat(32);
   process.env.MICAMP_WEBHOOK_SECRET = 'e'.repeat(32);
+  process.env.EAZEPAY_APP_WEBHOOK_SECRET = 'f'.repeat(32);
+  process.env.HIGHSALE_WEBHOOK_SECRET = 'g'.repeat(32);
   process.env.DATABASE_URL = 'postgresql://test:test@localhost:5432/test';
   process.env.REDIS_URL = 'redis://localhost:6379';
   __resetEnvForTests();
@@ -27,6 +28,10 @@ describe('outbox append', () => {
       },
     };
     const id = await appendToOutbox(fakeTx as never, {
+      // Phase 1 retrofit: outbox rows are org-scoped. Test supplies orgId
+      // explicitly to avoid the bootstrap-org lookup path that would need a
+      // full prisma mock.
+      orgId: '00000000-0000-0000-0000-000000000001',
       kind: 'WEBHOOK_INBOUND',
       payload: { exampleKey: 'value' },
       refType: 'webhook_event',

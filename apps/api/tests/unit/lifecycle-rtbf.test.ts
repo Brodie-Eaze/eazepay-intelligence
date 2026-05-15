@@ -54,6 +54,7 @@ describe('RtbfService.submit', () => {
 
     const svc = new RtbfService(prisma);
     const req = await svc.submit({
+      orgId: '00000000-0000-0000-0000-000000000001',
       emailHash: Buffer.alloc(32, 7),
       requestedById: 'user-1',
       reason: 'data-subject request',
@@ -74,6 +75,7 @@ describe('RtbfService.submit', () => {
 
     const svc = new RtbfService(prisma);
     const req = await svc.submit({
+      orgId: '00000000-0000-0000-0000-000000000001',
       emailHash: Buffer.alloc(32, 7),
       requestedById: 'user-1',
     });
@@ -114,6 +116,12 @@ describe('RtbfService.process', () => {
               updates.push(args);
               return args;
             }),
+          },
+          // GAP-111: RTBF now scrubs credit_enrichments too. Mock empty
+          // here — a separate test exercises the credit_enrichments path.
+          creditEnrichment: {
+            findMany: vi.fn(async () => []),
+            update: vi.fn(async () => undefined),
           },
           auditLog: {
             create: vi.fn(async () => undefined),

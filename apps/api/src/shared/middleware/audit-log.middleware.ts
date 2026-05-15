@@ -1,5 +1,6 @@
 import { v7 as uuidv7 } from 'uuid';
 import type { FastifyRequest } from 'fastify';
+import type { Prisma, PrismaClient } from '@prisma/client';
 import { getPrisma } from '../../config/database.js';
 
 /**
@@ -8,7 +9,15 @@ import { getPrisma } from '../../config/database.js';
  *
  * The role-level REVOKE on `audit_logs` is the second line of defence; this is the
  * first. Callers MUST NOT update or delete rows.
+ *
+ * Phase 7 (SF-009): optional `tx` argument lets callers run the audit write
+ * inside the same transaction as the mutation it describes. Without this,
+ * a mutation could commit while the audit insert silently fails (network
+ * blip, RLS denial, etc.) — leaving an unaudited write in production. With
+ * tx, either both rows commit or neither does.
  */
+type AuditTxClient = Pick<PrismaClient, 'auditLog'> | Prisma.TransactionClient;
+
 export async function writeAuditLog(args: {
   req?: FastifyRequest;
   userId?: string | null;
@@ -29,11 +38,18 @@ export async function writeAuditLog(args: {
   resourceType: string;
   resourceId?: string;
   metadata?: Record<string, unknown>;
+  /**
+   * Phase 7 (SF-009): when supplied, the audit row is written via this
+   * transaction client so the audit + the mutation rollback together.
+   * Omit for fire-and-forget audit writes (system events, retried jobs).
+   */
+  tx?: AuditTxClient;
 }): Promise<void> {
   const ipAddress = args.req?.ip ?? null;
   const ua = args.req?.headers['user-agent'];
   const userAgent = (Array.isArray(ua) ? ua[0] : ua) ?? null;
-  await getPrisma().auditLog.create({
+  const client = args.tx ?? getPrisma();
+  await client.auditLog.create({
     data: {
       id: uuidv7(),
       userId: args.userId ?? args.req?.auth?.userId ?? null,
@@ -56,6 +72,7 @@ export type AuditAction =
   | 'USER_SCOPE_CHANGED'
   | 'USER_MFA_ENABLED'
   | 'USER_MFA_DISABLED'
+  | 'USER_MFA_FAILED'
   | 'USER_CREATED'
   | 'USER_UPDATED'
   | 'USER_DELETED'
@@ -63,6 +80,7 @@ export type AuditAction =
   | 'USER_INVITATION_ACCEPTED'
   | 'USER_INVITATION_REVOKED'
   | 'USER_LOGIN_OAUTH'
+  | 'USER_SESSION_REVOKED'
   | 'PLATFORM_CROSS_TENANT_ACCESS'
   | 'PLATFORM_ORG_CREATED'
   | 'PLATFORM_ORG_UPDATED'

@@ -1,16 +1,43 @@
 import { Prisma, type PrismaClient } from '@prisma/client';
 
+/**
+ * Analytics repository.
+ *
+ * GAP-108: every method requires `orgId`. The /analytics/* routes
+ * (analytics.routes.ts) source the orgId from `req.auth.orgId` set by
+ * the tenant-resolution middleware. Without orgId scoping the dashboard
+ * would surface cross-tenant aggregates to every authenticated user —
+ * the most obvious tenant-isolation bug class.
+ *
+ * Platform-staff `aggregate-across-orgs` views live on `/platform/*`
+ * (platform.routes.ts), NOT here. Mixing the two surfaces in one
+ * repository would invite "forgot to gate" regressions.
+ */
+
 export interface IAnalyticsRepository {
-  totalRevenue(args: { from: Date; to: Date }): Promise<string>;
-  approvalRate(args: { from: Date; to: Date }): Promise<{ approved: number; total: number }>;
-  fundingRate(args: { from: Date; to: Date }): Promise<{ funded: number; approved: number }>;
-  activePartnerCount(args: { since: Date }): Promise<number>;
-  pixiePullsLast24h(): Promise<number>;
-  cohorts(): Promise<CohortRow[]>;
-  funnel(args: { from: Date; to: Date }): Promise<FunnelCounts>;
-  partnerLeaderboard(args: { from: Date; to: Date; limit: number }): Promise<LeaderboardRow[]>;
-  tierBreakdown(): Promise<Array<{ tier: string; count: number }>>;
-  liveTail(limit: number): Promise<LiveEvent[]>;
+  totalRevenue(args: { orgId: string; from: Date; to: Date }): Promise<string>;
+  approvalRate(args: {
+    orgId: string;
+    from: Date;
+    to: Date;
+  }): Promise<{ approved: number; total: number }>;
+  fundingRate(args: {
+    orgId: string;
+    from: Date;
+    to: Date;
+  }): Promise<{ funded: number; approved: number }>;
+  activePartnerCount(args: { orgId: string; since: Date }): Promise<number>;
+  pixiePullsLast24h(args: { orgId: string }): Promise<number>;
+  cohorts(args: { orgId: string }): Promise<CohortRow[]>;
+  funnel(args: { orgId: string; from: Date; to: Date }): Promise<FunnelCounts>;
+  partnerLeaderboard(args: {
+    orgId: string;
+    from: Date;
+    to: Date;
+    limit: number;
+  }): Promise<LeaderboardRow[]>;
+  tierBreakdown(args: { orgId: string }): Promise<Array<{ tier: string; count: number }>>;
+  liveTail(args: { orgId: string; limit: number }): Promise<LiveEvent[]>;
 }
 
 export interface CohortRow {
@@ -49,74 +76,106 @@ export interface LiveEvent {
 export class AnalyticsRepository implements IAnalyticsRepository {
   constructor(private readonly prisma: PrismaClient) {}
 
-  async totalRevenue(args: { from: Date; to: Date }): Promise<string> {
+  async totalRevenue(args: { orgId: string; from: Date; to: Date }): Promise<string> {
     const sum = await this.prisma.revenueEvent.aggregate({
-      where: { effectiveAt: { gte: args.from, lte: args.to } },
+      where: { orgId: args.orgId, effectiveAt: { gte: args.from, lte: args.to } },
       _sum: { amount: true },
     });
     return (sum._sum.amount ?? '0').toString();
   }
 
-  async approvalRate(args: { from: Date; to: Date }): Promise<{ approved: number; total: number }> {
+  async approvalRate(args: {
+    orgId: string;
+    from: Date;
+    to: Date;
+  }): Promise<{ approved: number; total: number }> {
     const [approved, total] = await Promise.all([
       this.prisma.lenderDecision.count({
-        where: { decision: 'APPROVED', decisionTimestamp: { gte: args.from, lte: args.to } },
+        where: {
+          orgId: args.orgId,
+          decision: 'APPROVED',
+          decisionTimestamp: { gte: args.from, lte: args.to },
+        },
       }),
       this.prisma.lenderDecision.count({
-        where: { decisionTimestamp: { gte: args.from, lte: args.to } },
+        where: { orgId: args.orgId, decisionTimestamp: { gte: args.from, lte: args.to } },
       }),
     ]);
     return { approved, total };
   }
 
-  async fundingRate(args: { from: Date; to: Date }): Promise<{ funded: number; approved: number }> {
+  async fundingRate(args: {
+    orgId: string;
+    from: Date;
+    to: Date;
+  }): Promise<{ funded: number; approved: number }> {
     const [funded, approved] = await Promise.all([
       this.prisma.lenderDecision.count({
-        where: { fundingStatus: 'FUNDED', fundingTimestamp: { gte: args.from, lte: args.to } },
+        where: {
+          orgId: args.orgId,
+          fundingStatus: 'FUNDED',
+          fundingTimestamp: { gte: args.from, lte: args.to },
+        },
       }),
       this.prisma.lenderDecision.count({
-        where: { decision: 'APPROVED', decisionTimestamp: { gte: args.from, lte: args.to } },
+        where: {
+          orgId: args.orgId,
+          decision: 'APPROVED',
+          decisionTimestamp: { gte: args.from, lte: args.to },
+        },
       }),
     ]);
     return { funded, approved };
   }
 
-  async activePartnerCount(args: { since: Date }): Promise<number> {
+  async activePartnerCount(args: { orgId: string; since: Date }): Promise<number> {
     const rows = await this.prisma.application.findMany({
-      where: { createdAt: { gte: args.since }, partner: { status: 'ACTIVE', deletedAt: null } },
+      where: {
+        orgId: args.orgId,
+        createdAt: { gte: args.since },
+        partner: { status: 'ACTIVE', deletedAt: null },
+      },
       select: { partnerId: true },
       distinct: ['partnerId'],
     });
     return rows.length;
   }
 
-  async pixiePullsLast24h(): Promise<number> {
+  async pixiePullsLast24h(args: { orgId: string }): Promise<number> {
     const since = new Date(Date.now() - 86_400_000);
     const sum = await this.prisma.pixieMetric.aggregate({
-      where: { period: 'DAILY', periodStart: { gte: since } },
+      where: { orgId: args.orgId, period: 'DAILY', periodStart: { gte: since } },
       _sum: { dataPullsThisPeriod: true },
     });
     return sum._sum.dataPullsThisPeriod ?? 0;
   }
 
-  async cohorts(): Promise<CohortRow[]> {
+  async cohorts(args: { orgId: string }): Promise<CohortRow[]> {
     const rows = await this.prisma.$queryRaw<
-      Array<{ cohort_month: string; months_since: number; partner_count: bigint; retained_count: bigint; revenue: string }>
+      Array<{
+        cohort_month: string;
+        months_since: number;
+        partner_count: bigint;
+        retained_count: bigint;
+        revenue: string;
+      }>
     >(Prisma.sql`
       WITH cohorts AS (
         SELECT id AS partner_id,
                date_trunc('month', onboarding_date) AS cohort_month
         FROM partners
-        WHERE deleted_at IS NULL
+        WHERE deleted_at IS NULL AND org_id = ${args.orgId}::uuid
       ),
       activity AS (
         SELECT a.partner_id,
                date_trunc('month', a.created_at) AS activity_month
         FROM applications a
+        WHERE a.org_id = ${args.orgId}::uuid
       ),
       revenue AS (
         SELECT partner_id, date_trunc('month', effective_at) AS rev_month, SUM(amount) AS amt
         FROM revenue_events
+        WHERE org_id = ${args.orgId}::uuid
         GROUP BY 1, 2
       )
       SELECT to_char(c.cohort_month, 'YYYY-MM') AS cohort_month,
@@ -140,22 +199,31 @@ export class AnalyticsRepository implements IAnalyticsRepository {
     }));
   }
 
-  async funnel(args: { from: Date; to: Date }): Promise<FunnelCounts> {
+  async funnel(args: { orgId: string; from: Date; to: Date }): Promise<FunnelCounts> {
     const [submitted, approved, funded] = await Promise.all([
       this.prisma.application.count({
-        where: { submittedAt: { gte: args.from, lte: args.to } },
+        where: { orgId: args.orgId, submittedAt: { gte: args.from, lte: args.to } },
       }),
       this.prisma.application.count({
-        where: { status: { in: ['APPROVED', 'FUNDED'] }, createdAt: { gte: args.from, lte: args.to } },
+        where: {
+          orgId: args.orgId,
+          status: { in: ['APPROVED', 'FUNDED'] },
+          createdAt: { gte: args.from, lte: args.to },
+        },
       }),
       this.prisma.application.count({
-        where: { status: 'FUNDED', createdAt: { gte: args.from, lte: args.to } },
+        where: { orgId: args.orgId, status: 'FUNDED', createdAt: { gte: args.from, lte: args.to } },
       }),
     ]);
     return { submitted, approved, funded };
   }
 
-  async partnerLeaderboard(args: { from: Date; to: Date; limit: number }): Promise<LeaderboardRow[]> {
+  async partnerLeaderboard(args: {
+    orgId: string;
+    from: Date;
+    to: Date;
+    limit: number;
+  }): Promise<LeaderboardRow[]> {
     const rows = await this.prisma.$queryRaw<
       Array<{
         partner_id: string;
@@ -175,9 +243,14 @@ export class AnalyticsRepository implements IAnalyticsRepository {
              COUNT(DISTINCT CASE WHEN a.status='FUNDED' THEN a.id END)::bigint AS funded,
              COALESCE(SUM(re.amount), 0)::text AS revenue
       FROM partners p
-      LEFT JOIN applications  a  ON a.partner_id  = p.id AND a.created_at  BETWEEN ${args.from}::timestamptz AND ${args.to}::timestamptz
-      LEFT JOIN revenue_events re ON re.partner_id = p.id AND re.effective_at BETWEEN ${args.from} AND ${args.to}
+      LEFT JOIN applications  a  ON a.partner_id  = p.id
+            AND a.org_id = ${args.orgId}::uuid
+            AND a.created_at  BETWEEN ${args.from}::timestamptz AND ${args.to}::timestamptz
+      LEFT JOIN revenue_events re ON re.partner_id = p.id
+            AND re.org_id = ${args.orgId}::uuid
+            AND re.effective_at BETWEEN ${args.from} AND ${args.to}
       WHERE p.deleted_at IS NULL
+        AND p.org_id = ${args.orgId}::uuid
       GROUP BY p.id, p.name, p.tier
       ORDER BY revenue DESC
       LIMIT ${args.limit}
@@ -193,45 +266,56 @@ export class AnalyticsRepository implements IAnalyticsRepository {
     }));
   }
 
-  async tierBreakdown(): Promise<Array<{ tier: string; count: number }>> {
+  async tierBreakdown(args: { orgId: string }): Promise<Array<{ tier: string; count: number }>> {
     const rows = await this.prisma.partner.groupBy({
       by: ['tier'],
-      where: { deletedAt: null, status: 'ACTIVE' },
+      where: { orgId: args.orgId, deletedAt: null, status: 'ACTIVE' },
       _count: { _all: true },
     });
     return rows.map((r) => ({ tier: r.tier, count: r._count._all }));
   }
 
-  async liveTail(limit: number): Promise<LiveEvent[]> {
+  async liveTail(args: { orgId: string; limit: number }): Promise<LiveEvent[]> {
     const rows = await this.prisma.$queryRaw<
-      Array<{ event_time: Date; kind: string; partner_id: string; partner_name: string; description: string; amount: string | null }>
+      Array<{
+        event_time: Date;
+        kind: string;
+        partner_id: string;
+        partner_name: string;
+        description: string;
+        amount: string | null;
+      }>
     >(Prisma.sql`
       (SELECT a.created_at AS event_time, 'application' AS kind, a.partner_id, p.name AS partner_name,
               'Application '||a.external_application_id||' · '||a.status::text AS description,
               NULL::text AS amount
        FROM applications a JOIN partners p ON p.id=a.partner_id
-       ORDER BY a.created_at DESC LIMIT ${limit})
+       WHERE a.org_id = ${args.orgId}::uuid
+       ORDER BY a.created_at DESC LIMIT ${args.limit})
       UNION ALL
       (SELECT decision_timestamp AS event_time, 'decision' AS kind, ld.partner_id, p.name,
               ld.lender_name||' '||ld.decision::text,
               ld.approval_amount::text
        FROM lender_decisions ld JOIN partners p ON p.id=ld.partner_id
-       ORDER BY decision_timestamp DESC LIMIT ${limit})
+       WHERE ld.org_id = ${args.orgId}::uuid
+       ORDER BY decision_timestamp DESC LIMIT ${args.limit})
       UNION ALL
       (SELECT funding_timestamp AS event_time, 'funding' AS kind, ld.partner_id, p.name,
               'Funding '||ld.funding_status::text,
               ld.funding_amount::text
        FROM lender_decisions ld JOIN partners p ON p.id=ld.partner_id
        WHERE funding_timestamp IS NOT NULL
-       ORDER BY funding_timestamp DESC LIMIT ${limit})
+         AND ld.org_id = ${args.orgId}::uuid
+       ORDER BY funding_timestamp DESC LIMIT ${args.limit})
       UNION ALL
       (SELECT effective_at AS event_time, 'revenue' AS kind, re.partner_id, p.name,
               re.stream::text||' '||re.event_type::text,
               re.amount::text
        FROM revenue_events re JOIN partners p ON p.id=re.partner_id
-       ORDER BY effective_at DESC LIMIT ${limit})
+       WHERE re.org_id = ${args.orgId}::uuid
+       ORDER BY effective_at DESC LIMIT ${args.limit})
       ORDER BY event_time DESC
-      LIMIT ${limit}
+      LIMIT ${args.limit}
     `);
     return rows.map((r) => ({
       eventTime: r.event_time.toISOString(),

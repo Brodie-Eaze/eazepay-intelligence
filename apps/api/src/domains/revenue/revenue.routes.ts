@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { getPrismaReader } from '../../config/database.js';
+import { errors } from '../../shared/errors/app-error.js';
 import { requireAuth } from '../../shared/middleware/auth.middleware.js';
 import { denyInvestorScope } from '../../shared/middleware/rbac.middleware.js';
 import { writeAuditLog } from '../../shared/middleware/audit-log.middleware.js';
@@ -16,12 +17,19 @@ const RangeQuery = z.object({
   limit: z.coerce.number().int().min(1).max(50).optional(),
 });
 
+/** GAP-108: revenue surfaces are org-scoped. Mirror of analytics.routes. */
+function requireOrgScope(orgId: string | undefined): string {
+  if (!orgId) throw errors.badRequest('Revenue queries require an active organisation');
+  return orgId;
+}
+
 export async function registerRevenueRoutes(app: FastifyInstance): Promise<void> {
   const service = new RevenueService(new RevenueRepository(getPrismaReader()));
 
   app.get('/revenue/ledger', { preHandler: [requireAuth, denyInvestorScope] }, async (req) => {
     const query = RevenueLedgerQuerySchema.parse(req.query);
-    const page = await service.ledger(query);
+    const orgId = requireOrgScope(req.auth?.orgId);
+    const page = await service.ledger(orgId, query);
     return {
       data: page.data.map((r) => ({
         idempotencyKey: r.idempotencyKey,
@@ -43,12 +51,14 @@ export async function registerRevenueRoutes(app: FastifyInstance): Promise<void>
 
   app.get('/revenue/by-stream', { preHandler: requireAuth }, async (req) => {
     const query = RevenueByStreamQuerySchema.parse(req.query);
-    return service.byStream(query);
+    const orgId = requireOrgScope(req.auth?.orgId);
+    return service.byStream(orgId, query);
   });
 
   app.get('/revenue/by-partner', { preHandler: requireAuth }, async (req) => {
     const q = RangeQuery.parse(req.query);
-    const rows = await service.byPartner({ from: q.from, to: q.to, limit: q.limit });
+    const orgId = requireOrgScope(req.auth?.orgId);
+    const rows = await service.byPartner(orgId, { from: q.from, to: q.to, limit: q.limit });
     const isInvestor = req.auth!.scope === 'investor';
     return rows.map((r) => ({
       partnerId: r.partnerId,
@@ -70,8 +80,9 @@ export async function registerRevenueRoutes(app: FastifyInstance): Promise<void>
     { preHandler: [requireAuth, denyInvestorScope] },
     async (req, reply) => {
       const q = ExportQuery.parse(req.query);
+      const orgId = requireOrgScope(req.auth?.orgId);
       // Pull all rows matching the filter (one page, large cap)
-      const page = await service.ledger({ ...q, limit: 50_000, cursor: undefined });
+      const page = await service.ledger(orgId, { ...q, limit: 50_000, cursor: undefined });
 
       await writeAuditLog({
         req,
@@ -125,7 +136,8 @@ export async function registerRevenueRoutes(app: FastifyInstance): Promise<void>
 
   app.get('/revenue/clawbacks', { preHandler: [requireAuth, denyInvestorScope] }, async (req) => {
     const q = RangeQuery.parse(req.query);
-    const rows = await service.clawbacks({ from: q.from, to: q.to });
+    const orgId = requireOrgScope(req.auth?.orgId);
+    const rows = await service.clawbacks(orgId, { from: q.from, to: q.to });
     return rows.map((r) => ({
       idempotencyKey: r.idempotencyKey,
       partnerId: r.partnerId,

@@ -45,6 +45,7 @@ describe('PortfolioRepository — verticals', () => {
     } as never;
     const repo = new PortfolioRepository(writer);
     const out = await repo.upsertVertical({
+      orgId: '00000000-0000-0000-0000-000000000001',
       slug: 'coaching',
       name: 'Coaching',
       description: 'desc',
@@ -71,7 +72,11 @@ describe('PortfolioRepository — verticals', () => {
       },
     } as never;
     const repo = new PortfolioRepository(writer);
-    await repo.upsertVertical({ slug: 'medical', name: 'Medical' });
+    await repo.upsertVertical({
+      orgId: '00000000-0000-0000-0000-000000000001',
+      slug: 'medical',
+      name: 'Medical',
+    });
     const args = captured[0] as { create: { description: string } };
     expect(args.create.description).toBe('');
   });
@@ -116,6 +121,7 @@ describe('PortfolioRepository — businesses', () => {
     } as never;
     const repo = new PortfolioRepository(writer);
     await repo.upsertBusiness({
+      orgId: '00000000-0000-0000-0000-000000000001',
       slug: 'apex',
       name: 'Apex',
       verticalSlug: 'coaching',
@@ -216,7 +222,11 @@ describe('PortfolioRepository — replace-set tx semantics', () => {
         apBalance: 12,
       },
     ];
-    const n = await repo.replaceFinancialPeriods('apex', periods);
+    const n = await repo.replaceFinancialPeriods(
+      'apex',
+      '00000000-0000-0000-0000-000000000001',
+      periods,
+    );
     expect(n).toBe(1);
     expect(h.txOps.portfolioFinancialPeriod.deleteMany).toHaveBeenCalledOnce();
     expect(h.txOps.portfolioFinancialPeriod.createMany).toHaveBeenCalledOnce();
@@ -227,7 +237,11 @@ describe('PortfolioRepository — replace-set tx semantics', () => {
       await import('../../src/domains/portfolio/portfolio.repository.js');
     const h = buildTxHarness();
     const repo = new PortfolioRepository(h.writer);
-    const n = await repo.replaceFinancialPeriods('apex', []);
+    const n = await repo.replaceFinancialPeriods(
+      'apex',
+      '00000000-0000-0000-0000-000000000001',
+      [],
+    );
     expect(n).toBe(0);
     expect(h.txOps.portfolioFinancialPeriod.deleteMany).toHaveBeenCalledOnce();
     expect(h.txOps.portfolioFinancialPeriod.createMany).not.toHaveBeenCalled();
@@ -239,7 +253,7 @@ describe('PortfolioRepository — replace-set tx semantics', () => {
     const h = buildTxHarness();
     const repo = new PortfolioRepository(h.writer);
     const asOf = new Date('2026-05-07');
-    await repo.replaceChannels('apex', asOf, [
+    await repo.replaceChannels('apex', '00000000-0000-0000-0000-000000000001', asOf, [
       { channel: 'Paid social', revenue: 100, customers: 10, share: 0.5 },
     ]);
     const calls = h.txOps.portfolioRevenueChannel.deleteMany.mock.calls as unknown as Array<
@@ -256,7 +270,7 @@ describe('PortfolioRepository — replace-set tx semantics', () => {
       await import('../../src/domains/portfolio/portfolio.repository.js');
     const h = buildTxHarness();
     const repo = new PortfolioRepository(h.writer);
-    await repo.replaceCohorts('apex', [
+    await repo.replaceCohorts('apex', '00000000-0000-0000-0000-000000000001', [
       { cohortMonth: new Date('2026-01-01'), customers: 100, m0: 1, m3: 0.6, m6: 0.4, m12: 0.3 },
     ]);
     const cohortCalls = h.txOps.portfolioCohort.deleteMany.mock.calls as unknown as Array<

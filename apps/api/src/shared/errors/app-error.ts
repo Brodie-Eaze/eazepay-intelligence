@@ -40,6 +40,14 @@ export const errors = {
   forbidden: (message = 'Insufficient permissions') =>
     new AppError({ statusCode: 403, errorCode: 'FORBIDDEN', message }),
 
+  /**
+   * Dedicated code for MFA step-up rejection (Phase H frontend rounding).
+   * The dashboard intercepts this on the response and prompts the user
+   * for a TOTP without parsing the error message string.
+   */
+  mfaStepUpRequired: (message = 'MFA step-up required') =>
+    new AppError({ statusCode: 403, errorCode: 'MFA_STEP_UP_REQUIRED', message }),
+
   notFound: (resource: string, id?: string) =>
     new AppError({
       statusCode: 404,
@@ -63,7 +71,11 @@ export const errors = {
     }),
 
   invalidSignature: () =>
-    new AppError({ statusCode: 401, errorCode: 'INVALID_SIGNATURE', message: 'Webhook signature invalid' }),
+    new AppError({
+      statusCode: 401,
+      errorCode: 'INVALID_SIGNATURE',
+      message: 'Webhook signature invalid',
+    }),
 
   internal: (message = 'Internal server error', cause?: unknown) =>
     new AppError({ statusCode: 500, errorCode: 'INTERNAL', message, cause }),

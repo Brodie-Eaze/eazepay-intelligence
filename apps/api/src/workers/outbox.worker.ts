@@ -31,6 +31,7 @@ import { enqueueWebhook } from '../shared/queues/webhook.queue.js';
 import { enqueueWebhookDelivery } from '../shared/queues/webhook-delivery.queue.js';
 import { getRedisPublisher } from '../config/redis.js';
 import { WS_CHANNEL } from '../shared/utils/ws-publisher.js';
+import { outboxSweptTotal, outboxLagSeconds } from '../shared/metrics/metrics.js';
 
 // Outbox sweep cadence + batch size. Defaults are deliberately conservative —
 // at 100 events / 1s sweep we drain 6,000 events/min per replica, scaling
@@ -38,6 +39,10 @@ import { WS_CHANNEL } from '../shared/utils/ws-publisher.js';
 // batches across replicas). See docs/COMPUTE_LIMITS.md for sizing.
 const POLL_INTERVAL_MS = Number(process.env.OUTBOX_POLL_INTERVAL_MS ?? 1_000);
 const BATCH_SIZE = Number(process.env.OUTBOX_BATCH_SIZE ?? 100);
+// Phase 7 (SF-006): after this many failed dispatches the sweeper stops
+// re-claiming the row and stamps dlqedAt. Operators reconcile manually.
+// 10 attempts ≈ minutes-to-hours of retries before quarantine; tunable.
+const MAX_ATTEMPTS = Number(process.env.OUTBOX_MAX_ATTEMPTS ?? 10);
 
 interface OutboxRow {
   id: string;
@@ -60,10 +65,21 @@ async function processOnce(): Promise<number> {
   // for the whole batch. BullMQ enqueue is sub-ms in practice, so the
   // serialised dispatch loop is not a meaningful contention source.
   return prisma.$transaction(async (tx) => {
+    // Phase 1.6 (RLS): the eazepay_app runtime role is NOBYPASSRLS and
+    // outbox_events is policy-gated on app.org_id OR app.outbox_sweeper.
+    // The sweeper claims rows cross-tenant so we set the escape GUC; the
+    // RLS migration explicitly carves this out for the sweeper alone.
+    // Without this, post-role-deploy every sweep returns zero rows and
+    // webhooks accumulate forever.
+    await tx.$executeRaw`SELECT set_config('app.outbox_sweeper', 'true', true)`;
+    // Phase 7 (SF-006): exclude DLQ'd rows. Poison-pill rows that crossed
+    // MAX_ATTEMPTS were stamped dlqed_at and are out of the sweep set
+    // until an operator clears the marker.
     const claimed = await tx.$queryRaw<OutboxRow[]>(Prisma.sql`
       SELECT id, kind, payload, attempt_count
       FROM outbox_events
       WHERE published_at IS NULL
+        AND dlqed_at IS NULL
       ORDER BY created_at ASC
       LIMIT ${BATCH_SIZE}
       FOR UPDATE SKIP LOCKED
@@ -78,16 +94,41 @@ async function processOnce(): Promise<number> {
           where: { id: row.id },
           data: { publishedAt: new Date(), publishError: null },
         });
+        outboxSweptTotal.inc({ kind: row.kind, outcome: 'published' });
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
-        log.error(
-          { outboxId: row.id, kind: row.kind, attempt: row.attempt_count + 1, err: msg },
-          'outbox.publish.fail',
-        );
+        const nextAttempt = row.attempt_count + 1;
+        // Phase 7 (SF-006): on attempt MAX_ATTEMPTS, stamp dlqedAt and
+        // log loudly with a stable errorId so on-call sees the quarantine.
+        // No silent escalation — the row stays in the DB but stops sweeping.
+        const dlq = nextAttempt >= MAX_ATTEMPTS;
+        if (dlq) {
+          log.error(
+            {
+              outboxId: row.id,
+              kind: row.kind,
+              attempts: nextAttempt,
+              maxAttempts: MAX_ATTEMPTS,
+              errorId: 'outbox.dlq.quarantined',
+              err: msg,
+            },
+            'outbox.dlq.quarantined — manual reconciliation needed',
+          );
+        } else {
+          log.error(
+            { outboxId: row.id, kind: row.kind, attempt: nextAttempt, err: msg },
+            'outbox.publish.fail',
+          );
+        }
         await tx.outboxEvent.update({
           where: { id: row.id },
-          data: { attemptCount: row.attempt_count + 1, publishError: msg.slice(0, 1000) },
+          data: {
+            attemptCount: nextAttempt,
+            publishError: msg.slice(0, 1000),
+            dlqedAt: dlq ? new Date() : undefined,
+          },
         });
+        outboxSweptTotal.inc({ kind: row.kind, outcome: dlq ? 'dlq' : 'failed' });
       }
     }
 

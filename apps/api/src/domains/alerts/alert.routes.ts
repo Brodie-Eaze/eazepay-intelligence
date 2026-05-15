@@ -24,6 +24,7 @@ import { csrfGuard } from '../../shared/middleware/csrf.middleware.js';
 import { requireRole } from '../../shared/middleware/rbac.middleware.js';
 import { writeAuditLog } from '../../shared/middleware/audit-log.middleware.js';
 import { errors } from '../../shared/errors/app-error.js';
+import { getBootstrapOrgId } from '../../shared/tenant/bootstrap-org.js';
 
 const ChannelSchema = z.object({
   name: z.string().min(1).max(80),
@@ -66,9 +67,17 @@ export async function registerAlertRoutes(app: FastifyInstance): Promise<void> {
     '/notification-channels',
     { preHandler: [requireAuth, csrfGuard, requireRole('ADMIN')] },
     async (req, reply) => {
+      const auth = req.auth!;
       const input = ChannelSchema.parse(req.body);
+      const orgId = auth.orgId ?? (await getBootstrapOrgId(prisma));
       const created = await prisma.notificationChannel.create({
-        data: { id: uuidv7(), name: input.name, kind: input.kind, config: input.config as object },
+        data: {
+          id: uuidv7(),
+          orgId,
+          name: input.name,
+          kind: input.kind,
+          config: input.config as object,
+        },
       });
       reply.status(201);
       return { id: created.id };
@@ -116,10 +125,13 @@ export async function registerAlertRoutes(app: FastifyInstance): Promise<void> {
     '/alert-rules',
     { preHandler: [requireAuth, csrfGuard, requireRole('ADMIN')] },
     async (req, reply) => {
+      const auth = req.auth!;
       const input = RuleSchema.parse(req.body);
+      const orgId = auth.orgId ?? (await getBootstrapOrgId(prisma));
       const created = await prisma.alertRule.create({
         data: {
           id: uuidv7(),
+          orgId,
           name: input.name,
           description: input.description ?? null,
           query: input.query as object,

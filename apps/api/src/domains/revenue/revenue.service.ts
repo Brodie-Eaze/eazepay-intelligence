@@ -6,13 +6,14 @@ import type { RevenueByStreamQuery, RevenueLedgerQuery } from './revenue.schemas
 export class RevenueService {
   constructor(private readonly repo: IRevenueRepository) {}
 
-  async ledger(query: RevenueLedgerQuery): Promise<Paginated<RevenueEvent>> {
+  async ledger(orgId: string, query: RevenueLedgerQuery): Promise<Paginated<RevenueEvent>> {
     let cursor: { effectiveAt: Date; idempotencyKey: string } | undefined;
     if (query.cursor) {
       const decoded = parseCursor(query.cursor);
       if (decoded) cursor = { effectiveAt: decoded.createdAt, idempotencyKey: decoded.id };
     }
     const rows = await this.repo.list({
+      orgId,
       partnerId: query.partnerId,
       stream: query.stream,
       eventType: query.eventType,
@@ -26,32 +27,42 @@ export class RevenueService {
     return paginate(projected, query.limit);
   }
 
-  byStream(query: RevenueByStreamQuery): Promise<Awaited<ReturnType<IRevenueRepository['sumByStream']>>> {
+  byStream(
+    orgId: string,
+    query: RevenueByStreamQuery,
+  ): Promise<Awaited<ReturnType<IRevenueRepository['sumByStream']>>> {
     return this.repo.sumByStream({
+      orgId,
       from: query.from ? new Date(query.from) : undefined,
       to: query.to ? new Date(query.to) : undefined,
       bucket: query.bucket,
     });
   }
 
-  byPartner(args: { from?: string; to?: string; limit?: number }): Promise<Awaited<ReturnType<IRevenueRepository['topPartners']>>> {
+  byPartner(
+    orgId: string,
+    args: { from?: string; to?: string; limit?: number },
+  ): Promise<Awaited<ReturnType<IRevenueRepository['topPartners']>>> {
     return this.repo.topPartners({
+      orgId,
       from: args.from ? new Date(args.from) : undefined,
       to: args.to ? new Date(args.to) : undefined,
       limit: args.limit ?? 10,
     });
   }
 
-  total(args: { from?: string; to?: string; partnerId?: string }): Promise<string> {
+  total(orgId: string, args: { from?: string; to?: string; partnerId?: string }): Promise<string> {
     return this.repo.total({
+      orgId,
       from: args.from ? new Date(args.from) : undefined,
       to: args.to ? new Date(args.to) : undefined,
       partnerId: args.partnerId,
     });
   }
 
-  clawbacks(args: { from?: string; to?: string }): Promise<RevenueEvent[]> {
+  clawbacks(orgId: string, args: { from?: string; to?: string }): Promise<RevenueEvent[]> {
     return this.repo.clawbacks({
+      orgId,
       from: args.from ? new Date(args.from) : undefined,
       to: args.to ? new Date(args.to) : undefined,
     });

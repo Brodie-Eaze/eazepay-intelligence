@@ -9,10 +9,23 @@ import { getEnv } from './config/env.js';
 import { getLogger } from './config/logger.js';
 import { disconnectPrisma } from './config/database.js';
 import { disconnectRedis } from './config/redis.js';
+import { registerExportStorageFromEnv } from './shared/storage/index.js';
+import { bootstrapLenderAdapters } from './domains/lenders/adapter/bootstrap.js';
 
 async function main(): Promise<void> {
   const env = getEnv();
   const log = getLogger();
+
+  // GAP-109: register the export-storage backend (local-disk or s3)
+  // based on EXPORT_STORAGE_DRIVER. Fail-closed: an unknown driver,
+  // missing s3 env vars, or missing aws-sdk dependency throws here,
+  // before buildServer touches the route handlers that depend on it.
+  await registerExportStorageFromEnv();
+
+  // GAP-101: register every LenderAdapter the process knows about.
+  // Idempotent — re-calling is a no-op.
+  bootstrapLenderAdapters();
+
   const app = await buildServer();
 
   try {

@@ -394,6 +394,9 @@ describe('cryptoshredOrg', () => {
     const disabled: string[] = [];
     const scheduled: Array<{ kekKeyId: string; pendingDays: number }> = [];
     setKmsClient({
+      // Test mock simulates a production-grade KMS so cryptoshredOrg's
+      // guard (refuses LocalKmsClient) is satisfied. See SF-004.
+      isProductionGrade: true,
       generateDataKey: () => Promise.reject(new Error('not used')),
       wrapDataKey: () => Promise.reject(new Error('not used')),
       unwrapDataKey: () => Promise.reject(new Error('not used')),
@@ -466,6 +469,10 @@ describe('cryptoshredOrg', () => {
     ];
     const { prisma } = buildShredStubPrisma(rows);
     setKmsClient({
+      // Test mock simulates a production-grade KMS so cryptoshredOrg's
+      // guard is satisfied; this test specifically exercises the
+      // disableKey + scheduleKeyDeletion failure path. See SF-004.
+      isProductionGrade: true,
       generateDataKey: () => Promise.reject(new Error('not used')),
       wrapDataKey: () => Promise.reject(new Error('not used')),
       unwrapDataKey: () => Promise.reject(new Error('not used')),

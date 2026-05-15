@@ -10,7 +10,7 @@ export interface ListPartnersFilter {
 
 export interface IPartnerRepository {
   findById(id: string): Promise<Partner | null>;
-  findByExternalId(externalId: string): Promise<Partner | null>;
+  findByExternalId(orgId: string, externalId: string): Promise<Partner | null>;
   list(filter: ListPartnersFilter): Promise<Partner[]>;
   create(data: Prisma.PartnerUncheckedCreateInput): Promise<Partner>;
   update(id: string, data: Prisma.PartnerUpdateInput): Promise<Partner>;
@@ -24,8 +24,11 @@ export class PartnerRepository implements IPartnerRepository {
     return this.prisma.partner.findFirst({ where: { id, deletedAt: null } });
   }
 
-  findByExternalId(externalId: string): Promise<Partner | null> {
-    return this.prisma.partner.findFirst({ where: { externalId, deletedAt: null } });
+  findByExternalId(orgId: string, externalId: string): Promise<Partner | null> {
+    // Phase 1 retrofit: externalId is unique per-org now, not globally.
+    return this.prisma.partner.findFirst({
+      where: { orgId, externalId, deletedAt: null },
+    });
   }
 
   async list(filter: ListPartnersFilter): Promise<Partner[]> {

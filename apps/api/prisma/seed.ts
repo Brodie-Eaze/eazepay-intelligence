@@ -14,7 +14,12 @@ const prisma = new PrismaClient();
 
 const INDUSTRIES = ['Auto Repair', 'Dental', 'Furniture', 'HVAC', 'Roofing', 'Veterinary'];
 const TIERS = ['BRONZE', 'SILVER', 'GOLD'] as const;
-const LENDERS: Array<{ name: string; tier: 'PRIME' | 'NEAR_PRIME' | 'SUBPRIME' | 'CARD_LINKED'; aprMin: number; aprMax: number }> = [
+const LENDERS: Array<{
+  name: string;
+  tier: 'PRIME' | 'NEAR_PRIME' | 'SUBPRIME' | 'CARD_LINKED';
+  aprMin: number;
+  aprMax: number;
+}> = [
   { name: 'Helix Prime', tier: 'PRIME', aprMin: 6.99, aprMax: 12.5 },
   { name: 'Bridge Capital', tier: 'NEAR_PRIME', aprMin: 14.99, aprMax: 24.99 },
   { name: 'Last Chance Lending', tier: 'SUBPRIME', aprMin: 28.99, aprMax: 35.99 },
@@ -30,6 +35,29 @@ function rangeInt(min: number, max: number): number {
 async function main(): Promise<void> {
   console.log('▶ seeding EazePay Intelligence');
 
+  // Phase 1 retrofit: every tenant-scoped row needs an org_id. The seed
+  // attaches everything it creates to the bootstrap org (slug='default')
+  // which is created by migration 20260508145000.
+  // SEC-203 (production-safety): refuse to seed against a prod-tagged
+  // database. The blocks below provision demo users (admin/operator/
+  // viewer/investor) with literal password 'Demo!1234' — running them
+  // against prod would create four known-password backdoor accounts.
+  // The 7 launch-business orgs that real prod needs are provisioned
+  // by migration 20260515200000_gap103_provision_launch_business_orgs,
+  // not by this seed. Prod deploys run `prisma migrate deploy`, not
+  // `db:seed`.
+  if (process.env.NODE_ENV === 'production') {
+    console.log('▶ NODE_ENV=production — refusing to seed demo data.');
+    console.log('  Launch-business orgs are provisioned by the migration.');
+    return;
+  }
+
+  const bootstrapOrg = await prisma.organization.findUniqueOrThrow({
+    where: { slug: 'default' },
+    select: { id: true },
+  });
+  const orgId = bootstrapOrg.id;
+
   // ─── Users ────────────────────────────────────────────────────────────────
   const adminHash = await argon2.hash('Demo!1234', { type: argon2.argon2id });
   const viewerHash = adminHash;
@@ -40,17 +68,32 @@ async function main(): Promise<void> {
   });
   await prisma.user.upsert({
     where: { email: 'operator@eazepay.local' },
-    create: { id: uuidv7(), email: 'operator@eazepay.local', passwordHash: adminHash, role: 'OPERATOR' },
+    create: {
+      id: uuidv7(),
+      email: 'operator@eazepay.local',
+      passwordHash: adminHash,
+      role: 'OPERATOR',
+    },
     update: {},
   });
   await prisma.user.upsert({
     where: { email: 'viewer@eazepay.local' },
-    create: { id: uuidv7(), email: 'viewer@eazepay.local', passwordHash: viewerHash, role: 'VIEWER' },
+    create: {
+      id: uuidv7(),
+      email: 'viewer@eazepay.local',
+      passwordHash: viewerHash,
+      role: 'VIEWER',
+    },
     update: {},
   });
   await prisma.user.upsert({
     where: { email: 'investor@eazepay.local' },
-    create: { id: uuidv7(), email: 'investor@eazepay.local', passwordHash: viewerHash, role: 'INVESTOR' },
+    create: {
+      id: uuidv7(),
+      email: 'investor@eazepay.local',
+      passwordHash: viewerHash,
+      role: 'INVESTOR',
+    },
     update: {},
   });
 
@@ -62,12 +105,25 @@ async function main(): Promise<void> {
     const cost = 1.0;
     const charge = 3.0;
     const partner = await prisma.partner.upsert({
-      where: { externalId },
+      where: { orgId_externalId: { orgId, externalId } },
       create: {
         id: uuidv7(),
+        orgId,
         externalId,
-        name: ['Apex Auto', 'Bright Dental', 'Cozy Couches', 'Delta HVAC', 'Eagle Roofing', 'Furry Friends Vet',
-               'Gold Coast Auto', 'Harbor Dental', 'Inland Furniture', 'Jet Stream HVAC', 'Keystone Roofing', 'Loyal Companions Vet'][i]!,
+        name: [
+          'Apex Auto',
+          'Bright Dental',
+          'Cozy Couches',
+          'Delta HVAC',
+          'Eagle Roofing',
+          'Furry Friends Vet',
+          'Gold Coast Auto',
+          'Harbor Dental',
+          'Inland Furniture',
+          'Jet Stream HVAC',
+          'Keystone Roofing',
+          'Loyal Companions Vet',
+        ][i]!,
         industry: INDUSTRIES[i % INDUSTRIES.length]!,
         onboardingDate: new Date(Date.now() - (365 - i * 25) * 86_400_000),
         status: 'ACTIVE',
@@ -87,14 +143,16 @@ async function main(): Promise<void> {
   for (let i = 0; i < 600; i += 1) {
     const partner = rand(partners);
     const externalApplicationId = `APP-${String(i + 1).padStart(6, '0')}`;
-    const existing = await prisma.application.findUnique({ where: { externalApplicationId } });
+    const existing = await prisma.application.findUnique({
+      where: { orgId_externalApplicationId: { orgId, externalApplicationId } },
+    });
     if (existing) continue;
     const created = new Date(Date.now() - rangeInt(0, 90) * 86_400_000);
     const status = pickWeighted([
       ['SUBMITTED', 0.25],
-      ['IN_REVIEW', 0.10],
-      ['APPROVED', 0.10],
-      ['DECLINED', 0.20],
+      ['IN_REVIEW', 0.1],
+      ['APPROVED', 0.1],
+      ['DECLINED', 0.2],
       ['FUNDED', 0.35],
     ] as const);
 
@@ -105,6 +163,7 @@ async function main(): Promise<void> {
     const app = await prisma.application.create({
       data: {
         id: uuidv7(),
+        orgId,
         partnerId: partner.id,
         externalApplicationId,
         consumerNameCiphertext: name.ciphertext,
@@ -119,7 +178,7 @@ async function main(): Promise<void> {
         merchantPreapproval: Math.random() > 0.6,
         consumerPreapproval: Math.random() > 0.4,
         fundingEstimate: new Prisma.Decimal(rangeInt(2_000, 25_000)),
-        propensityScore: new Prisma.Decimal((Math.random()).toFixed(4)),
+        propensityScore: new Prisma.Decimal(Math.random().toFixed(4)),
         openLinesOfCredit: rangeInt(0, 8),
         status,
         submittedAt: created,
@@ -133,12 +192,14 @@ async function main(): Promise<void> {
       const lender = rand(LENDERS);
       const decisionAt = new Date(created.getTime() + 60 * 60_000);
       const decision = status === 'DECLINED' ? 'DECLINED' : 'APPROVED';
-      const apr = decision === 'APPROVED' ? rangeInt(lender.aprMin * 100, lender.aprMax * 100) / 100 : null;
+      const apr =
+        decision === 'APPROVED' ? rangeInt(lender.aprMin * 100, lender.aprMax * 100) / 100 : null;
       const approvalAmt = decision === 'APPROVED' ? rangeInt(2_000, 25_000) : null;
 
       const decisionRow = await prisma.lenderDecision.create({
         data: {
           id: uuidv7(),
+          orgId,
           applicationId: app.id,
           partnerId: partner.id,
           lenderName: lender.name,
@@ -149,8 +210,10 @@ async function main(): Promise<void> {
           apr: apr ? new Prisma.Decimal(apr) : null,
           term: decision === 'APPROVED' ? rand([12, 24, 36, 48, 60]) : null,
           fundingStatus: status === 'FUNDED' ? 'FUNDED' : 'PENDING',
-          fundingTimestamp: status === 'FUNDED' ? new Date(decisionAt.getTime() + 24 * 60 * 60_000) : null,
-          fundingAmount: status === 'FUNDED' && approvalAmt ? new Prisma.Decimal(approvalAmt) : null,
+          fundingTimestamp:
+            status === 'FUNDED' ? new Date(decisionAt.getTime() + 24 * 60 * 60_000) : null,
+          fundingAmount:
+            status === 'FUNDED' && approvalAmt ? new Prisma.Decimal(approvalAmt) : null,
         },
       });
 
@@ -158,6 +221,7 @@ async function main(): Promise<void> {
         const eazepayCut = approvalAmt * 0.05; // 5% origination-share placeholder
         await prisma.revenueEvent.create({
           data: {
+            orgId,
             partnerId: partner.id,
             lenderDecisionId: decisionRow.id,
             source: 'BUZZPAY',
@@ -173,6 +237,7 @@ async function main(): Promise<void> {
         if (Math.random() < 0.05) {
           await prisma.revenueEvent.create({
             data: {
+              orgId,
               partnerId: partner.id,
               lenderDecisionId: decisionRow.id,
               source: 'BUZZPAY',
@@ -208,6 +273,7 @@ async function main(): Promise<void> {
       await prisma.pixieMetric.upsert({
         where: { periodStart_partnerId_period: { periodStart, partnerId: p.id, period: 'DAILY' } },
         create: {
+          orgId,
           partnerId: p.id,
           period: 'DAILY',
           periodStart,
@@ -234,6 +300,7 @@ async function main(): Promise<void> {
             },
           },
           create: {
+            orgId,
             partnerId: p.id,
             source: 'PIXIE',
             stream: 'PIXIE',

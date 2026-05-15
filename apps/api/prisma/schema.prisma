@@ -32,9 +32,17 @@ enum ApplicationStatus {
   PENDING
   SUBMITTED
   IN_REVIEW
+  // GAP-102: EazePay App contract uses OFFERED (when lender offers are
+  // presented to consumer) + CONTRACTED (when consumer accepts contract).
+  // Both are required for the App platform-sink drain handlers to write
+  // the correct status transition. QUARANTINE is for `brand: "direct"`
+  // events that have no resolved org until product decides ownership.
+  OFFERED
   APPROVED
+  CONTRACTED
   DECLINED
   FUNDED
+  QUARANTINE
 }
 
 enum LenderTier {
@@ -91,6 +99,15 @@ enum RevenueStream {
   BUZZPAY
   PIXIE
   MICAMP
+  // GAP-100: EazePay App platform-sink revenue (medpay / tradepay /
+  // coachpay merchant fees, commissions, loan repayment-derived events).
+  EAZEPAY_APP
+  // GAP-105: HighSale business-unit revenue (snapshot fees, risk-band-
+  // assignment commercials).
+  HIGHSALE
+  // GAP-103 / GAP-104: Aurean AI + Recruitment business-unit revenue.
+  AUREAN_AI
+  AUREAN_RECRUITMENT
 }
 
 enum RevenueEventType {
@@ -101,12 +118,30 @@ enum RevenueEventType {
   PIXIE_MARGIN
   PROCESSING_FEE
   ADJUSTMENT
+  // GAP-100: EazePay App platform fee on funded contracts.
+  MERCHANT_FEE
+  // GAP-100: per-loan commission (repayment-derived).
+  COMMISSION
 }
 
 enum WebhookSource {
+  // BUZZPAY retired (Phase B). Enum value persists until the dedicated
+  // Phase C cleanup migration drops it; see docs/cuts/buzzpay-removal.md.
   BUZZPAY
   PIXIE
   MICAMP
+  // GAP-100: EazePay App platform-sink. Enables persistence of every
+  // App-side application / merchant / commission event.
+  EAZEPAY_APP
+  // GAP-105: HighSale as a business unit (operational events: inquiry,
+  // snapshot lifecycle, risk-band assignment). Distinct from the Plane-2
+  // /integration/highsale/snapshots route which writes credit_enrichments.
+  HIGHSALE
+  // GAP-103: Aurean AI operational events (inference, scoring, revenue).
+  AUREAN_AI
+  // GAP-104: Aurean Recruitment operational events (placement, commission,
+  // pipeline transitions).
+  AUREAN_RECRUITMENT
 }
 
 enum WebhookProcessingStatus {
@@ -114,13 +149,20 @@ enum WebhookProcessingStatus {
   PROCESSED
   FAILED
   REPLAYED
+  // GAP-100: drain handler couldn't normalise the event (unmapped brand,
+  // unknown partner). Row stays raw + operator-reviewable; the worker
+  // stops retrying. Triage via /platform/orgs/:id/eazepay-app/quarantine.
+  QUARANTINED
 }
 
 // ─── Partner ────────────────────────────────────────────────────────────────
 
 model Partner {
   id                 String        @id @db.Uuid
-  externalId         String        @unique @map("external_id")
+  // Phase 1 retrofit (2026-05-15): every tenant-scoped table carries
+  // org_id. external_id is now unique within an org, not globally.
+  orgId              String        @map("org_id") @db.Uuid
+  externalId         String        @map("external_id")
   name               String
   industry           String
   onboardingDate     DateTime      @map("onboarding_date") @db.Timestamptz(6)
@@ -140,7 +182,10 @@ model Partner {
   pixieMetrics    PixieMetric[]
   lenderDecisions LenderDecision[]
   revenueEvents   RevenueEvent[]
+  org             Organization     @relation("OrgPartners", fields: [orgId], references: [id])
 
+  @@unique([orgId, externalId])
+  @@index([orgId, createdAt(sort: Desc)])
   @@index([status, createdAt(sort: Desc)])
   @@index([tier])
   @@index([onboardingDate])
@@ -151,8 +196,12 @@ model Partner {
 
 model Application {
   id                    String @id @db.Uuid
+  // Phase 1 retrofit: every tenant table carries org_id. external_application_id
+  // is unique per-org now, not globally (a partner's external IDs are unique
+  // within their tenant, not across tenants).
+  orgId                 String @map("org_id") @db.Uuid
   partnerId             String @map("partner_id") @db.Uuid
-  externalApplicationId String @unique @map("external_application_id")
+  externalApplicationId String @map("external_application_id")
 
   // PII — ciphertext (Bytes, AES-256-GCM) + deterministic HMAC hash for lookup.
   consumerNameCiphertext  Bytes @map("consumer_name_ciphertext")
@@ -182,8 +231,13 @@ model Application {
   updatedAt   DateTime          @updatedAt @map("updated_at") @db.Timestamptz(6)
 
   partner         Partner          @relation(fields: [partnerId], references: [id])
+  org             Organization     @relation("OrgApplications", fields: [orgId], references: [id])
   lenderDecisions LenderDecision[]
 
+  @@unique([orgId, externalApplicationId])
+  @@index([orgId, createdAt(sort: Desc)])
+  @@index([orgId, status])
+  @@index([orgId, consumerEmailHash])
   @@index([partnerId, createdAt(sort: Desc)])
   @@index([status, createdAt(sort: Desc)])
   @@index([consumerEmailHash])
@@ -195,9 +249,11 @@ model Application {
 
 model LenderDecision {
   id                String                @id @db.Uuid
+  // Phase 1 retrofit: org-scoped. external_decision_id is unique per-org now.
+  orgId             String                @map("org_id") @db.Uuid
   // Vendor-supplied decision identifier — the source of truth for idempotency.
   // Nullable for backward compatibility with seed data that predates this column.
-  externalDecisionId String?              @unique @map("external_decision_id")
+  externalDecisionId String?              @map("external_decision_id")
   applicationId     String                @map("application_id") @db.Uuid
   partnerId         String                @map("partner_id") @db.Uuid
   lenderName        String                @map("lender_name")
@@ -217,8 +273,12 @@ model LenderDecision {
 
   application   Application    @relation(fields: [applicationId], references: [id])
   partner       Partner        @relation(fields: [partnerId], references: [id])
+  org           Organization   @relation("OrgLenderDecisions", fields: [orgId], references: [id])
   revenueEvents RevenueEvent[]
 
+  @@unique([orgId, externalDecisionId])
+  @@index([orgId, createdAt(sort: Desc)])
+  @@index([orgId, fundingStatus, fundingTimestamp])
   @@index([partnerId, createdAt(sort: Desc)])
   @@index([applicationId])
   @@index([lenderName, decision])
@@ -233,6 +293,10 @@ model LenderDecision {
 
 model RevenueEvent {
   id                String           @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  // Phase 1 retrofit: org-scoped. The (source, idempotencyKey) unique is now
+  // per-org so two tenants can independently claim the same idempotency
+  // string without colliding.
+  orgId             String           @map("org_id") @db.Uuid
   partnerId         String           @map("partner_id") @db.Uuid
   lenderDecisionId  String?          @map("lender_decision_id") @db.Uuid
   pixieMetricPeriod DateTime?        @map("pixie_metric_period") @db.Timestamptz(6)
@@ -249,12 +313,13 @@ model RevenueEvent {
 
   partner        Partner         @relation(fields: [partnerId], references: [id])
   lenderDecision LenderDecision? @relation(fields: [lenderDecisionId], references: [id])
+  org            Organization    @relation("OrgRevenueEvents", fields: [orgId], references: [id])
 
   @@id([effectiveAt, partnerId, idempotencyKey])
-  // Composite uniqueness — the source produces the key, so collisions are
-  // only possible across sources, but enforcing it here is a cheap correctness
-  // win that a thorough reviewer will spot immediately.
-  @@unique([source, idempotencyKey], name: "revenue_events_source_idemp_key")
+  // Per-org idempotency. Different tenants share the same idempotency-key
+  // namespace safely.
+  @@unique([orgId, source, idempotencyKey], name: "revenue_events_org_source_idemp_key")
+  @@index([orgId, effectiveAt(sort: Desc)])
   @@index([partnerId, effectiveAt(sort: Desc)])
   @@index([stream, effectiveAt(sort: Desc)])
   @@index([eventType, effectiveAt(sort: Desc)])
@@ -268,6 +333,10 @@ model RevenueEvent {
 
 model WebhookEvent {
   id              String                  @id @db.Uuid
+  // Phase 1 retrofit: org-scoped. The (source, idempotencyKey) unique is
+  // now per-org. Backfill maps via WebhookCredential's active row per
+  // source; new rows must thread orgId from signature verification.
+  orgId           String                  @map("org_id") @db.Uuid
   source          WebhookSource
   eventType       String                  @map("event_type")
   idempotencyKey  String                  @map("idempotency_key")
@@ -278,7 +347,10 @@ model WebhookEvent {
   receivedAt      DateTime                @default(now()) @map("received_at") @db.Timestamptz(6)
   processedAt     DateTime?               @map("processed_at") @db.Timestamptz(6)
 
-  @@unique([source, idempotencyKey])
+  org Organization @relation("OrgWebhookEvents", fields: [orgId], references: [id])
+
+  @@unique([orgId, source, idempotencyKey])
+  @@index([orgId, receivedAt(sort: Desc)])
   @@index([source, status, receivedAt(sort: Desc)])
   @@index([receivedAt(sort: Desc)])
   @@map("webhook_events")
@@ -288,6 +360,7 @@ model WebhookEvent {
 
 model PixieMetric {
   id                  String            @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  orgId               String            @map("org_id") @db.Uuid
   partnerId           String            @map("partner_id") @db.Uuid
   period              AggregationPeriod
   periodStart         DateTime          @map("period_start") @db.Timestamptz(6)
@@ -304,8 +377,10 @@ model PixieMetric {
   createdAt           DateTime          @default(now()) @map("created_at") @db.Timestamptz(6)
 
   partner Partner @relation(fields: [partnerId], references: [id])
+  org     Organization @relation("OrgPixieMetrics", fields: [orgId], references: [id])
 
   @@id([periodStart, partnerId, period])
+  @@index([orgId, periodStart(sort: Desc)])
   @@index([partnerId, periodStart(sort: Desc)])
   @@map("pixie_metrics")
 }
@@ -314,6 +389,7 @@ model PixieMetric {
 
 model RevenueAggregation {
   id                   String            @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  orgId                String            @map("org_id") @db.Uuid
   period               AggregationPeriod
   periodStart          DateTime          @map("period_start") @db.Timestamptz(6)
   periodEnd            DateTime          @map("period_end") @db.Timestamptz(6)
@@ -332,7 +408,10 @@ model RevenueAggregation {
   avgDealSize          Decimal           @map("avg_deal_size") @db.Decimal(14, 2)
   createdAt            DateTime          @default(now()) @map("created_at") @db.Timestamptz(6)
 
+  org Organization @relation("OrgRevenueAggregations", fields: [orgId], references: [id])
+
   @@id([periodStart, period])
+  @@index([orgId, periodStart(sort: Desc)])
   @@index([period, periodStart(sort: Desc)])
   @@map("revenue_aggregations")
 }
@@ -369,8 +448,41 @@ model Organization {
   webhookCredentials  WebhookCredential[]   @relation("OrgWebhookCredentials")
   encryptionKeys      TenantEncryptionKey[] @relation("OrgEncryptionKeys")
   creditEnrichments   CreditEnrichment[]    @relation("OrgCreditEnrichments")
-  // More reverse relations land here as Phase 1.2c–1.2e retrofit
-  // orgId onto every TENANT_OWNED table.
+  // Phase 1 retrofit (2026-05-15) — reverse relations for every tenant-
+  // scoped table that now carries org_id. Mirrors the migration
+  // 20260515120000_phase1_tenant_table_retrofit.
+  partners            Partner[]             @relation("OrgPartners")
+  applications        Application[]         @relation("OrgApplications")
+  lenderDecisions     LenderDecision[]      @relation("OrgLenderDecisions")
+  lenderReportingEvents LenderReportingEvent[] @relation("OrgLenderReportingEvents")
+  revenueEvents       RevenueEvent[]        @relation("OrgRevenueEvents")
+  webhookEvents       WebhookEvent[]        @relation("OrgWebhookEvents")
+  pixieMetrics        PixieMetric[]         @relation("OrgPixieMetrics")
+  revenueAggregations RevenueAggregation[]  @relation("OrgRevenueAggregations")
+  outboxEvents        OutboxEvent[]         @relation("OrgOutboxEvents")
+  exports             Export[]              @relation("OrgExports")
+  webhookSubscriptions WebhookSubscription[] @relation("OrgWebhookSubscriptions")
+  webhookDeliveries   WebhookDelivery[]     @relation("OrgWebhookDeliveries")
+  refreshTokens       RefreshToken[]        @relation("OrgRefreshTokens")
+  notificationChannels NotificationChannel[] @relation("OrgNotificationChannels")
+  alertRules          AlertRule[]           @relation("OrgAlertRules")
+  alerts              Alert[]               @relation("OrgAlerts")
+  notes               Note[]                @relation("OrgNotes")
+  tags                Tag[]                 @relation("OrgTags")
+  tagAssignments      TagAssignment[]       @relation("OrgTagAssignments")
+  savedViews          SavedView[]           @relation("OrgSavedViews")
+  scheduledReports    ScheduledReport[]     @relation("OrgScheduledReports")
+  reportRuns          ReportRun[]           @relation("OrgReportRuns")
+  cases               Case[]                @relation("OrgCases")
+  rtbfRequests        RtbfRequest[]         @relation("OrgRtbfRequests")
+  portfolioVerticals  PortfolioVertical[]   @relation("OrgPortfolioVerticals")
+  portfolioBusinesses PortfolioBusiness[]   @relation("OrgPortfolioBusinesses")
+  portfolioFinancialPeriods PortfolioFinancialPeriod[] @relation("OrgPortfolioFinancialPeriods")
+  portfolioRevenueChannels  PortfolioRevenueChannel[]  @relation("OrgPortfolioRevenueChannels")
+  portfolioProductLines     PortfolioProductLine[]     @relation("OrgPortfolioProductLines")
+  portfolioUnitEconomics    PortfolioUnitEconomics[]   @relation("OrgPortfolioUnitEconomics")
+  portfolioCohorts          PortfolioCohort[]          @relation("OrgPortfolioCohorts")
+  portfolioHeadcount        PortfolioHeadcount[]       @relation("OrgPortfolioHeadcount")
 
   @@map("organizations")
 }
@@ -477,18 +589,30 @@ model UserInvitation {
 
 model RefreshToken {
   id         String    @id @db.Uuid
+  // Phase 1 retrofit: org-scoped. Identifies which org the session is acting
+  // within. Membership revocation flips access on tokens belonging to that
+  // (userId, orgId). For multi-org users, each org has its own family.
+  orgId      String    @map("org_id") @db.Uuid
   userId     String    @map("user_id") @db.Uuid
   familyId   String    @map("family_id") @db.Uuid
+  // Phase 4c: session identifier (===familyId today; can diverge once
+  // "trust this device" lands). Used by /auth/sessions enumerate +
+  // revoke, and embedded in access JWTs as `sid` so a revoked session
+  // immediately invalidates outstanding access tokens (Redis deny-list).
+  sessionId  String    @map("session_id") @db.Uuid
   tokenHash  String    @unique @map("token_hash")
   expiresAt  DateTime  @map("expires_at") @db.Timestamptz(6)
   revokedAt  DateTime? @map("revoked_at") @db.Timestamptz(6)
   replacedBy String?   @map("replaced_by") @db.Uuid
   createdAt  DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
 
-  user User @relation(fields: [userId], references: [id])
+  user User         @relation(fields: [userId], references: [id])
+  org  Organization @relation("OrgRefreshTokens", fields: [orgId], references: [id])
 
+  @@index([orgId, userId, revokedAt])
   @@index([userId])
   @@index([familyId])
+  @@index([userId, sessionId, revokedAt])
   @@map("refresh_tokens")
 }
 
@@ -533,6 +657,8 @@ enum ExportType {
   REVENUE_LEDGER
   PARTNERS
   AUDIT_LOG
+  /// GAP-117: HighSale snapshot table. Per-org filtered like the other types.
+  CREDIT_ENRICHMENTS
 }
 
 enum ExportFormat {
@@ -624,6 +750,7 @@ model ApiToken {
 
 model Export {
   id          String       @id @db.Uuid
+  orgId       String       @map("org_id") @db.Uuid
   userId      String       @map("user_id") @db.Uuid
   type        ExportType
   format      ExportFormat
@@ -638,8 +765,10 @@ model Export {
   completedAt DateTime?    @map("completed_at") @db.Timestamptz(6)
   expiresAt   DateTime?    @map("expires_at") @db.Timestamptz(6)
 
-  user User @relation(fields: [userId], references: [id])
+  user User         @relation(fields: [userId], references: [id])
+  org  Organization @relation("OrgExports", fields: [orgId], references: [id])
 
+  @@index([orgId, createdAt(sort: Desc)])
   @@index([userId, createdAt(sort: Desc)])
   @@index([status, createdAt(sort: Desc)])
   @@map("exports")
@@ -649,6 +778,10 @@ model Export {
 
 model WebhookSubscription {
   id          String   @id @db.Uuid
+  // Phase 1 retrofit: org-scoped. dispatch() only fans events to
+  // subscriptions whose orgId matches the event's orgId, preventing
+  // cross-tenant data leakage via outbound webhooks (GAP-115 / HARDENING X-08).
+  orgId       String   @map("org_id") @db.Uuid
   ownerUserId String   @map("owner_user_id") @db.Uuid
   name        String
   url         String
@@ -659,14 +792,17 @@ model WebhookSubscription {
   updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
 
   owner      User              @relation(fields: [ownerUserId], references: [id])
+  org        Organization      @relation("OrgWebhookSubscriptions", fields: [orgId], references: [id])
   deliveries WebhookDelivery[]
 
+  @@index([orgId, isActive])
   @@index([ownerUserId, isActive])
   @@map("webhook_subscriptions")
 }
 
 model WebhookDelivery {
   id               String                @id @db.Uuid
+  orgId            String                @map("org_id") @db.Uuid
   subscriptionId   String                @map("subscription_id") @db.Uuid
   eventType        String                @map("event_type")
   payload          Json
@@ -679,7 +815,9 @@ model WebhookDelivery {
   createdAt        DateTime              @default(now()) @map("created_at") @db.Timestamptz(6)
 
   subscription WebhookSubscription @relation(fields: [subscriptionId], references: [id])
+  org          Organization        @relation("OrgWebhookDeliveries", fields: [orgId], references: [id])
 
+  @@index([orgId, status, scheduledFor])
   @@index([subscriptionId, createdAt(sort: Desc)])
   @@index([status, scheduledFor])
   @@map("webhook_deliveries")
@@ -689,6 +827,7 @@ model WebhookDelivery {
 
 model NotificationChannel {
   id        String      @id @db.Uuid
+  orgId     String      @map("org_id") @db.Uuid
   name      String
   kind      ChannelKind
   config    Json // { url } for SLACK/WEBHOOK, { to } for EMAIL
@@ -697,12 +836,15 @@ model NotificationChannel {
 
   alertRules       AlertRule[]
   scheduledReports ScheduledReport[] @relation("ScheduledReportChannel")
+  org              Organization      @relation("OrgNotificationChannels", fields: [orgId], references: [id])
 
+  @@index([orgId, isActive])
   @@map("notification_channels")
 }
 
 model AlertRule {
   id            String        @id @db.Uuid
+  orgId         String        @map("org_id") @db.Uuid
   name          String
   description   String?
   query         Json // declarative rule (e.g. { metric: "webhook_failure_rate_24h", op: ">", value: 0.05 })
@@ -715,12 +857,15 @@ model AlertRule {
 
   channel NotificationChannel? @relation(fields: [channelId], references: [id])
   alerts  Alert[]
+  org     Organization         @relation("OrgAlertRules", fields: [orgId], references: [id])
 
+  @@index([orgId, isActive])
   @@map("alert_rules")
 }
 
 model Alert {
   id             String        @id @db.Uuid
+  orgId          String        @map("org_id") @db.Uuid
   ruleId         String        @map("rule_id") @db.Uuid
   state          AlertState    @default(OPEN)
   severity       AlertSeverity
@@ -731,8 +876,10 @@ model Alert {
   snoozedUntil   DateTime?     @map("snoozed_until") @db.Timestamptz(6)
   resolvedAt     DateTime?     @map("resolved_at") @db.Timestamptz(6)
 
-  rule AlertRule @relation(fields: [ruleId], references: [id])
+  rule AlertRule    @relation(fields: [ruleId], references: [id])
+  org  Organization @relation("OrgAlerts", fields: [orgId], references: [id])
 
+  @@index([orgId, firedAt(sort: Desc)])
   @@index([state, firedAt(sort: Desc)])
   @@index([ruleId, firedAt(sort: Desc)])
   @@map("alerts")
@@ -759,18 +906,22 @@ enum PortfolioBusinessStatus {
 
 model PortfolioVertical {
   slug        String   @id
+  orgId       String   @map("org_id") @db.Uuid
   name        String
   description String   @default("")
   createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
 
   businesses PortfolioBusiness[]
+  org        Organization        @relation("OrgPortfolioVerticals", fields: [orgId], references: [id])
 
+  @@index([orgId])
   @@map("portfolio_verticals")
 }
 
 model PortfolioBusiness {
   slug           String                  @id
+  orgId          String                  @map("org_id") @db.Uuid
   name           String
   verticalSlug   String                  @map("vertical_slug")
   status         PortfolioBusinessStatus @default(ACTIVE)
@@ -800,7 +951,9 @@ model PortfolioBusiness {
   unitEconomics   PortfolioUnitEconomics?
   cohorts         PortfolioCohort[]
   headcount       PortfolioHeadcount[]
+  org             Organization               @relation("OrgPortfolioBusinesses", fields: [orgId], references: [id])
 
+  @@index([orgId, status])
   @@index([verticalSlug])
   @@index([status])
   @@map("portfolio_businesses")
@@ -808,6 +961,7 @@ model PortfolioBusiness {
 
 model PortfolioFinancialPeriod {
   id           String   @id @db.Uuid
+  orgId        String   @map("org_id") @db.Uuid
   businessSlug String   @map("business_slug")
   periodStart  DateTime @map("period_start") @db.Date
   periodLabel  String   @map("period_label")
@@ -833,14 +987,17 @@ model PortfolioFinancialPeriod {
   createdAt            DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
 
   business PortfolioBusiness @relation(fields: [businessSlug], references: [slug], onDelete: Cascade)
+  org      Organization      @relation("OrgPortfolioFinancialPeriods", fields: [orgId], references: [id])
 
   @@unique([businessSlug, periodStart])
+  @@index([orgId, periodStart(sort: Desc)])
   @@index([businessSlug, periodStart(sort: Desc)])
   @@map("portfolio_financial_periods")
 }
 
 model PortfolioRevenueChannel {
   id           String   @id @db.Uuid
+  orgId        String   @map("org_id") @db.Uuid
   businessSlug String   @map("business_slug")
   asOf         DateTime @map("as_of") @db.Date
   channel      String
@@ -849,14 +1006,17 @@ model PortfolioRevenueChannel {
   share        Decimal  @db.Decimal(5, 4)
 
   business PortfolioBusiness @relation(fields: [businessSlug], references: [slug], onDelete: Cascade)
+  org      Organization      @relation("OrgPortfolioRevenueChannels", fields: [orgId], references: [id])
 
   @@unique([businessSlug, asOf, channel])
+  @@index([orgId, asOf(sort: Desc)])
   @@index([businessSlug, asOf(sort: Desc)])
   @@map("portfolio_revenue_channels")
 }
 
 model PortfolioProductLine {
   id           String   @id @db.Uuid
+  orgId        String   @map("org_id") @db.Uuid
   businessSlug String   @map("business_slug")
   asOf         DateTime @map("as_of") @db.Date
   name         String
@@ -865,14 +1025,17 @@ model PortfolioProductLine {
   avgPrice     Decimal  @map("avg_price") @db.Decimal(18, 2)
 
   business PortfolioBusiness @relation(fields: [businessSlug], references: [slug], onDelete: Cascade)
+  org      Organization      @relation("OrgPortfolioProductLines", fields: [orgId], references: [id])
 
   @@unique([businessSlug, asOf, name])
+  @@index([orgId, asOf(sort: Desc)])
   @@index([businessSlug, asOf(sort: Desc)])
   @@map("portfolio_product_lines")
 }
 
 model PortfolioUnitEconomics {
   businessSlug  String   @id @map("business_slug")
+  orgId         String   @map("org_id") @db.Uuid
   asOf          DateTime @map("as_of") @db.Date
   cac           Decimal  @db.Decimal(18, 2)
   ltv           Decimal  @db.Decimal(18, 2)
@@ -884,12 +1047,15 @@ model PortfolioUnitEconomics {
   updatedAt     DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
 
   business PortfolioBusiness @relation(fields: [businessSlug], references: [slug], onDelete: Cascade)
+  org      Organization      @relation("OrgPortfolioUnitEconomics", fields: [orgId], references: [id])
 
+  @@index([orgId])
   @@map("portfolio_unit_economics")
 }
 
 model PortfolioCohort {
   id           String   @id @db.Uuid
+  orgId        String   @map("org_id") @db.Uuid
   businessSlug String   @map("business_slug")
   cohortMonth  DateTime @map("cohort_month") @db.Date
   customers    Int
@@ -899,14 +1065,17 @@ model PortfolioCohort {
   m12          Decimal  @db.Decimal(5, 4)
 
   business PortfolioBusiness @relation(fields: [businessSlug], references: [slug], onDelete: Cascade)
+  org      Organization      @relation("OrgPortfolioCohorts", fields: [orgId], references: [id])
 
   @@unique([businessSlug, cohortMonth])
+  @@index([orgId, cohortMonth(sort: Desc)])
   @@index([businessSlug, cohortMonth(sort: Desc)])
   @@map("portfolio_cohorts")
 }
 
 model PortfolioHeadcount {
   id             String   @id @db.Uuid
+  orgId          String   @map("org_id") @db.Uuid
   businessSlug   String   @map("business_slug")
   asOf           DateTime @map("as_of") @db.Date
   function       String
@@ -915,8 +1084,10 @@ model PortfolioHeadcount {
   openRoles      Int      @map("open_roles")
 
   business PortfolioBusiness @relation(fields: [businessSlug], references: [slug], onDelete: Cascade)
+  org      Organization      @relation("OrgPortfolioHeadcount", fields: [orgId], references: [id])
 
   @@unique([businessSlug, asOf, function])
+  @@index([orgId, asOf(sort: Desc)])
   @@index([businessSlug, asOf(sort: Desc)])
   @@map("portfolio_headcount")
 }
@@ -964,6 +1135,7 @@ enum RtbfRequestStatus {
 
 model RtbfRequest {
   id              String            @id @db.Uuid
+  orgId           String            @map("org_id") @db.Uuid
   // Hash of the consumer's email. Matches Application.consumerEmailHash so
   // the worker can locate every related row.
   emailHash       Bytes             @map("email_hash")
@@ -975,10 +1147,15 @@ model RtbfRequest {
   startedAt       DateTime?         @map("started_at") @db.Timestamptz(6)
   completedAt     DateTime?         @map("completed_at") @db.Timestamptz(6)
   applicationsScrubbed Int          @default(0) @map("applications_scrubbed")
+  // GAP-111: count of credit_enrichments rows scrubbed during processing.
+  // Defaults to 0; populated by RtbfService once the cross-table scrub lands.
+  creditEnrichmentsScrubbed Int     @default(0) @map("credit_enrichments_scrubbed")
   error           String?
 
-  requestedBy User @relation("RtbfRequestedBy", fields: [requestedById], references: [id])
+  requestedBy User         @relation("RtbfRequestedBy", fields: [requestedById], references: [id])
+  org         Organization @relation("OrgRtbfRequests", fields: [orgId], references: [id])
 
+  @@index([orgId, status, requestedAt(sort: Desc)])
   @@index([status, requestedAt(sort: Desc)])
   @@index([emailHash])
   @@map("rtbf_requests")
@@ -988,6 +1165,7 @@ model RtbfRequest {
 
 model Note {
   id           String   @id @db.Uuid
+  orgId        String   @map("org_id") @db.Uuid
   resourceType String   @map("resource_type") // 'customer' / 'partner' / 'application' / 'lender_decision' / 'case'
   resourceId   String   @map("resource_id")
   authorUserId String   @map("author_user_id") @db.Uuid
@@ -996,8 +1174,10 @@ model Note {
   createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt    DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
 
-  author User @relation(fields: [authorUserId], references: [id])
+  author User         @relation(fields: [authorUserId], references: [id])
+  org    Organization @relation("OrgNotes", fields: [orgId], references: [id])
 
+  @@index([orgId, resourceType, resourceId, createdAt(sort: Desc)])
   @@index([resourceType, resourceId, createdAt(sort: Desc)])
   @@index([authorUserId, createdAt(sort: Desc)])
   @@map("notes")
@@ -1005,28 +1185,35 @@ model Note {
 
 model Tag {
   id          String   @id @db.Uuid
-  name        String   @unique
+  orgId       String   @map("org_id") @db.Uuid
+  // Phase 1 retrofit: tag names unique per-org, not globally.
+  name        String
   color       String   @default("slate")
   description String?
   createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
 
   assignments TagAssignment[]
+  org         Organization    @relation("OrgTags", fields: [orgId], references: [id])
 
+  @@unique([orgId, name])
   @@map("tags")
 }
 
 model TagAssignment {
   id           String   @id @db.Uuid
+  orgId        String   @map("org_id") @db.Uuid
   tagId        String   @map("tag_id") @db.Uuid
   resourceType String   @map("resource_type")
   resourceId   String   @map("resource_id")
   assignedBy   String   @map("assigned_by") @db.Uuid
   assignedAt   DateTime @default(now()) @map("assigned_at") @db.Timestamptz(6)
 
-  tag  Tag  @relation(fields: [tagId], references: [id])
-  user User @relation(fields: [assignedBy], references: [id])
+  tag  Tag          @relation(fields: [tagId], references: [id])
+  user User         @relation(fields: [assignedBy], references: [id])
+  org  Organization @relation("OrgTagAssignments", fields: [orgId], references: [id])
 
   @@unique([tagId, resourceType, resourceId])
+  @@index([orgId, resourceType, resourceId])
   @@index([resourceType, resourceId])
   @@map("tag_assignments")
 }
@@ -1035,6 +1222,7 @@ model TagAssignment {
 
 model SavedView {
   id           String   @id @db.Uuid
+  orgId        String   @map("org_id") @db.Uuid
   userId       String   @map("user_id") @db.Uuid
   name         String
   resourceType String   @map("resource_type") // 'customer' / 'application' / 'partner' / 'ledger'
@@ -1043,8 +1231,10 @@ model SavedView {
   createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt    DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
 
-  user User @relation(fields: [userId], references: [id])
+  user User         @relation(fields: [userId], references: [id])
+  org  Organization @relation("OrgSavedViews", fields: [orgId], references: [id])
 
+  @@index([orgId, resourceType])
   @@index([userId, resourceType])
   @@map("saved_views")
 }
@@ -1053,6 +1243,7 @@ model SavedView {
 
 model ScheduledReport {
   id             String    @id @db.Uuid
+  orgId          String    @map("org_id") @db.Uuid
   userId         String    @map("user_id") @db.Uuid
   name           String
   reportType     String    @map("report_type") // matches an export type or a custom report key
@@ -1067,8 +1258,10 @@ model ScheduledReport {
 
   user    User                 @relation(fields: [userId], references: [id])
   channel NotificationChannel? @relation("ScheduledReportChannel", fields: [channelId], references: [id])
+  org     Organization         @relation("OrgScheduledReports", fields: [orgId], references: [id])
   runs    ReportRun[]
 
+  @@index([orgId, nextRunAt, isActive])
   @@index([userId])
   @@index([nextRunAt, isActive])
   @@map("scheduled_reports")
@@ -1076,6 +1269,7 @@ model ScheduledReport {
 
 model ReportRun {
   id                String       @id @db.Uuid
+  orgId             String       @map("org_id") @db.Uuid
   scheduledReportId String       @map("scheduled_report_id") @db.Uuid
   status            ExportStatus @default(PENDING)
   filePath          String?      @map("file_path")
@@ -1086,7 +1280,9 @@ model ReportRun {
   createdAt         DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
 
   scheduledReport ScheduledReport @relation(fields: [scheduledReportId], references: [id])
+  org             Organization    @relation("OrgReportRuns", fields: [orgId], references: [id])
 
+  @@index([orgId, createdAt(sort: Desc)])
   @@index([scheduledReportId, createdAt(sort: Desc)])
   @@map("report_runs")
 }
@@ -1095,6 +1291,7 @@ model ReportRun {
 
 model Case {
   id             String     @id @db.Uuid
+  orgId          String     @map("org_id") @db.Uuid
   type           CaseType
   status         CaseStatus @default(OPEN)
   title          String
@@ -1108,9 +1305,11 @@ model Case {
   createdAt      DateTime   @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt      DateTime   @updatedAt @map("updated_at") @db.Timestamptz(6)
 
-  openedBy User  @relation("CaseOpenedBy", fields: [openedByUserId], references: [id])
-  assignee User? @relation("CaseAssignee", fields: [assigneeUserId], references: [id])
+  openedBy User         @relation("CaseOpenedBy", fields: [openedByUserId], references: [id])
+  assignee User?        @relation("CaseAssignee", fields: [assigneeUserId], references: [id])
+  org      Organization @relation("OrgCases", fields: [orgId], references: [id])
 
+  @@index([orgId, status, openedAt(sort: Desc)])
   @@index([status, openedAt(sort: Desc)])
   @@index([assigneeUserId, status])
   @@map("cases")
@@ -1133,8 +1332,49 @@ enum OutboxKind {
   OUTBOUND_DELIVERY    // pushes onto eazepay.webhook-delivery
 }
 
+/// GAP-101 — lender adapter activity log.
+/// Append-only record of every interaction with a lender adapter
+/// (submit, poll, error). Used by the polling worker to back off on
+/// repeated failures, by operators to debug a lender integration, and
+/// by the audit surface to demonstrate what we sent to whom.
+model LenderReportingEvent {
+  id                String                 @id @db.Uuid
+  orgId             String                 @map("org_id") @db.Uuid
+  applicationId     String?                @map("application_id") @db.Uuid
+  lenderSlug        String                 @map("lender_slug")
+  /// Either externalDecisionId from the lender (for poll events) or null
+  /// on submit-failure paths where the id hasn't been issued yet.
+  externalDecisionId String?               @map("external_decision_id")
+  type              LenderReportingEventType
+  /// Adapter-supplied payload (decision, funding, error message, latency).
+  /// Truncated to 8 KB at write time.
+  payload           Json                   @default("{}")
+  /// True when this event represents an error the polling worker should
+  /// not retry against (e.g. permanent 4xx from the lender). The worker
+  /// uses this flag to decay its poll interval.
+  permanent         Boolean                @default(false)
+  observedAt        DateTime               @map("observed_at") @db.Timestamptz(6)
+  createdAt         DateTime               @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  org Organization @relation("OrgLenderReportingEvents", fields: [orgId], references: [id])
+
+  @@index([orgId, lenderSlug, observedAt(sort: Desc)])
+  @@index([applicationId, observedAt(sort: Desc)])
+  @@index([externalDecisionId, observedAt(sort: Desc)])
+  @@map("lender_reporting_events")
+}
+
+enum LenderReportingEventType {
+  SUBMIT
+  SUBMIT_FAILED
+  POLL
+  POLL_FAILED
+  STATE_TRANSITION
+}
+
 model OutboxEvent {
   id            String      @id @db.Uuid
+  orgId         String      @map("org_id") @db.Uuid
   kind          OutboxKind
   payload       Json
   // Optional foreign-key style hints (kept as plain strings — outbox should
@@ -1146,9 +1386,17 @@ model OutboxEvent {
   publishedAt   DateTime?   @map("published_at") @db.Timestamptz(6)
   publishError  String?     @map("publish_error")
   attemptCount  Int         @default(0) @map("attempt_count")
+  /// Phase 7 (SF-006): after OUTBOX_MAX_ATTEMPTS failed dispatches the sweeper
+  /// stops re-claiming the row and stamps dlqedAt. Operator-visible surface
+  /// for poison-pill rows; replay via POST /platform/outbox/dlq/:id/replay.
+  dlqedAt       DateTime?   @map("dlqed_at") @db.Timestamptz(6)
 
+  org Organization @relation("OrgOutboxEvents", fields: [orgId], references: [id])
+
+  @@index([orgId, publishedAt, createdAt])
   @@index([publishedAt, createdAt])  // sweeper scans WHERE publishedAt IS NULL ORDER BY createdAt
   @@index([kind, publishedAt])
+  @@index([dlqedAt])                // operator surface for DLQ list
   @@map("outbox_events")
 }
 

@@ -25,7 +25,8 @@ import { z } from 'zod';
 import { getEnv } from '../../../config/env.js';
 import { getPrisma } from '../../../config/database.js';
 import { errors } from '../../../shared/errors/app-error.js';
-import { encryptPII, hashPII, decryptPII } from '../../../shared/utils/encryption.js';
+import { hashPII, decryptPII } from '../../../shared/utils/encryption.js';
+import { encryptForOrg, decryptEnvelopeAuto } from '../../../shared/kms/tenant-dek.js';
 import { writeAuditLog } from '../../../shared/middleware/audit-log.middleware.js';
 import { requireAuth } from '../../../shared/middleware/auth.middleware.js';
 import { rowsToCsv, attachmentHeader } from '../../../shared/utils/csv.js';
@@ -98,7 +99,11 @@ export async function registerHighsaleIntegrationRoutes(app: FastifyInstance): P
       throw errors.invalidSignature();
     }
 
-    const rawBody = typeof req.body === 'string' ? req.body : JSON.stringify(req.body ?? {});
+    // P0 fix (SEC-004 / CR-104 / SEC-100): sign over the raw request bytes
+    // not a re-serialised JSON form. See server.ts content-type parser and
+    // webhook-signature.middleware.ts for the wider fix.
+    const rawBody = req.rawBody;
+    if (rawBody == null) throw errors.invalidSignature();
     if (!verifySignature(rawBody, ts, sig, env.HIGHSALE_WEBHOOK_SECRET)) {
       throw errors.invalidSignature();
     }
@@ -146,12 +151,22 @@ export async function registerHighsaleIntegrationRoutes(app: FastifyInstance): P
       .filter(Boolean)
       .join('|');
 
-    const nameEnc = encryptPII(fullName);
-    const emailEnc = encryptPII(r.email);
-    const phoneEnc = encryptPII(r.phone);
-    const dobEnc = encryptPII(r.date_of_birth);
-    const addressEnc = encryptPII(fullAddress);
-    // email + phone + dob hashes for analytical join (deterministic HMAC)
+    // Phase 3 (per-org DEK threading): every PII column for this snapshot is
+    // encrypted under the org's active DEK via `encryptForOrg`, NOT the
+    // legacy global PII_ENCRYPTION_KEY. This makes cryptoshred actually
+    // destroy the tenant's data (kill the DEK = ciphertext is permanently
+    // unreadable) and prevents one tenant's compromise from decrypting
+    // another tenant's PII.
+    const [nameCt, emailCt, phoneCt, dobCt, addressCt] = await Promise.all([
+      encryptForOrg(prisma, fullName, orgId),
+      encryptForOrg(prisma, r.email, orgId),
+      encryptForOrg(prisma, r.phone, orgId),
+      encryptForOrg(prisma, r.date_of_birth, orgId),
+      encryptForOrg(prisma, fullAddress, orgId),
+    ]);
+    // email + phone + dob hashes for analytical join (deterministic HMAC,
+    // not per-org keyed — the hash needs to be stable cross-org for the
+    // /customers/:hash join to work).
     const consumerEmailHash = hashPII(r.email);
     const consumerPhoneHash = hashPII(r.phone);
     const dateOfBirthHash = hashPII(r.date_of_birth);
@@ -166,15 +181,15 @@ export async function registerHighsaleIntegrationRoutes(app: FastifyInstance): P
         vertical: env_.vertical,
         pulledAt: new Date(snap.created),
 
-        // PII (encrypted at rest; hashes for join)
-        consumerNameCiphertext: nameEnc.ciphertext,
-        consumerEmailCiphertext: emailEnc.ciphertext,
+        // PII (encrypted at rest under per-org DEK; hashes for join)
+        consumerNameCiphertext: nameCt,
+        consumerEmailCiphertext: emailCt,
         consumerEmailHash,
-        consumerPhoneCiphertext: phoneEnc.ciphertext,
+        consumerPhoneCiphertext: phoneCt,
         consumerPhoneHash,
-        dateOfBirthCiphertext: dobEnc.ciphertext,
+        dateOfBirthCiphertext: dobCt,
         dateOfBirthHash,
-        addressCiphertext: addressEnc.ciphertext,
+        addressCiphertext: addressCt,
         verifiableIncomeCents: r.verifiable_income,
         rentPaymentCents: r.rent_payment,
 
@@ -457,9 +472,13 @@ export async function registerHighsaleIntegrationRoutes(app: FastifyInstance): P
       });
     }
 
-    const safeDecrypt = (cipher: Buffer): string | null => {
+    // Phase 3: dispatch on envelope version. v1 ciphertext (pre-2026-05-15)
+    // → legacy global key via decryptPII. v2 ciphertext (Phase 3 writes
+    // forward) → per-org DEK via decryptEnvelopeV2. The dispatcher reads
+    // byte 0 of the envelope.
+    const safeDecrypt = async (cipher: Buffer): Promise<string | null> => {
       try {
-        return decryptPII(cipher);
+        return await decryptEnvelopeAuto(prisma, cipher, decryptPII);
       } catch {
         return null;
       }
@@ -477,11 +496,15 @@ export async function registerHighsaleIntegrationRoutes(app: FastifyInstance): P
       return `${'*'.repeat(phone.length - 4)}${phone.slice(-4)}`;
     };
 
-    return {
-      data: rows.map((r) => {
-        const nameClear = canRevealPii ? safeDecrypt(r.consumerNameCiphertext) : null;
-        const emailClear = canRevealPii ? safeDecrypt(r.consumerEmailCiphertext) : null;
-        const phoneClear = canRevealPii ? safeDecrypt(r.consumerPhoneCiphertext) : null;
+    const data = await Promise.all(
+      rows.map(async (r) => {
+        const [nameClear, emailClear, phoneClear] = canRevealPii
+          ? await Promise.all([
+              safeDecrypt(r.consumerNameCiphertext),
+              safeDecrypt(r.consumerEmailCiphertext),
+              safeDecrypt(r.consumerPhoneCiphertext),
+            ])
+          : [null, null, null];
         return {
           id: r.id,
           vertical: r.vertical,
@@ -511,6 +534,9 @@ export async function registerHighsaleIntegrationRoutes(app: FastifyInstance): P
           saleConfidenceScore: r.saleConfidenceScore,
         };
       }),
+    );
+    return {
+      data,
       aggregates: {
         total: scoreAgg._count._all,
         last24h: recent24h,
@@ -542,11 +568,45 @@ export async function registerHighsaleIntegrationRoutes(app: FastifyInstance): P
   // for the auditable reveal.
   app.get('/highsale/snapshots/:id', { preHandler: requireAuth }, async (req) => {
     const prisma = getPrisma();
+    const auth = req.auth!;
     const params = z.object({ id: z.string().uuid() }).parse(req.params);
     const row = await prisma.creditEnrichment.findUnique({
       where: { id: params.id },
     });
     if (!row || row.deletedAt) throw errors.notFound('CreditEnrichment', params.id);
+
+    // GAP-107: protected-class read gate (FCRA / fair-lending).
+    //
+    // The `demographics_protected` block carries ethnicity, gender,
+    // marital_status, language, occupation, etc. — fields HighSale sends but
+    // which MUST NOT feed underwriting / decisioning. Before this gate, every
+    // authenticated user (including VIEWER role) saw the full demographics
+    // block as part of the snapshot detail response — a direct FCRA exposure
+    // documented in HARDENING.md GAP-107 / SEC-107.
+    //
+    // Until a granular `protected_class_read` permission lands, gate on:
+    //   - User.role === 'ADMIN' (most-privileged within-org role), OR
+    //   - platformRole === 'SUPER' (cross-org god mode — Brodie today)
+    //
+    // OPERATOR is intentionally NOT enough: operators handle BNPL ops and have
+    // no underwriting / fair-lending audit need. Future: a dedicated
+    // `protected_class_read` permission expressed in the Membership /
+    // platform-staff grant model. Audit row written on every successful read.
+    const mayReadProtected = auth.role === 'ADMIN' || auth.platformRole === 'SUPER';
+    if (mayReadProtected) {
+      await writeAuditLog({
+        req,
+        userId: auth.userId,
+        action: 'PROTECTED_CLASS_READ',
+        resourceType: 'credit_enrichment',
+        resourceId: row.id,
+        metadata: {
+          orgId: row.orgId,
+          vertical: row.vertical,
+          via: 'snapshot_detail',
+        },
+      });
+    }
 
     // Re-shape into the same logical blocks the JSON spec uses. The UI
     // renders one card per block.
@@ -682,24 +742,31 @@ export async function registerHighsaleIntegrationRoutes(app: FastifyInstance): P
         ml_score: {
           sale_confidence_score: row.saleConfidenceScore.toString(),
         },
-        demographics_protected: {
-          // FCRA / fair-lending protected-class fields. Surfaced here for
-          // audit / disparate-impact monitoring only — see the
-          // protected-class governance policy in the architecture doc.
-          estimated_income: row.estimatedIncomeBand,
-          number_of_children: row.numberOfChildren,
-          marital_status: row.maritalStatus,
-          occupation_group: row.occupationGroup,
-          occupation: row.occupation,
-          education: row.education,
-          business_owner: row.businessOwner,
-          gender: row.gender,
-          net_worth: row.netWorth,
-          estimated_current_home_value: row.estimatedCurrentHomeValue,
-          ethnicity: row.ethnicity,
-          ethnic_group: row.ethnicGroup,
-          language: row.language,
-        },
+        // GAP-107: gated. Non-ADMIN/non-SUPER callers get a redaction
+        // marker so the response shape stays stable for the UI.
+        demographics_protected: mayReadProtected
+          ? {
+              // FCRA / fair-lending protected-class fields. Surfaced here for
+              // audit / disparate-impact monitoring only — see the
+              // protected-class governance policy in the architecture doc.
+              estimated_income: row.estimatedIncomeBand,
+              number_of_children: row.numberOfChildren,
+              marital_status: row.maritalStatus,
+              occupation_group: row.occupationGroup,
+              occupation: row.occupation,
+              education: row.education,
+              business_owner: row.businessOwner,
+              gender: row.gender,
+              net_worth: row.netWorth,
+              estimated_current_home_value: row.estimatedCurrentHomeValue,
+              ethnicity: row.ethnicity,
+              ethnic_group: row.ethnicGroup,
+              language: row.language,
+            }
+          : {
+              _redacted: true,
+              _reason: 'protected_class_read permission required — see HARDENING.md GAP-107',
+            },
       },
 
       rawPayload: row.rawPayload,

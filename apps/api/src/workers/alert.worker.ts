@@ -101,10 +101,12 @@ export async function runEvaluationCycle(opts: {
       });
 
       if (result.hit && !open) {
-        // New alert: create + dispatch.
+        // New alert: create + dispatch. orgId inherits from the rule per the
+        // Phase 1 retrofit — every alert belongs to the rule's tenant.
         const created = await opts.prisma.alert.create({
           data: {
             id: uuidv7(),
+            orgId: rule.orgId,
             ruleId: rule.id,
             severity: rule.severity,
             state: 'OPEN',

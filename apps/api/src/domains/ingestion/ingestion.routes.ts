@@ -46,6 +46,7 @@ import { requireCookieOrBearer } from '../../shared/middleware/bearer-auth.middl
 import { requireScope } from '../../shared/middleware/scope.middleware.js';
 import { csrfGuard } from '../../shared/middleware/csrf.middleware.js';
 import { ingestionRateLimit } from '../../shared/middleware/rate-limit-tiers.js';
+import { getBootstrapOrgId } from '../../shared/tenant/bootstrap-org.js';
 import { getEnv } from '../../config/env.js';
 import { writeAuditLog } from '../../shared/middleware/audit-log.middleware.js';
 import { errors } from '../../shared/errors/app-error.js';
@@ -257,8 +258,14 @@ async function ingest(args: {
   suppressAudit?: boolean;
 }): Promise<{ eventId: string; replayed: boolean }> {
   const prisma = getPrisma();
+  // Phase 1 retrofit: webhook_events are org-scoped. The PAT-pinned org
+  // (from bearer-auth) is the authoritative tenant for ingestion calls.
+  // Cookie callers (interactive admin replay) inherit auth.orgId. The
+  // bootstrap fallback covers the Phase 1.3 transition window for any
+  // route that hasn't yet been moved under /o/:orgSlug/.
+  const orgId = args.req.auth?.orgId ?? (await getBootstrapOrgId(prisma));
 
-  // Idempotency via the WebhookEvent UNIQUE(source, idempotency_key).
+  // Idempotency via the WebhookEvent UNIQUE(orgId, source, idempotency_key).
   // Atomic-create-or-find pattern: attempt create + catch P2002 + load the
   // colliding row. The previous findUnique → create pair was a TOCTOU race
   // between two concurrent requests with the same idempotency key — both
@@ -268,6 +275,7 @@ async function ingest(args: {
     event = await prisma.webhookEvent.create({
       data: {
         id: uuidv7(),
+        orgId,
         source: args.source,
         eventType: args.eventType,
         idempotencyKey: args.idempotencyKey,
@@ -282,7 +290,11 @@ async function ingest(args: {
     if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
       const existing = await prisma.webhookEvent.findUnique({
         where: {
-          source_idempotencyKey: { source: args.source, idempotencyKey: args.idempotencyKey },
+          orgId_source_idempotencyKey: {
+            orgId,
+            source: args.source,
+            idempotencyKey: args.idempotencyKey,
+          },
         },
       });
       if (existing) return { eventId: existing.id, replayed: true };

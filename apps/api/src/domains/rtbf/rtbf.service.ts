@@ -41,6 +41,11 @@ import { errors } from '../../shared/errors/app-error.js';
 import { withSpan } from '../../shared/utils/tracing.js';
 
 export interface SubmitInput {
+  /**
+   * Phase 1 retrofit: RTBF requests are org-scoped. The tenant whose data is
+   * being erased. Caller (route handler) sources this from req.auth.orgId.
+   */
+  orgId: string;
   emailHash: Buffer;
   requestedById: string;
   reason?: string;
@@ -63,6 +68,7 @@ export class RtbfService {
     const created = await this.prisma.rtbfRequest.create({
       data: {
         id: uuidv7(),
+        orgId: input.orgId,
         emailHash: input.emailHash,
         requestedById: input.requestedById,
         ...(input.reason ? { reason: input.reason } : {}),
@@ -142,12 +148,47 @@ export class RtbfService {
           });
         }
 
+        // GAP-111 / SEC-145 / ARCH-115: scrub credit_enrichments PII echo
+        // alongside applications. HighSale's snapshot mirrors the consumer
+        // PII into credit_enrichments (name / email / phone / dob /
+        // address ciphertexts) per the architecture doc § Plane 2. Before
+        // this fix, RTBF only touched `applications` — every HighSale
+        // snapshot for the data subject survived erasure, breaking the
+        // GDPR Art. 17 / APP 11 completeness guarantee. We zero out every
+        // ciphertext column (40-byte AES-256-GCM envelope minimum, but
+        // zero-fill works for any length since the cipher will fail on
+        // read), zero the lookup hashes so the row no longer joins, and
+        // soft-delete via deletedAt so downstream list endpoints don't
+        // surface the empty row.
+        const zero40 = Buffer.alloc(40, 0);
+        const enrichments = await tx.creditEnrichment.findMany({
+          where: { consumerEmailHash: initial.emailHash, deletedAt: null },
+          select: { id: true },
+        });
+        for (const e of enrichments) {
+          await tx.creditEnrichment.update({
+            where: { id: e.id },
+            data: {
+              consumerNameCiphertext: zero40,
+              consumerEmailCiphertext: zero40,
+              consumerEmailHash: zero32,
+              consumerPhoneCiphertext: zero40,
+              consumerPhoneHash: zero32,
+              dateOfBirthCiphertext: zero40,
+              dateOfBirthHash: zero32,
+              addressCiphertext: zero40,
+              deletedAt: new Date(),
+            },
+          });
+        }
+
         const completed = await tx.rtbfRequest.update({
           where: { id: initial.id },
           data: {
             status: 'COMPLETED' satisfies RtbfRequestStatus,
             completedAt: new Date(),
             applicationsScrubbed: apps.length,
+            creditEnrichmentsScrubbed: enrichments.length,
           },
         });
 
@@ -163,15 +204,21 @@ export class RtbfService {
             resourceId: initial.id,
             metadata: {
               applicationsScrubbed: apps.length,
+              creditEnrichmentsScrubbed: enrichments.length,
               emailHashHex: initial.emailHash.toString('hex'),
             },
           },
         });
 
-        return { completed, scrubbed: apps.length };
+        return {
+          completed,
+          scrubbed: apps.length,
+          creditEnrichmentsScrubbed: enrichments.length,
+        };
       });
 
       span.setAttribute('rtbf.applications_scrubbed', result.scrubbed);
+      span.setAttribute('rtbf.credit_enrichments_scrubbed', result.creditEnrichmentsScrubbed);
       return result.completed;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);

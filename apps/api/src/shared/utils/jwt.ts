@@ -36,6 +36,14 @@ export interface JwtPayload {
   scope?: 'standard' | 'investor';
   kind: JwtKind;
   fid?: string; // refresh token family id
+  /**
+   * Phase 4c: session identifier. Bound to the refresh-token row that
+   * issued this access token. Allows requireAuth to deny access tokens
+   * the moment a session is revoked (Redis deny-list keyed on sid).
+   * Optional during the migration window — pre-Phase-4c tokens still
+   * verify; once they expire the field is universally present.
+   */
+  sid?: string;
   jti: string; // unique token id
   iat: number;
   exp: number;
@@ -50,9 +58,39 @@ function fromB64url(s: string): Buffer {
   return Buffer.from(s, 'base64url');
 }
 
+/**
+ * Per-kind secret selection (CR-102 + SEC-115 fix).
+ *
+ * Before: access / ws_ticket / investor_scope all shared `JWT_ACCESS_SECRET`,
+ * so an attacker holding a valid access JWT could rewrite `payload.kind` to
+ * `ws_ticket`, re-sign with the same secret, and pass `verifyJwt(token,
+ * 'ws_ticket')` because the kind check runs AFTER signature verification
+ * against a key both kinds share. This was a cross-kind forgery primitive.
+ *
+ * Now: each kind selects its own secret. During the migration window, the
+ * new secrets are optional in env.ts and fall back to JWT_ACCESS_SECRET so
+ * tokens minted before rotation keep verifying. Production startup
+ * (`env.ts:getEnv`) enforces all four to be set distinctly.
+ */
 function secretFor(kind: JwtKind): string {
   const env = getEnv();
-  return kind === 'refresh' ? env.JWT_REFRESH_SECRET : env.JWT_ACCESS_SECRET;
+  switch (kind) {
+    case 'refresh':
+      return env.JWT_REFRESH_SECRET;
+    case 'ws_ticket':
+      return env.JWT_WS_TICKET_SECRET ?? env.JWT_ACCESS_SECRET;
+    case 'investor_scope':
+      return env.JWT_INVESTOR_SCOPE_SECRET ?? env.JWT_ACCESS_SECRET;
+    case 'access':
+      return env.JWT_ACCESS_SECRET;
+    default: {
+      // Exhaustive check — TS errors here if a new JwtKind is added without
+      // a corresponding secret.
+      const _exhaustive: never = kind;
+      void _exhaustive;
+      return env.JWT_ACCESS_SECRET;
+    }
+  }
 }
 
 export function signJwt(payload: Omit<JwtPayload, 'iat' | 'exp'>, ttlSeconds: number): string {

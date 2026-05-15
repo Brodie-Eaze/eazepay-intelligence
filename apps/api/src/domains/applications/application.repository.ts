@@ -13,6 +13,7 @@ export interface IApplicationRepository {
   findById(id: string): Promise<Application | null>;
   list(filter: ListApplicationsFilter): Promise<Application[]>;
   upsertFromWebhook(args: {
+    orgId: string;
     externalApplicationId: string;
     data: Prisma.ApplicationUncheckedCreateInput;
   }): Promise<Application>;
@@ -48,11 +49,18 @@ export class ApplicationRepository implements IApplicationRepository {
   }
 
   async upsertFromWebhook(args: {
+    orgId: string;
     externalApplicationId: string;
     data: Prisma.ApplicationUncheckedCreateInput;
   }): Promise<Application> {
     return this.prisma.application.upsert({
-      where: { externalApplicationId: args.externalApplicationId },
+      // Phase 1 retrofit: external_application_id is unique per-org now.
+      where: {
+        orgId_externalApplicationId: {
+          orgId: args.orgId,
+          externalApplicationId: args.externalApplicationId,
+        },
+      },
       create: args.data,
       update: {
         status: args.data.status,

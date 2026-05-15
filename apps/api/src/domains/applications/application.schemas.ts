@@ -4,9 +4,16 @@ export const ApplicationStatusSchema = z.enum([
   'PENDING',
   'SUBMITTED',
   'IN_REVIEW',
+  // GAP-102: OFFERED + CONTRACTED were added to the Prisma enum by Phase 1
+  // (migration 20260515130000) so the EazePay App drain handlers can write
+  // the correct status transition when commission accrual fires.
+  // QUARANTINE is for brand=direct events with no resolved org.
+  'OFFERED',
   'APPROVED',
+  'CONTRACTED',
   'DECLINED',
   'FUNDED',
+  'QUARANTINE',
 ]);
 
 export const ListApplicationsQuerySchema = z.object({

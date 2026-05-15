@@ -13,6 +13,7 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { getPrismaWriter } from '../../config/database.js';
+import { getBootstrapOrgId } from '../../shared/tenant/bootstrap-org.js';
 import { requireAuth } from '../../shared/middleware/auth.middleware.js';
 import { csrfGuard } from '../../shared/middleware/csrf.middleware.js';
 import { requireRole } from '../../shared/middleware/rbac.middleware.js';
@@ -56,7 +57,9 @@ export async function registerRtbfRoutes(app: FastifyInstance): Promise<void> {
       if (emailHash.length !== 32) {
         throw errors.badRequest('emailHashHex must decode to 32 bytes (HMAC-SHA-256 output)');
       }
+      const orgId = req.auth!.orgId ?? (await getBootstrapOrgId(prisma));
       const created = await service.submit({
+        orgId,
         emailHash,
         requestedById: req.auth!.userId,
         ...(body.reason ? { reason: body.reason } : {}),

@@ -7,9 +7,10 @@ beforeAll(() => {
   process.env.PII_HASH_SECRET = 'unit-test-pepper-min-16-chars';
   process.env.JWT_ACCESS_SECRET = 'a'.repeat(32);
   process.env.JWT_REFRESH_SECRET = 'b'.repeat(32);
-  process.env.BUZZPAY_WEBHOOK_SECRET = 'c'.repeat(32);
   process.env.PIXIE_WEBHOOK_SECRET = 'd'.repeat(32);
   process.env.MICAMP_WEBHOOK_SECRET = 'e'.repeat(32);
+  process.env.EAZEPAY_APP_WEBHOOK_SECRET = 'f'.repeat(32);
+  process.env.HIGHSALE_WEBHOOK_SECRET = 'g'.repeat(32);
   process.env.DATABASE_URL = 'postgresql://test:test@localhost:5432/test';
   process.env.REDIS_URL = 'redis://localhost:6379';
   __resetEnvForTests();
@@ -24,7 +25,10 @@ describe('jwt', () => {
   });
 
   it('rejects token signed with refresh secret as access', () => {
-    const tok = signJwt({ sub: 'u1', role: 'OPERATOR', kind: 'refresh', jti: newJti(), fid: 'fam' }, 60);
+    const tok = signJwt(
+      { sub: 'u1', role: 'OPERATOR', kind: 'refresh', jti: newJti(), fid: 'fam' },
+      60,
+    );
     expect(() => verifyJwt(tok, 'access')).toThrow();
   });
 

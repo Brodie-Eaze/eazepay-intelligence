@@ -24,6 +24,24 @@ export interface RateLimitConfig {
   timeWindow: string;
 }
 
+/**
+ * Route config tag (`req.routeOptions.config.skipCsrf`) used by the CSRF
+ * middleware to opt a route out of CSRF verification. Set on every webhook
+ * and integration endpoint that authenticates via HMAC signature instead of
+ * session cookies. The CSRF middleware reads this from the resolved
+ * routeOptions (set at registration time) — it cannot be poisoned by
+ * request input. See CR-101 / SEC-107 for the URL-prefix bypass this
+ * replaces.
+ */
+export const SKIP_CSRF = { skipCsrf: true } as const;
+
+/**
+ * Ingestion routes accept both cookie (operator dashboard) and Bearer-PAT
+ * (programmatic ETL) auth via requireCookieOrBearer. CSRF applies only to
+ * cookie callers; the csrfGuard middleware detects the Authorization header
+ * directly and exempts bearer callers without needing a route-level opt-out.
+ * So no `skipCsrf` here — cookie callers must still present a CSRF token.
+ */
 export function ingestionRateLimit(): { rateLimit: RateLimitConfig } {
   return {
     rateLimit: {
@@ -33,12 +51,13 @@ export function ingestionRateLimit(): { rateLimit: RateLimitConfig } {
   };
 }
 
-export function webhookRateLimit(): { rateLimit: RateLimitConfig } {
+export function webhookRateLimit(): { rateLimit: RateLimitConfig; skipCsrf: true } {
   return {
     rateLimit: {
       max: getEnv().RATE_LIMIT_WEBHOOK_PER_MIN,
       timeWindow: '1 minute',
     },
+    skipCsrf: true,
   };
 }
 
