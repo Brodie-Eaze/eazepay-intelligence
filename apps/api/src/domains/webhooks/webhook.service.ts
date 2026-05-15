@@ -3,7 +3,6 @@ import { v7 as uuidv7 } from 'uuid';
 import type { PrismaClient } from '@prisma/client';
 import { getEnv } from '../../config/env.js';
 import { getLogger } from '../../config/logger.js';
-import { encryptPII } from '../../shared/utils/encryption.js';
 import { errors } from '../../shared/errors/app-error.js';
 import { publishWsEvent, withPartnerLabel } from '../../shared/utils/ws-publisher.js';
 import { writeAuditLog } from '../../shared/middleware/audit-log.middleware.js';
