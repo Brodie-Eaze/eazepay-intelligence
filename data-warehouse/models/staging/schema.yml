@@ -1,0 +1,57 @@
+version: 2
+
+models:
+  - name: stg_organizations
+    description: 'Active orgs, with launch-business flag.'
+    columns:
+      - name: org_id
+        tests: [unique, not_null]
+      - name: org_slug
+        tests: [unique, not_null]
+      - name: is_launch_business
+        tests: [not_null]
+
+  - name: stg_partners
+    description: 'Active (non-deleted) partner businesses.'
+    columns:
+      - name: partner_id
+        tests: [unique, not_null]
+
+  - name: stg_applications
+    description: 'BNPL / loan applications with encrypted PII columns removed.'
+    columns:
+      - name: application_id
+        tests: [unique, not_null]
+      - name: partner_id
+        tests:
+          - not_null
+          - relationships:
+              to: ref('stg_partners')
+              field: partner_id
+
+  - name: stg_lender_decisions
+    description: 'Per-application lender outcomes.'
+    columns:
+      - name: decision_id
+        tests: [unique, not_null]
+      - name: application_id
+        tests:
+          - not_null
+          - relationships:
+              to: ref('stg_applications')
+              field: application_id
+      - name: decision
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['APPROVED', 'DECLINED', 'PENDING']
+
+  - name: stg_revenue_events
+    description: 'Append-only revenue ledger with metadata parsed.'
+    columns:
+      - name: idempotency_key
+        tests: [not_null]
+      - name: amount
+        tests: [not_null]
+      - name: currency
+        tests: [not_null]

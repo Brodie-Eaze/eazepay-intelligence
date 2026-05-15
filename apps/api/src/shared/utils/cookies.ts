@@ -16,16 +16,32 @@ export const COOKIE = {
 interface SetCookieOpts {
   maxAgeSeconds: number;
   httpOnly: boolean;
+  // Default Strict. OAuth state cookies need Lax so the cookie survives the
+  // top-level redirect back from accounts.google.com.
+  sameSite?: 'strict' | 'lax' | 'none';
 }
 
 function baseCookieAttrs(opts: SetCookieOpts): string {
   const env = getEnv();
-  const secure = env.NODE_ENV === 'production' ? '; Secure' : '';
+  const isProd = env.NODE_ENV === 'production';
+  const secure = isProd ? '; Secure' : '';
   const httpOnly = opts.httpOnly ? '; HttpOnly' : '';
-  return `; Path=/; Max-Age=${opts.maxAgeSeconds}${httpOnly}${secure}; SameSite=Strict`;
+  // In production the API + web live on different *.up.railway.app subdomains,
+  // which the browser treats as cross-site. Strict-mode cookies are dropped
+  // on cross-site credentialed requests, breaking auth. SameSite=None is
+  // safe here because Secure is also set and CSRF is double-submit-validated
+  // by `csrfGuard` on every state-changing request.
+  const ss = opts.sameSite ?? (isProd ? 'none' : 'strict');
+  const sameSite = ss.charAt(0).toUpperCase() + ss.slice(1);
+  return `; Path=/; Max-Age=${opts.maxAgeSeconds}${httpOnly}${secure}; SameSite=${sameSite}`;
 }
 
-export function setCookie(reply: FastifyReply, name: string, value: string, opts: SetCookieOpts): void {
+export function setCookie(
+  reply: FastifyReply,
+  name: string,
+  value: string,
+  opts: SetCookieOpts,
+): void {
   const existing = reply.getHeader('Set-Cookie');
   const cookie = `${name}=${encodeURIComponent(value)}${baseCookieAttrs(opts)}`;
   if (Array.isArray(existing)) {

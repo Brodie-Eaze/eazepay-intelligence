@@ -1,3 +1,6 @@
+import { startTelemetry } from '../config/telemetry.js';
+startTelemetry({ serviceName: 'eazepay-intelligence-worker-revenue' });
+
 import { getLogger } from '../config/logger.js';
 import { getAggregationQueue } from '../shared/queues/aggregation.queue.js';
 
@@ -14,8 +17,16 @@ async function tick(): Promise<void> {
   const yesterday = new Date(now.getTime() - 86_400_000);
   const monthAnchor = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
 
-  await queue.add('rollup.daily', { period: 'DAILY', anchor: yesterday.toISOString(), reason: 'cron' });
-  await queue.add('rollup.monthly', { period: 'MONTHLY', anchor: monthAnchor.toISOString(), reason: 'cron' });
+  await queue.add('rollup.daily', {
+    period: 'DAILY',
+    anchor: yesterday.toISOString(),
+    reason: 'cron',
+  });
+  await queue.add('rollup.monthly', {
+    period: 'MONTHLY',
+    anchor: monthAnchor.toISOString(),
+    reason: 'cron',
+  });
   log.info({ ts: now.toISOString() }, 'revenue.worker.scheduled');
 }
 

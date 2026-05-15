@@ -27,7 +27,6 @@ interface PerfResponse {
     pixieMargin?: string;
     pixieDataPullCost?: string;
     pixieChargeRate?: string;
-    buzzpayRevSharePct?: string;
     externalId?: string;
   };
   window: { from: string; to: string };
@@ -88,14 +87,16 @@ export default function PartnerDetail({ params }: { params: { id: string } }): J
 
   const p = perf.data.partner;
   const m = perf.data.metrics;
-  const display = ('name' in p && p.name) ? p.name : (p.label ?? '—');
+  const display = 'name' in p && p.name ? p.name : (p.label ?? '—');
 
   return (
     <div className="space-y-6">
       {/* Header card */}
       <div className="card card-pad">
         <div className="flex items-center gap-4">
-          <div className="!h-14 !w-14"><Monogram label={display} /></div>
+          <div className="!h-14 !w-14">
+            <Monogram label={display} />
+          </div>
           <div className="flex-1">
             <h1 className="text-ink text-2xl font-semibold tracking-tight">{display}</h1>
             <div className="mt-1 flex items-center gap-2 text-sm text-muted flex-wrap">
@@ -103,18 +104,34 @@ export default function PartnerDetail({ params }: { params: { id: string } }): J
               <span className="text-line">·</span>
               <StatusPill>{p.status}</StatusPill>
               {p.externalId && <span className="tag">{p.externalId}</span>}
-              {p.onboardingDate && <span className="text-muted">onboarded {formatDateTime(p.onboardingDate)}</span>}
+              {p.onboardingDate && (
+                <span className="text-muted">onboarded {formatDateTime(p.onboardingDate)}</span>
+              )}
             </div>
           </div>
-          <Link href="/partners" className="text-xs text-accent hover:underline">← All partners</Link>
+          <Link href="/partners" className="text-xs text-accent hover:underline">
+            ← All partners
+          </Link>
         </div>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
         <KpiCard label="Applications" value={formatNumber(m.applications)} hint="last 90 days" />
-        <KpiCard label="Decisions" value={formatNumber(m.decisions)} hint={m.applications ? `${formatPct(m.decisions / m.applications)} of apps` : '—'} />
-        <KpiCard label="Fundings" value={formatNumber(m.fundings)} hint={m.decisions ? `${formatPct(m.fundings / m.decisions)} of decisions` : '—'} />
-        <KpiCard label="Revenue" value={formatMoney(m.revenueTotal)} hint="ledger projection · 90d" />
+        <KpiCard
+          label="Decisions"
+          value={formatNumber(m.decisions)}
+          hint={m.applications ? `${formatPct(m.decisions / m.applications)} of apps` : '—'}
+        />
+        <KpiCard
+          label="Fundings"
+          value={formatNumber(m.fundings)}
+          hint={m.decisions ? `${formatPct(m.fundings / m.decisions)} of decisions` : '—'}
+        />
+        <KpiCard
+          label="Revenue"
+          value={formatMoney(m.revenueTotal)}
+          hint="ledger projection · 90d"
+        />
       </div>
 
       {/* Tabs */}
@@ -124,7 +141,9 @@ export default function PartnerDetail({ params }: { params: { id: string } }): J
             key={t}
             onClick={() => setTab(t)}
             className={`px-4 py-2 text-sm border-b-2 -mb-px transition ${
-              tab === t ? 'border-accent text-ink font-medium' : 'border-transparent text-muted hover:text-ink2'
+              tab === t
+                ? 'border-accent text-ink font-medium'
+                : 'border-transparent text-muted hover:text-ink2'
             }`}
           >
             {t}
@@ -134,25 +153,76 @@ export default function PartnerDetail({ params }: { params: { id: string } }): J
 
       {tab === 'Performance' && (
         <div className="space-y-6">
-          <SectionCard title="Revenue over time" subtitle="last 90 days · all streams · partner-scoped projection coming v1.1" bodyClassName="p-3">
-            {revenueChart.data ? <RevenueAreaChart data={revenueChart.data} height={260} /> : <div className="text-muted text-sm p-6">Loading…</div>}
+          <SectionCard
+            title="Revenue over time"
+            subtitle="last 90 days · all streams · partner-scoped projection coming v1.1"
+            bodyClassName="p-3"
+          >
+            {revenueChart.data ? (
+              <RevenueAreaChart data={revenueChart.data} height={260} />
+            ) : (
+              <div className="text-muted text-sm p-6">Loading…</div>
+            )}
           </SectionCard>
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
             <SectionCard title="Contract" subtitle="commercial terms">
-              {p.contractValue && <DetailRow k="Contract value" v={<span className="numeric">{formatMoney(p.contractValue)}</span>} />}
-              {p.buzzpayRevSharePct && <DetailRow k="BuzzPay rev share" v={<span className="numeric">{(Number(p.buzzpayRevSharePct) * 100).toFixed(2)}%</span>} />}
-              {p.pixieMargin && <DetailRow k="Pixie margin / pull" v={<span className="numeric">${Number(p.pixieMargin).toFixed(2)}</span>} />}
-              {p.pixieDataPullCost && <DetailRow k="Pixie cost / pull" v={<span className="numeric">${Number(p.pixieDataPullCost).toFixed(2)}</span>} />}
-              {p.pixieChargeRate && <DetailRow k="Pixie charge / pull" v={<span className="numeric">${Number(p.pixieChargeRate).toFixed(2)}</span>} />}
+              {p.contractValue && (
+                <DetailRow
+                  k="Contract value"
+                  v={<span className="numeric">{formatMoney(p.contractValue)}</span>}
+                />
+              )}
+              {p.pixieMargin && (
+                <DetailRow
+                  k="Pixie margin / pull"
+                  v={<span className="numeric">${Number(p.pixieMargin).toFixed(2)}</span>}
+                />
+              )}
+              {p.pixieDataPullCost && (
+                <DetailRow
+                  k="Pixie cost / pull"
+                  v={<span className="numeric">${Number(p.pixieDataPullCost).toFixed(2)}</span>}
+                />
+              )}
+              {p.pixieChargeRate && (
+                <DetailRow
+                  k="Pixie charge / pull"
+                  v={<span className="numeric">${Number(p.pixieChargeRate).toFixed(2)}</span>}
+                />
+              )}
               <DetailRow k="Status" v={<StatusPill>{p.status}</StatusPill>} />
             </SectionCard>
 
             <SectionCard title="Window" subtitle="performance period">
-              <DetailRow k="From" v={<span className="numeric">{new Date(perf.data.window.from).toLocaleDateString('en-AU')}</span>} />
-              <DetailRow k="To" v={<span className="numeric">{new Date(perf.data.window.to).toLocaleDateString('en-AU')}</span>} />
+              <DetailRow
+                k="From"
+                v={
+                  <span className="numeric">
+                    {new Date(perf.data.window.from).toLocaleDateString('en-AU')}
+                  </span>
+                }
+              />
+              <DetailRow
+                k="To"
+                v={
+                  <span className="numeric">
+                    {new Date(perf.data.window.to).toLocaleDateString('en-AU')}
+                  </span>
+                }
+              />
               <DetailRow k="Span" v={<span className="numeric">90 days</span>} />
-              {p.onboardingDate && <DetailRow k="Tenure" v={<span className="numeric">{Math.floor((Date.now() - new Date(p.onboardingDate).getTime()) / 86_400_000)} days</span>} />}
+              {p.onboardingDate && (
+                <DetailRow
+                  k="Tenure"
+                  v={
+                    <span className="numeric">
+                      {Math.floor((Date.now() - new Date(p.onboardingDate).getTime()) / 86_400_000)}{' '}
+                      days
+                    </span>
+                  }
+                />
+              )}
             </SectionCard>
 
             <SectionCard title="Conversion (90d)" subtitle="this partner's funnel">
@@ -165,7 +235,11 @@ export default function PartnerDetail({ params }: { params: { id: string } }): J
       )}
 
       {tab === 'Applications' && (
-        <SectionCard title={`${(apps.data?.data ?? []).length} most-recent applications`} subtitle="all states · click an ID to drill in" bodyClassName="p-0">
+        <SectionCard
+          title={`${(apps.data?.data ?? []).length} most-recent applications`}
+          subtitle="all states · click an ID to drill in"
+          bodyClassName="p-0"
+        >
           <div className="overflow-x-auto">
             <table className="tbl">
               <thead>
@@ -181,15 +255,32 @@ export default function PartnerDetail({ params }: { params: { id: string } }): J
               <tbody>
                 {(apps.data?.data ?? []).map((a) => (
                   <tr key={a.id} className="cursor-pointer">
-                    <td className="numeric text-muted whitespace-nowrap">{formatDateTime(a.createdAt)}</td>
-                    <td><Link href={`/applications/${a.id}`} className="text-accent hover:underline numeric"><code className="kbd">{a.externalApplicationId}</code></Link></td>
+                    <td className="numeric text-muted whitespace-nowrap">
+                      {formatDateTime(a.createdAt)}
+                    </td>
+                    <td>
+                      <Link
+                        href={`/applications/${a.id}`}
+                        className="text-accent hover:underline numeric"
+                      >
+                        <code className="kbd">{a.externalApplicationId}</code>
+                      </Link>
+                    </td>
                     <td className="text-ink">{a.consumerNameMasked}</td>
                     <td className="text-muted">{a.consumerEmailMasked}</td>
                     <td className="numeric text-right text-ink2">{a.creditScore ?? '—'}</td>
-                    <td><StatusPill>{a.status}</StatusPill></td>
+                    <td>
+                      <StatusPill>{a.status}</StatusPill>
+                    </td>
                   </tr>
                 ))}
-                {(apps.data?.data ?? []).length === 0 && <tr><td colSpan={6} className="text-muted py-8 text-center">No applications.</td></tr>}
+                {(apps.data?.data ?? []).length === 0 && (
+                  <tr>
+                    <td colSpan={6} className="text-muted py-8 text-center">
+                      No applications.
+                    </td>
+                  </tr>
+                )}
               </tbody>
             </table>
           </div>
@@ -197,7 +288,11 @@ export default function PartnerDetail({ params }: { params: { id: string } }): J
       )}
 
       {tab === 'Revenue ledger' && (
-        <SectionCard title="Ledger entries" subtitle="every dollar tied to this partner" bodyClassName="p-0">
+        <SectionCard
+          title="Ledger entries"
+          subtitle="every dollar tied to this partner"
+          bodyClassName="p-0"
+        >
           <div className="overflow-x-auto">
             <table className="tbl">
               <thead>
@@ -214,17 +309,34 @@ export default function PartnerDetail({ params }: { params: { id: string } }): J
                   const negative = Number(r.amount) < 0;
                   return (
                     <tr key={r.idempotencyKey}>
-                      <td className="numeric text-muted whitespace-nowrap">{formatDateTime(r.effectiveAt)}</td>
-                      <td><StatusPill>{r.stream}</StatusPill></td>
-                      <td><StatusPill>{r.eventType}</StatusPill></td>
-                      <td className="text-[11px] text-muted truncate max-w-[300px]"><code>{r.idempotencyKey}</code></td>
-                      <td className={`numeric text-right font-medium ${negative ? 'text-danger' : 'text-success'}`}>
-                        {negative ? '−' : ''}{formatMoney(Math.abs(Number(r.amount)))}
+                      <td className="numeric text-muted whitespace-nowrap">
+                        {formatDateTime(r.effectiveAt)}
+                      </td>
+                      <td>
+                        <StatusPill>{r.stream}</StatusPill>
+                      </td>
+                      <td>
+                        <StatusPill>{r.eventType}</StatusPill>
+                      </td>
+                      <td className="text-[11px] text-muted truncate max-w-[300px]">
+                        <code>{r.idempotencyKey}</code>
+                      </td>
+                      <td
+                        className={`numeric text-right font-medium ${negative ? 'text-danger' : 'text-success'}`}
+                      >
+                        {negative ? '−' : ''}
+                        {formatMoney(Math.abs(Number(r.amount)))}
                       </td>
                     </tr>
                   );
                 })}
-                {(ledger.data?.data ?? []).length === 0 && <tr><td colSpan={5} className="text-muted py-8 text-center">No revenue events for this partner.</td></tr>}
+                {(ledger.data?.data ?? []).length === 0 && (
+                  <tr>
+                    <td colSpan={5} className="text-muted py-8 text-center">
+                      No revenue events for this partner.
+                    </td>
+                  </tr>
+                )}
               </tbody>
             </table>
           </div>
@@ -247,13 +359,24 @@ function DetailRow({ k, v }: { k: string; v: React.ReactNode }): JSX.Element {
   );
 }
 
-function Stage({ label, v, max, tone }: { label: string; v: number; max: number; tone: 'accent' | 'success' }): JSX.Element {
+function Stage({
+  label,
+  v,
+  max,
+  tone,
+}: {
+  label: string;
+  v: number;
+  max: number;
+  tone: 'accent' | 'success';
+}): JSX.Element {
   return (
     <div className="py-2 border-b border-line/60 last:border-b-0">
       <div className="flex items-baseline justify-between text-xs">
         <span className="text-muted">{label}</span>
         <span className="numeric text-ink font-medium">
-          {formatNumber(v)} <span className="text-muted">· {((max ? v / max : 0) * 100).toFixed(0)}%</span>
+          {formatNumber(v)}{' '}
+          <span className="text-muted">· {((max ? v / max : 0) * 100).toFixed(0)}%</span>
         </span>
       </div>
       <MiniBar value={max ? v / max : 0} tone={tone} className="mt-1.5" />
@@ -288,10 +411,18 @@ function PixieTab({ partnerId }: { partnerId: string }): JSX.Element {
     <div className="space-y-6">
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <KpiCard label="Days tracked" value={formatNumber(days)} hint="Pixie metric rows" />
-        <KpiCard label="Total pulls" value={formatNumber(totalPulls)} hint={days ? `${Math.round(totalPulls / days)} avg/day` : ''} />
+        <KpiCard
+          label="Total pulls"
+          value={formatNumber(totalPulls)}
+          hint={days ? `${Math.round(totalPulls / days)} avg/day` : ''}
+        />
         <KpiCard label="Total margin" value={formatMoney(totalRev)} hint="EazePay revenue" />
       </div>
-      <SectionCard title="Daily Pixie usage & margin" subtitle="this partner only · most recent first" bodyClassName="p-0">
+      <SectionCard
+        title="Daily Pixie usage & margin"
+        subtitle="this partner only · most recent first"
+        bodyClassName="p-0"
+      >
         <div className="overflow-x-auto">
           <table className="tbl">
             <thead>
@@ -308,16 +439,34 @@ function PixieTab({ partnerId }: { partnerId: string }): JSX.Element {
             <tbody>
               {rows.map((r) => (
                 <tr key={`${r.periodStart}-${r.partnerId}`}>
-                  <td className="numeric text-muted">{new Date(r.periodStart).toLocaleDateString('en-AU')}</td>
+                  <td className="numeric text-muted">
+                    {new Date(r.periodStart).toLocaleDateString('en-AU')}
+                  </td>
                   <td className="numeric text-right text-ink">{r.pulls.toLocaleString('en-AU')}</td>
-                  <td className="numeric text-right text-ink2">${Number(r.costPerPull).toFixed(2)}</td>
-                  <td className="numeric text-right text-ink2">${Number(r.chargePerPull).toFixed(2)}</td>
-                  <td className="numeric text-right text-success font-medium">${Number(r.profitPerPull).toFixed(2)}</td>
-                  <td className="numeric text-right text-ink font-medium">{formatMoney(r.totalRevenue)}</td>
-                  <td className="w-32"><MiniBar value={Number(r.totalRevenue) / max} tone="success" /></td>
+                  <td className="numeric text-right text-ink2">
+                    ${Number(r.costPerPull).toFixed(2)}
+                  </td>
+                  <td className="numeric text-right text-ink2">
+                    ${Number(r.chargePerPull).toFixed(2)}
+                  </td>
+                  <td className="numeric text-right text-success font-medium">
+                    ${Number(r.profitPerPull).toFixed(2)}
+                  </td>
+                  <td className="numeric text-right text-ink font-medium">
+                    {formatMoney(r.totalRevenue)}
+                  </td>
+                  <td className="w-32">
+                    <MiniBar value={Number(r.totalRevenue) / max} tone="success" />
+                  </td>
                 </tr>
               ))}
-              {rows.length === 0 && <tr><td colSpan={7} className="text-muted py-8 text-center">No Pixie usage for this partner.</td></tr>}
+              {rows.length === 0 && (
+                <tr>
+                  <td colSpan={7} className="text-muted py-8 text-center">
+                    No Pixie usage for this partner.
+                  </td>
+                </tr>
+              )}
             </tbody>
           </table>
         </div>
@@ -345,7 +494,11 @@ function AuditTab({ partnerId }: { partnerId: string }): JSX.Element {
   const rows = (q.data ?? []).filter((r) => r.resourceId === partnerId);
 
   return (
-    <SectionCard title="Audit trail" subtitle={`${rows.length} mutation${rows.length === 1 ? '' : 's'} on this partner`} bodyClassName="p-0">
+    <SectionCard
+      title="Audit trail"
+      subtitle={`${rows.length} mutation${rows.length === 1 ? '' : 's'} on this partner`}
+      bodyClassName="p-0"
+    >
       <div className="overflow-x-auto">
         <table className="tbl">
           <thead>
@@ -359,20 +512,34 @@ function AuditTab({ partnerId }: { partnerId: string }): JSX.Element {
           <tbody>
             {rows.map((r) => (
               <tr key={r.id}>
-                <td className="numeric text-muted whitespace-nowrap">{formatDateTime(r.createdAt)}</td>
-                <td><span className="tag">{r.action}</span></td>
+                <td className="numeric text-muted whitespace-nowrap">
+                  {formatDateTime(r.createdAt)}
+                </td>
+                <td>
+                  <span className="tag">{r.action}</span>
+                </td>
                 <td>
                   {r.userEmail ? (
                     <div>
                       <div className="text-ink text-sm">{r.userEmail}</div>
                       <div className="text-[11px] text-muted">{r.userRole}</div>
                     </div>
-                  ) : <span className="text-muted text-sm">system</span>}
+                  ) : (
+                    <span className="text-muted text-sm">system</span>
+                  )}
                 </td>
-                <td className="text-[11px] text-muted truncate max-w-[400px]"><span className="tag">{JSON.stringify(r.metadata ?? {})}</span></td>
+                <td className="text-[11px] text-muted truncate max-w-[400px]">
+                  <span className="tag">{JSON.stringify(r.metadata ?? {})}</span>
+                </td>
               </tr>
             ))}
-            {rows.length === 0 && <tr><td colSpan={4} className="text-muted py-8 text-center">No audit entries for this partner yet.</td></tr>}
+            {rows.length === 0 && (
+              <tr>
+                <td colSpan={4} className="text-muted py-8 text-center">
+                  No audit entries for this partner yet.
+                </td>
+              </tr>
+            )}
           </tbody>
         </table>
       </div>

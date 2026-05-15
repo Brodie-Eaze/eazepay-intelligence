@@ -1,3 +1,6 @@
+import { startTelemetry } from '../config/telemetry.js';
+startTelemetry({ serviceName: 'eazepay-intelligence-worker-outbox' });
+
 /**
  * Outbox sweeper worker.
  *
@@ -29,6 +32,10 @@ import { enqueueWebhookDelivery } from '../shared/queues/webhook-delivery.queue.
 import { getRedisPublisher } from '../config/redis.js';
 import { WS_CHANNEL } from '../shared/utils/ws-publisher.js';
 
+// Outbox sweep cadence + batch size. Defaults are deliberately conservative —
+// at 100 events / 1s sweep we drain 6,000 events/min per replica, scaling
+// linearly with replica count (FOR UPDATE SKIP LOCKED gives us non-overlapping
+// batches across replicas). See docs/COMPUTE_LIMITS.md for sizing.
 const POLL_INTERVAL_MS = Number(process.env.OUTBOX_POLL_INTERVAL_MS ?? 1_000);
 const BATCH_SIZE = Number(process.env.OUTBOX_BATCH_SIZE ?? 100);
 
@@ -43,40 +50,49 @@ async function processOnce(): Promise<number> {
   const prisma = getPrisma();
   const log = getLogger();
 
-  // Lock-and-claim a batch atomically. SKIP LOCKED lets concurrent sweepers
-  // run without contention.
-  const claimed = await prisma.$queryRaw<OutboxRow[]>(Prisma.sql`
-    SELECT id, kind, payload, attempt_count
-    FROM outbox_events
-    WHERE published_at IS NULL
-    ORDER BY created_at ASC
-    LIMIT ${BATCH_SIZE}
-    FOR UPDATE SKIP LOCKED
-  `);
+  // Lock-and-claim a batch atomically. The SELECT...FOR UPDATE SKIP LOCKED
+  // and the subsequent UPDATEs MUST run inside a single Postgres transaction
+  // so the row-level locks survive the dispatch + update cycle. Outside a
+  // transaction, autocommit releases the locks the moment the SELECT
+  // returns and concurrent sweeper replicas can claim the same rows.
+  //
+  // Trade-off: dispatch latency (BullMQ enqueue, Redis pub) holds the locks
+  // for the whole batch. BullMQ enqueue is sub-ms in practice, so the
+  // serialised dispatch loop is not a meaningful contention source.
+  return prisma.$transaction(async (tx) => {
+    const claimed = await tx.$queryRaw<OutboxRow[]>(Prisma.sql`
+      SELECT id, kind, payload, attempt_count
+      FROM outbox_events
+      WHERE published_at IS NULL
+      ORDER BY created_at ASC
+      LIMIT ${BATCH_SIZE}
+      FOR UPDATE SKIP LOCKED
+    `);
 
-  if (claimed.length === 0) return 0;
+    if (claimed.length === 0) return 0;
 
-  for (const row of claimed) {
-    try {
-      await dispatch(row);
-      await prisma.outboxEvent.update({
-        where: { id: row.id },
-        data: { publishedAt: new Date(), publishError: null },
-      });
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      log.error(
-        { outboxId: row.id, kind: row.kind, attempt: row.attempt_count + 1, err: msg },
-        'outbox.publish.fail',
-      );
-      await prisma.outboxEvent.update({
-        where: { id: row.id },
-        data: { attemptCount: row.attempt_count + 1, publishError: msg.slice(0, 1000) },
-      });
+    for (const row of claimed) {
+      try {
+        await dispatch(row);
+        await tx.outboxEvent.update({
+          where: { id: row.id },
+          data: { publishedAt: new Date(), publishError: null },
+        });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        log.error(
+          { outboxId: row.id, kind: row.kind, attempt: row.attempt_count + 1, err: msg },
+          'outbox.publish.fail',
+        );
+        await tx.outboxEvent.update({
+          where: { id: row.id },
+          data: { attemptCount: row.attempt_count + 1, publishError: msg.slice(0, 1000) },
+        });
+      }
     }
-  }
 
-  return claimed.length;
+    return claimed.length;
+  });
 }
 
 async function dispatch(row: OutboxRow): Promise<void> {

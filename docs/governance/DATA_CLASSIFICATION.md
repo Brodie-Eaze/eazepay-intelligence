@@ -14,19 +14,19 @@ Every field the platform persists, classified, with retention and protection mec
 
 ## `partners` table
 
-| Field                    | Type        | Class                       | At rest   | In logs                                | Retention         |
-| ------------------------ | ----------- | --------------------------- | --------- | -------------------------------------- | ----------------- |
-| `id`                     | uuid        | INTERNAL                    | plaintext | allowed                                | 7y after deletion |
-| `external_id`            | string      | INTERNAL                    | plaintext | allowed                                | 7y                |
-| `name`                   | string      | CONFIDENTIAL                | plaintext | partial (anonymized in investor scope) | 7y                |
-| `industry`               | string      | INTERNAL                    | plaintext | allowed                                | 7y                |
-| `onboarding_date`        | timestamptz | INTERNAL                    | plaintext | allowed                                | 7y                |
-| `status`                 | enum        | INTERNAL                    | plaintext | allowed                                | 7y                |
-| `tier`                   | enum        | INTERNAL (deprecated in UI) | plaintext | allowed                                | 7y                |
-| `contract_value`         | decimal     | CONFIDENTIAL                | plaintext | redacted in investor scope             | 7y                |
-| `buzzpay_rev_share_pct`  | decimal     | CONFIDENTIAL                | plaintext | allowed in operator logs               | 7y                |
-| `pixie_*` pricing fields | decimal     | CONFIDENTIAL                | plaintext | allowed                                | 7y                |
-| `metadata`               | json        | varies                      | plaintext | reviewed per write                     | 7y                |
+| Field                    | Type        | Class                                                                                           | At rest   | In logs                                | Retention         |
+| ------------------------ | ----------- | ----------------------------------------------------------------------------------------------- | --------- | -------------------------------------- | ----------------- |
+| `id`                     | uuid        | INTERNAL                                                                                        | plaintext | allowed                                | 7y after deletion |
+| `external_id`            | string      | INTERNAL                                                                                        | plaintext | allowed                                | 7y                |
+| `name`                   | string      | CONFIDENTIAL                                                                                    | plaintext | partial (anonymized in investor scope) | 7y                |
+| `industry`               | string      | INTERNAL                                                                                        | plaintext | allowed                                | 7y                |
+| `onboarding_date`        | timestamptz | INTERNAL                                                                                        | plaintext | allowed                                | 7y                |
+| `status`                 | enum        | INTERNAL                                                                                        | plaintext | allowed                                | 7y                |
+| `tier`                   | enum        | INTERNAL (deprecated in UI)                                                                     | plaintext | allowed                                | 7y                |
+| `contract_value`         | decimal     | CONFIDENTIAL                                                                                    | plaintext | redacted in investor scope             | 7y                |
+| `buzzpay_rev_share_pct`  | decimal     | CONFIDENTIAL (legacy — Phase C migration drops this column; see `docs/cuts/buzzpay-removal.md`) | plaintext | allowed in operator logs               | 7y                |
+| `pixie_*` pricing fields | decimal     | CONFIDENTIAL                                                                                    | plaintext | allowed                                | 7y                |
+| `metadata`               | json        | varies                                                                                          | plaintext | reviewed per write                     | 7y                |
 
 ## `applications` table
 
@@ -109,9 +109,19 @@ CONFIDENTIAL aggregated business data. Plaintext, 7y retention, append-only at r
 ## Data flow classification map
 
 ```
-[BuzzPay] ── PII/SENSITIVE ──▶ webhook handler ──▶ encrypt PII ──▶ applications (split: ciphertext + hashed)
-                                  │
-                                  └─ raw payload ──▶ webhook_events (90d, then encrypted archive)
+[EazePay App]   ── HMAC ──▶  POST /integration/eazepay-app/events  ──┐
+[HighSale]      ── HMAC ──▶  POST /integration/highsale/snapshots   ─┤
+[Lender APIs]   ── pull ──▶  background worker (one per lender)     ─┼─▶ verify → persist webhook_events
+[MiCamp + Pixie] ── HMAC ──▶ POST /webhooks/{micamp|pixie}/{event}  ─┘
+                                                                       │
+                                                                       ▼
+                                                            outbox sweep → BullMQ
+                                                                       │
+                                                                       ▼
+                            encrypt PII under per-org DEK → applications + credit_enrichments
+                                                                       │
+                                                                       ▼
+                                          dbt staging → marts (PII dropped; hashes kept for join)
 
 [Operator UI] ── HTTPS+cookie ──▶ /customers/:hash ──▶ projection (PII masked)
                                                         │

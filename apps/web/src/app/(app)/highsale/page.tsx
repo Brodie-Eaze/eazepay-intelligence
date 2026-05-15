@@ -1,170 +1,463 @@
 'use client';
 
+import { useState } from 'react';
+import Link from 'next/link';
 import { useQuery } from '@tanstack/react-query';
-import {
-  Area, AreaChart, CartesianGrid, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis,
-} from 'recharts';
 import { api } from '@/lib/api';
-import { formatMoney, formatNumber } from '@/lib/format';
+import { formatDateTime, formatMoney, formatNumber, formatPct } from '@/lib/format';
 import { PageHeader } from '@/components/PageHeader';
 import { SectionCard } from '@/components/SectionCard';
 import { KpiCard } from '@/components/KpiCard';
 import { MiniBar } from '@/components/MiniBar';
+import { StatusPill } from '@/components/StatusPill';
+import { ExportButton } from '@/components/ExportButton';
+import { useUser } from '@/lib/auth';
 
-interface PixieBP { collectiveLast24h: number; threshold: number; aboveBreakpoint: boolean }
-interface PixieMargin { windowDays: number; totalMargin: string; totalPulls: number }
-interface PixieRow {
-  partnerId: string;
-  period: string;
-  periodStart: string;
-  pulls: number;
-  cumulative: number;
-  costPerPull: string;
-  chargePerPull: string;
-  profitPerPull: string;
-  totalRevenue: string;
+/**
+ * /highsale — credit-data snapshot drill page.
+ *
+ * One row per HighSale (EZ Check) pull. The team's questions:
+ *   - Who's in our funnel right now and on what credit profile?
+ *   - What's our BNPL approval rate vs. consumer-loan approval rate?
+ *   - Why are applicants getting DQ'd? (top reasons)
+ *   - Is HighSale's ML confidence calibrated to actual outcomes?
+ *
+ * Filters: vertical, BNPL-qualified, score band. Click a row to drill
+ * into the underlying customer record.
+ */
+
+interface SnapshotRow {
+  id: string;
+  vertical: 'medpay' | 'tradepay' | 'coachpay';
+  pulledAt: string;
+  highsaleTransactionId: string;
+  externalApplicationId: string | null;
+  applicationId: string | null;
+  consumerEmailHash: string;
+  // PII — present for ADMIN/OPERATOR roles only. VIEWER/INVESTOR get null
+  // here and the masked versions below. Every list call writes a single
+  // PII_ACCESSED audit row server-side covering the whole batch.
+  consumerName: string | null;
+  consumerEmail: string | null;
+  consumerEmailMasked: string | null;
+  consumerPhone: string | null;
+  consumerPhoneMasked: string | null;
+  score: number;
+  averageGrade: number;
+  isQualified: boolean;
+  isQualifiedBnpl: boolean;
+  isQualifiedConsumerLoan: boolean;
+  dqReasons: string[];
+  confidenceScoreBnpl: string;
+  fundingEstimateBnplCents: number;
+  availableCreditCents: number;
+  utilization: string;
+  numOfChargeOffs: number;
+  numOfRepos: number;
+  numOfForeclosures: number;
+  saleConfidenceScore: string;
 }
 
-const BASE_COST = 1.0;
-const BASE_CHARGE = 3.0;
+interface Aggregates {
+  total: number;
+  last24h: number;
+  avgScore: number | null;
+  minScore: number | null;
+  maxScore: number | null;
+  avgMlConfidence: string | null;
+  byVertical: Array<{ vertical: string; count: number; avgScore: number | null }>;
+  byQualification: { bnplQualified: number; bnplNotQualified: number };
+  topDqReasons: Array<{ reason: string; count: number }>;
+}
+
+interface SnapshotsResp {
+  data: SnapshotRow[];
+  aggregates: Aggregates;
+}
+
+type VerticalFilter = '' | 'medpay' | 'tradepay' | 'coachpay';
+type BnplFilter = '' | 'true' | 'false';
 
 export default function HighSalePage(): JSX.Element {
-  const bp = useQuery({ queryKey: ['highsale.bp'], queryFn: () => api<PixieBP>('/pixie/breakpoint-status') });
-  const margin = useQuery({ queryKey: ['highsale.margin'], queryFn: () => api<PixieMargin>('/pixie/margin') });
-  const usage = useQuery({ queryKey: ['highsale.usage'], queryFn: () => api<PixieRow[]>('/pixie/usage?period=DAILY') });
+  const user = useUser();
+  const [vertical, setVertical] = useState<VerticalFilter>('');
+  const [bnpl, setBnpl] = useState<BnplFilter>('');
+  const [scoreBand, setScoreBand] = useState<'' | 'prime' | 'near' | 'sub' | 'deep'>('');
 
-  const breakpoint = bp.data?.threshold ?? 25_000;
-  const collective = bp.data?.collectiveLast24h ?? 0;
-  const above = bp.data?.aboveBreakpoint ?? false;
-  const ratio = Math.min(1, collective / breakpoint);
+  const params = new URLSearchParams();
+  if (vertical) params.set('vertical', vertical);
+  if (bnpl) params.set('isQualifiedBnpl', bnpl);
+  if (scoreBand === 'prime') params.set('scoreMin', '720');
+  if (scoreBand === 'near') {
+    params.set('scoreMin', '660');
+    params.set('scoreMax', '719');
+  }
+  if (scoreBand === 'sub') {
+    params.set('scoreMin', '580');
+    params.set('scoreMax', '659');
+  }
+  if (scoreBand === 'deep') params.set('scoreMax', '579');
+  params.set('limit', '200');
 
-  // Build the curve once
-  const curve = Array.from({ length: 41 }).map((_, i) => {
-    const x = Math.round((breakpoint * 2 * i) / 40);
-    const cost = x >= breakpoint ? BASE_COST : BASE_COST * (2 - x / breakpoint);
-    return { collective: x, cost: Number(cost.toFixed(2)), margin: Number((BASE_CHARGE - cost).toFixed(2)) };
+  const q = useQuery({
+    queryKey: ['highsale.snapshots', vertical, bnpl, scoreBand],
+    queryFn: () => api<SnapshotsResp>(`/highsale/snapshots?${params.toString()}`),
   });
 
-  const usageRows = usage.data ?? [];
-  const tableMax = Math.max(1, ...usageRows.map((r) => Number(r.totalRevenue)));
+  const rows = q.data?.data ?? [];
+  const agg = q.data?.aggregates;
+
+  const bnplRate = agg
+    ? agg.byQualification.bnplQualified + agg.byQualification.bnplNotQualified > 0
+      ? agg.byQualification.bnplQualified /
+        (agg.byQualification.bnplQualified + agg.byQualification.bnplNotQualified)
+      : null
+    : null;
 
   return (
     <div className="space-y-6">
       <PageHeader
-        title="HighSale"
-        subtitle="Pixie smart-form pre-qualification · sits in front of every BuzzPay application"
+        title="HighSale (EZ Check)"
+        subtitle="Per-application credit-data snapshots · ~70 fields per applicant · PII encrypted at rest"
+        action={
+          <div className="flex items-center gap-2">
+            <Link
+              href="/highsale/schema"
+              className="text-xs px-3 py-1.5 rounded-md border border-line2 text-ink2 hover:bg-paper hover:border-accent transition"
+            >
+              Schema reference →
+            </Link>
+            <ExportButton
+              endpoint="/highsale/snapshots/export"
+              filters={params}
+              filenameHint="highsale_snapshots"
+              userRole={user?.role}
+              toggles={[
+                {
+                  id: 'protected',
+                  label: 'Include protected-class demographics',
+                  param: 'includeProtected',
+                  requireRole: 'ADMIN',
+                  warningWhenOn:
+                    'Protected-class columns are FCRA / fair-lending sensitive. Export will be tagged PROTECTED_CLASS_READ in the audit log.',
+                },
+              ]}
+            />
+          </div>
+        }
       />
 
-      {/* Top KPI strip — what's happening right now */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+      {/* ── KPI strip ─────────────────────────────────────────────────── */}
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
         <KpiCard
-          label="Pulls (24h)"
-          value={formatNumber(collective)}
-          hint={`${formatNumber(breakpoint)} breakpoint`}
+          label="Snapshots (total)"
+          value={agg ? formatNumber(agg.total) : '…'}
+          hint={agg ? `${formatNumber(agg.last24h)} last 24h` : '—'}
         />
         <KpiCard
-          label="Margin / pull"
-          value={above ? `$${(BASE_CHARGE - BASE_COST).toFixed(2)}` : 'sliding'}
-          hint={above ? 'above breakpoint' : 'subsidised'}
+          label="Avg score"
+          value={agg?.avgScore != null ? Math.round(agg.avgScore).toString() : '—'}
+          hint={
+            agg?.minScore != null && agg?.maxScore != null
+              ? `range ${agg.minScore}–${agg.maxScore}`
+              : '—'
+          }
         />
         <KpiCard
-          label="30-day margin"
-          value={formatMoney(margin.data?.totalMargin ?? 0)}
-          hint="all partners"
+          label="BNPL qualified rate"
+          value={bnplRate != null ? formatPct(bnplRate) : '—'}
+          hint={
+            agg
+              ? `${formatNumber(agg.byQualification.bnplQualified)} / ${formatNumber(
+                  agg.byQualification.bnplQualified + agg.byQualification.bnplNotQualified,
+                )}`
+              : '—'
+          }
         />
         <KpiCard
-          label="30-day pulls"
-          value={formatNumber(margin.data?.totalPulls ?? 0)}
-          hint="collective volume"
+          label="HighSale ML confidence"
+          value={
+            agg?.avgMlConfidence != null
+              ? `${(Number(agg.avgMlConfidence) * 100).toFixed(1)}%`
+              : '—'
+          }
+          hint="avg across snapshots"
         />
+        <KpiCard label="Filtered" value={formatNumber(rows.length)} hint="rows below" />
       </div>
 
-      {/* Breakpoint progress */}
-      <SectionCard title="Breakpoint progress" subtitle={above ? 'in full-margin territory' : 'still subsidised — drive volume to unlock $2/pull'}>
-        <div className="flex items-baseline justify-between mb-2">
-          <span className="numeric text-2xl font-semibold text-ink tracking-tight">{formatNumber(collective)}</span>
-          <span className="text-xs text-muted numeric">/ {formatNumber(breakpoint)}</span>
-        </div>
-        <MiniBar value={ratio} className="h-2.5" />
-        <div className="text-[11px] text-muted mt-2">last 24h collective volume across the whole network</div>
-      </SectionCard>
+      {/* ── By-vertical breakdown ─────────────────────────────────────── */}
+      {agg && agg.byVertical.length > 0 && (
+        <SectionCard
+          title="By vertical"
+          subtitle="snapshot count + avg credit score per BNPL brand"
+        >
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-x-8 gap-y-3">
+            {agg.byVertical.map((v) => {
+              const maxCount = Math.max(...agg.byVertical.map((x) => x.count));
+              return (
+                <div key={v.vertical}>
+                  <div className="flex items-center justify-between mb-1.5 text-sm">
+                    <span className="text-ink font-medium capitalize">{v.vertical}</span>
+                    <span className="numeric text-ink2">
+                      {formatNumber(v.count)}
+                      <span className="text-muted text-xs ml-2">
+                        avg {v.avgScore != null ? Math.round(v.avgScore) : '—'}
+                      </span>
+                    </span>
+                  </div>
+                  <MiniBar value={maxCount ? v.count / maxCount : 0} className="h-2.5" />
+                </div>
+              );
+            })}
+          </div>
+        </SectionCard>
+      )}
 
-      {/* The pricing curve */}
-      <SectionCard
-        title="Pricing curve"
-        subtitle="x-axis: collective daily pulls · y-axis: $ per pull · vertical lines mark the breakpoint and where we sit now"
-        bodyClassName="p-3"
-      >
-        <div style={{ height: 320 }}>
-          <ResponsiveContainer width="100%" height="100%">
-            <AreaChart data={curve} margin={{ top: 10, right: 20, bottom: 8, left: 8 }}>
-              <defs>
-                <linearGradient id="margin-fill" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor="#3B82F6" stopOpacity={0.4} />
-                  <stop offset="100%" stopColor="#3B82F6" stopOpacity={0.04} />
-                </linearGradient>
-                <linearGradient id="cost-fill" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor="#0F172A" stopOpacity={0.25} />
-                  <stop offset="100%" stopColor="#0F172A" stopOpacity={0.03} />
-                </linearGradient>
-              </defs>
-              <CartesianGrid stroke="#EEF1F5" strokeDasharray="2 4" vertical={false} />
-              <XAxis dataKey="collective" stroke="#94A3B8" fontSize={11} tickFormatter={(v) => `${(v / 1000).toFixed(0)}k`} />
-              <YAxis stroke="#94A3B8" fontSize={11} tickFormatter={(v) => `$${v}`} />
-              <Tooltip
-                contentStyle={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 8, fontSize: 12 }}
-                formatter={(v: number, name: string) => [`$${v.toFixed(2)}`, name]}
-                labelFormatter={(v) => `${formatNumber(Number(v))} collective pulls`}
-              />
-              <Area type="monotone" dataKey="margin" stroke="#3B82F6" strokeWidth={2} fill="url(#margin-fill)" name="Margin / pull" />
-              <Area type="monotone" dataKey="cost"   stroke="#0F172A" strokeWidth={2} fill="url(#cost-fill)"   name="Cost / pull" />
-              <ReferenceLine x={breakpoint} stroke="#94A3B8" strokeDasharray="4 4" label={{ value: 'Breakpoint', fill: '#475569', fontSize: 11, position: 'top' }} />
-              <ReferenceLine x={collective} stroke="#0F172A" strokeWidth={1.5} label={{ value: 'Now', fill: '#0F172A', fontSize: 11, position: 'top' }} />
-            </AreaChart>
-          </ResponsiveContainer>
-        </div>
-      </SectionCard>
+      {/* ── Top DQ reasons (filtered set) ─────────────────────────────── */}
+      {agg && agg.topDqReasons.length > 0 && (
+        <SectionCard
+          title="Top decline reasons"
+          subtitle={`across the ${rows.length} filtered snapshot${rows.length === 1 ? '' : 's'}`}
+          bodyClassName="p-0"
+        >
+          <div className="overflow-x-auto">
+            <table className="tbl">
+              <thead>
+                <tr>
+                  <th>Reason</th>
+                  <th className="text-right">Count</th>
+                </tr>
+              </thead>
+              <tbody>
+                {agg.topDqReasons.map((r) => (
+                  <tr key={r.reason}>
+                    <td className="text-ink2">{r.reason}</td>
+                    <td className="numeric text-right text-ink">{r.count}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </SectionCard>
+      )}
 
-      {/* Daily usage per partner */}
+      {/* ── Filters ───────────────────────────────────────────────────── */}
       <SectionCard
-        title="Daily usage per partner"
-        subtitle="every day · every partner · what we made off each pull"
+        title="Snapshots"
+        subtitle="filter + drill · most recent first"
         bodyClassName="p-0"
-        collapsible
-        defaultOpen
       >
+        <div className="flex flex-wrap items-center gap-3 px-5 py-3 border-b border-line2 text-xs">
+          <FilterGroup label="Vertical">
+            <FilterButton active={vertical === ''} onClick={() => setVertical('')}>
+              All
+            </FilterButton>
+            <FilterButton active={vertical === 'medpay'} onClick={() => setVertical('medpay')}>
+              MedPay
+            </FilterButton>
+            <FilterButton active={vertical === 'tradepay'} onClick={() => setVertical('tradepay')}>
+              TradePay
+            </FilterButton>
+            <FilterButton active={vertical === 'coachpay'} onClick={() => setVertical('coachpay')}>
+              CoachPay
+            </FilterButton>
+          </FilterGroup>
+
+          <FilterGroup label="BNPL qualified">
+            <FilterButton active={bnpl === ''} onClick={() => setBnpl('')}>
+              Any
+            </FilterButton>
+            <FilterButton active={bnpl === 'true'} onClick={() => setBnpl('true')}>
+              Yes
+            </FilterButton>
+            <FilterButton active={bnpl === 'false'} onClick={() => setBnpl('false')}>
+              No
+            </FilterButton>
+          </FilterGroup>
+
+          <FilterGroup label="Score band">
+            <FilterButton active={scoreBand === ''} onClick={() => setScoreBand('')}>
+              Any
+            </FilterButton>
+            <FilterButton active={scoreBand === 'prime'} onClick={() => setScoreBand('prime')}>
+              Prime ≥720
+            </FilterButton>
+            <FilterButton active={scoreBand === 'near'} onClick={() => setScoreBand('near')}>
+              Near 660–719
+            </FilterButton>
+            <FilterButton active={scoreBand === 'sub'} onClick={() => setScoreBand('sub')}>
+              Sub 580–659
+            </FilterButton>
+            <FilterButton active={scoreBand === 'deep'} onClick={() => setScoreBand('deep')}>
+              Deep &lt;580
+            </FilterButton>
+          </FilterGroup>
+        </div>
+
+        {/* ── Snapshot table ─────────────────────────────────────────── */}
         <div className="overflow-x-auto">
           <table className="tbl">
             <thead>
               <tr>
-                <th>Period</th>
-                <th>Partner</th>
-                <th className="text-right">Pulls</th>
-                <th className="text-right">Cost / pull</th>
-                <th className="text-right">Charge / pull</th>
-                <th className="text-right">Margin / pull</th>
-                <th className="text-right">Revenue</th>
-                <th>Margin share</th>
+                <th>Pulled</th>
+                <th>Applicant</th>
+                <th>Email</th>
+                <th>Phone</th>
+                <th>Vertical</th>
+                <th className="text-right">Score</th>
+                <th>BNPL</th>
+                <th className="text-right">BNPL fund est.</th>
+                <th className="text-right">Available credit</th>
+                <th className="text-right">Util</th>
+                <th>Adverse</th>
+                <th className="text-right">ML conf</th>
+                <th></th>
               </tr>
             </thead>
             <tbody>
-              {usageRows.slice(0, 80).map((r) => (
-                <tr key={`${r.periodStart}-${r.partnerId}`}>
-                  <td className="numeric text-muted">{new Date(r.periodStart).toLocaleDateString('en-AU')}</td>
-                  <td className="numeric"><span className="tag">{r.partnerId.slice(0, 8)}</span></td>
-                  <td className="numeric text-right text-ink">{r.pulls.toLocaleString('en-AU')}</td>
-                  <td className="numeric text-right text-ink2">${Number(r.costPerPull).toFixed(2)}</td>
-                  <td className="numeric text-right text-ink2">${Number(r.chargePerPull).toFixed(2)}</td>
-                  <td className="numeric text-right text-success font-medium">${Number(r.profitPerPull).toFixed(2)}</td>
-                  <td className="numeric text-right text-ink font-medium">{formatMoney(r.totalRevenue)}</td>
-                  <td className="w-32"><MiniBar value={Number(r.totalRevenue) / tableMax} /></td>
+              {rows.map((r) => {
+                const adverse = r.numOfChargeOffs + r.numOfRepos + r.numOfForeclosures;
+                return (
+                  <tr key={r.id}>
+                    <td className="numeric text-muted whitespace-nowrap">
+                      {formatDateTime(r.pulledAt)}
+                    </td>
+                    <td className="whitespace-nowrap">
+                      {r.consumerName ? (
+                        <span className="text-ink font-medium">{r.consumerName}</span>
+                      ) : (
+                        <span className="text-soft text-xs">— masked —</span>
+                      )}
+                    </td>
+                    <td className="whitespace-nowrap">
+                      {r.consumerEmail ? (
+                        <a
+                          href={`mailto:${r.consumerEmail}`}
+                          className="text-ink2 text-xs hover:text-accent hover:underline"
+                        >
+                          {r.consumerEmail}
+                        </a>
+                      ) : (
+                        <span className="text-soft text-xs">{r.consumerEmailMasked ?? '—'}</span>
+                      )}
+                    </td>
+                    <td className="whitespace-nowrap">
+                      {r.consumerPhone ? (
+                        <a
+                          href={`tel:${r.consumerPhone}`}
+                          className="text-ink2 text-xs hover:text-accent hover:underline numeric"
+                        >
+                          {r.consumerPhone}
+                        </a>
+                      ) : (
+                        <span className="text-soft text-xs numeric">
+                          {r.consumerPhoneMasked ?? '—'}
+                        </span>
+                      )}
+                    </td>
+                    <td>
+                      <span className="tag capitalize">{r.vertical}</span>
+                    </td>
+                    <td className="numeric text-right font-medium text-ink">
+                      {r.score}
+                      <span className="text-muted text-xs ml-1">/{r.averageGrade}</span>
+                    </td>
+                    <td>
+                      <StatusPill>{r.isQualifiedBnpl ? 'APPROVED' : 'DECLINED'}</StatusPill>
+                      <span className="text-[10px] text-muted ml-1 numeric">
+                        {(Number(r.confidenceScoreBnpl) * 100).toFixed(0)}%
+                      </span>
+                    </td>
+                    <td className="numeric text-right text-ink2">
+                      {formatMoney(r.fundingEstimateBnplCents / 100)}
+                    </td>
+                    <td className="numeric text-right text-ink2">
+                      {formatMoney(r.availableCreditCents / 100)}
+                    </td>
+                    <td className="numeric text-right text-ink2">
+                      {(Number(r.utilization) * 100).toFixed(0)}%
+                    </td>
+                    <td>
+                      {adverse > 0 ? (
+                        <span className="text-danger text-xs">
+                          {r.numOfChargeOffs > 0 && `${r.numOfChargeOffs}co `}
+                          {r.numOfRepos > 0 && `${r.numOfRepos}repo `}
+                          {r.numOfForeclosures > 0 && `${r.numOfForeclosures}fc`}
+                        </span>
+                      ) : (
+                        <span className="text-soft text-xs">—</span>
+                      )}
+                    </td>
+                    <td className="numeric text-right text-ink2">
+                      {(Number(r.saleConfidenceScore) * 100).toFixed(0)}%
+                    </td>
+                    <td className="text-right whitespace-nowrap">
+                      <Link
+                        href={`/highsale/${r.id}`}
+                        className="text-accent text-xs hover:underline mr-3"
+                      >
+                        all 70 fields →
+                      </Link>
+                      <Link
+                        href={`/customers/${r.consumerEmailHash}`}
+                        className="text-muted text-xs hover:text-ink2 hover:underline"
+                      >
+                        customer
+                      </Link>
+                    </td>
+                  </tr>
+                );
+              })}
+              {rows.length === 0 && (
+                <tr>
+                  <td colSpan={13} className="text-muted py-12 text-center text-sm">
+                    No HighSale snapshots match these filters yet. POST to{' '}
+                    <code className="kbd">/api/v1/integration/highsale/snapshots</code> with a
+                    signed payload to seed one.
+                  </td>
                 </tr>
-              ))}
-              {usageRows.length === 0 && <tr><td colSpan={8} className="text-muted py-8 text-center">No HighSale usage yet.</td></tr>}
+              )}
             </tbody>
           </table>
         </div>
       </SectionCard>
     </div>
+  );
+}
+
+function FilterGroup({
+  label,
+  children,
+}: {
+  label: string;
+  children: React.ReactNode;
+}): JSX.Element {
+  return (
+    <div className="flex items-center gap-1.5">
+      <span className="text-muted text-[11px] uppercase tracking-wider mr-1">{label}</span>
+      {children}
+    </div>
+  );
+}
+
+function FilterButton({
+  active,
+  onClick,
+  children,
+}: {
+  active: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+}): JSX.Element {
+  return (
+    <button
+      onClick={onClick}
+      className={`px-2.5 py-1 rounded-md border transition ${
+        active ? 'border-accent text-accent bg-accentSoft' : 'border-line text-ink2 hover:bg-paper'
+      }`}
+    >
+      {children}
+    </button>
   );
 }

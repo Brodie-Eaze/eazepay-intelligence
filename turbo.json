@@ -23,13 +23,6 @@
       "inputs": ["prisma/schema.prisma"],
       "outputs": ["node_modules/.prisma/**"]
     },
-    "dev": { "cache": false, "persistent": true },
-    "openapi:generate": {
-      "outputs": ["openapi.json"]
-    },
-    "openapi:types": {
-      "dependsOn": ["api#openapi:generate"],
-      "outputs": ["src/api.ts"]
-    }
+    "dev": { "cache": false, "persistent": true }
   }
 }

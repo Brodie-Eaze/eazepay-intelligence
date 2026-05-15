@@ -10,12 +10,33 @@ import { errors } from '../errors/app-error.js';
 export type JwtKind = 'access' | 'refresh' | 'investor_scope' | 'ws_ticket';
 
 export interface JwtPayload {
-  sub: string;             // user id
+  sub: string; // user id
+  /** Legacy global role. Preserved during the migration window. */
   role: 'ADMIN' | 'OPERATOR' | 'INVESTOR' | 'VIEWER';
+  /**
+   * Active organisation. Embedded at login from the user's first (oldest)
+   * Membership during the Phase 1.3 transition; later replaced by an
+   * explicit org-switcher endpoint. Optional for backward compat with
+   * tokens minted before this field was added — those tokens still verify.
+   */
+  org?: string;
+  /**
+   * Per-org role for the active org. Same four levels as `role`,
+   * scoped to the active organisation. Optional during migration window.
+   */
+  orgRole?: 'ADMIN' | 'OPERATOR' | 'INVESTOR' | 'VIEWER';
+  /**
+   * Platform-level capability — STAFF reads cross-org, SUPER writes
+   * cross-org. Embedded so the auth middleware doesn't need a DB hit
+   * just to confirm platform privileges. Mutations to platform_role
+   * take up to JWT_ACCESS_TTL_SECONDS to propagate; if hostile-revocation
+   * becomes a requirement, add a Redis deny-list keyed on (sub, jti).
+   */
+  platformRole?: 'STAFF' | 'SUPER' | null;
   scope?: 'standard' | 'investor';
   kind: JwtKind;
-  fid?: string;            // refresh token family id
-  jti: string;             // unique token id
+  fid?: string; // refresh token family id
+  jti: string; // unique token id
   iat: number;
   exp: number;
 }

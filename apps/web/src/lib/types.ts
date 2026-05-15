@@ -54,7 +54,7 @@ export interface PartnerInvestorResponse {
 
 export interface RevenueByStreamRow {
   bucket: string;
-  stream: 'BUZZPAY' | 'PIXIE' | 'MICAMP';
+  stream: 'PIXIE' | 'MICAMP';
   amount: string;
 }
 
@@ -72,13 +72,62 @@ export interface WaterfallRow {
 }
 
 export type WsEvent =
-  | { type: 'application.created'; at: string; partnerId: string; partnerLabel: string; applicationId: string }
-  | { type: 'application.status_changed'; at: string; partnerId: string; partnerLabel: string; applicationId: string; from: string; to: string }
-  | { type: 'lender.decision'; at: string; partnerId: string; partnerLabel: string; lender: string; outcome: 'APPROVED' | 'DECLINED'; amount: string | null }
-  | { type: 'funding.completed'; at: string; partnerId: string; partnerLabel: string; amount: string }
+  | {
+      type: 'application.created';
+      at: string;
+      partnerId: string;
+      partnerLabel: string;
+      applicationId: string;
+    }
+  | {
+      type: 'application.status_changed';
+      at: string;
+      partnerId: string;
+      partnerLabel: string;
+      applicationId: string;
+      from: string;
+      to: string;
+    }
+  | {
+      type: 'lender.decision';
+      at: string;
+      partnerId: string;
+      partnerLabel: string;
+      lender: string;
+      outcome: 'APPROVED' | 'DECLINED';
+      amount: string | null;
+    }
+  | {
+      type: 'funding.completed';
+      at: string;
+      partnerId: string;
+      partnerLabel: string;
+      amount: string;
+    }
   | { type: 'funding.failed'; at: string; partnerId: string; partnerLabel: string; reason: string }
-  | { type: 'revenue.event'; at: string; partnerId: string; partnerLabel: string; stream: 'BUZZPAY' | 'PIXIE' | 'MICAMP'; eventType: string; amount: string }
-  | { type: 'pixie.usage_reported'; at: string; partnerId: string; partnerLabel: string; pulls: number }
+  | {
+      type: 'revenue.event';
+      at: string;
+      partnerId: string;
+      partnerLabel: string;
+      stream: 'PIXIE' | 'MICAMP';
+      eventType: string;
+      amount: string;
+    }
+  | {
+      type: 'pixie.usage_reported';
+      at: string;
+      partnerId: string;
+      partnerLabel: string;
+      pulls: number;
+    }
   | { type: 'partner.onboarded'; at: string; partnerId: string; partnerLabel: string; tier: string }
-  | { type: 'partner.tier_changed'; at: string; partnerId: string; partnerLabel: string; from: string; to: string }
+  | {
+      type: 'partner.tier_changed';
+      at: string;
+      partnerId: string;
+      partnerLabel: string;
+      from: string;
+      to: string;
+    }
   | { type: 'system.heartbeat'; at: string; serverTime: string };

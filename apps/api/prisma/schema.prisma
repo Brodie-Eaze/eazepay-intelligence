@@ -3,7 +3,10 @@
 // + deterministic HMAC hash (Bytes) for lookup. See SECURITY.md for the encryption design.
 
 generator client {
-  provider = "prisma-client-js"
+  provider        = "prisma-client-js"
+  // Metrics preview enables `prisma.$metrics.json()` / `.prometheus()` for
+  // pool + query observability. Surfaced at /metrics for Prometheus scrape.
+  previewFeatures = ["metrics"]
 }
 
 datasource db {
@@ -58,6 +61,24 @@ enum UserRole {
   OPERATOR
   INVESTOR
   VIEWER
+}
+
+/// Per-organisation role granted via Membership. Same four levels as the
+/// legacy global UserRole, intentionally — same semantics, no retraining.
+/// The rename signals "this is org-scoped" not "global".
+enum OrgRole {
+  ADMIN
+  OPERATOR
+  INVESTOR
+  VIEWER
+}
+
+/// Platform-level capability separate from any org membership.
+/// STAFF: read-only cross-org. SUPER: write across orgs, impersonate.
+/// SUPER satisfies any STAFF check.
+enum PlatformRole {
+  STAFF
+  SUPER
 }
 
 enum AggregationPeriod {
@@ -219,7 +240,7 @@ model RevenueEvent {
   stream            RevenueStream
   eventType         RevenueEventType @map("event_type")
   amount            Decimal          @db.Decimal(14, 2)
-  currency          String           @default("AUD") @db.Char(3)
+  currency          String           @default("USD") @db.Char(3)
   effectiveAt       DateTime         @map("effective_at") @db.Timestamptz(6)
   recordedAt        DateTime         @default(now()) @map("recorded_at") @db.Timestamptz(6)
   idempotencyKey    String           @map("idempotency_key")
@@ -316,24 +337,98 @@ model RevenueAggregation {
   @@map("revenue_aggregations")
 }
 
+// ─── Organization (tenant root) ─────────────────────────────────────────────
+// Each organisation is a logical tenant. Every domain row in the system
+// (with documented exceptions in PLATFORM_V2.md and the multi-tenancy
+// blast-radius doc) carries an `orgId` foreign key to one of these rows.
+//
+// The `slug` is a lowercase kebab identifier used as the URL path component
+// (`/api/v1/o/:orgSlug/...`). It is immutable after creation except via
+// platform staff intervention.
+//
+// `dataRegion` is a forward-compatibility hook for Phase 8 data-residency
+// controls. Today every deployment runs in one region; the column lets us
+// route storage + compute when multi-region lands without another migration.
+
+model Organization {
+  id               String   @id @db.Uuid
+  slug             String   @unique
+  name             String
+  // Two-letter ISO region (e.g. "au"). Phase 8 reads this to pin compute +
+  // storage per-org. Today: informational only.
+  dataRegion       String   @default("au") @map("data_region") @db.VarChar(8)
+  stripeCustomerId String?  @map("stripe_customer_id")
+  deletedAt        DateTime? @map("deleted_at") @db.Timestamptz(6)
+  createdAt        DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt        DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  memberships         Membership[]
+  invitations         UserInvitation[]      @relation("OrgInvitations")
+  apiTokens           ApiToken[]            @relation("OrgApiTokens")
+  auditLogs           AuditLog[]            @relation("OrgAuditLogs")
+  webhookCredentials  WebhookCredential[]   @relation("OrgWebhookCredentials")
+  encryptionKeys      TenantEncryptionKey[] @relation("OrgEncryptionKeys")
+  creditEnrichments   CreditEnrichment[]    @relation("OrgCreditEnrichments")
+  // More reverse relations land here as Phase 1.2c–1.2e retrofit
+  // orgId onto every TENANT_OWNED table.
+
+  @@map("organizations")
+}
+
+/// User membership in an Organization, with a per-org role.
+/// One user can be in many orgs. Replaces the legacy global User.role
+/// for authorization decisions; User.role is retained during the
+/// migration window for backward compatibility and removed at end of
+/// Phase 1.
+
+model Membership {
+  id        String   @id @db.Uuid
+  userId    String   @map("user_id") @db.Uuid
+  orgId     String   @map("org_id") @db.Uuid
+  role      OrgRole
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  user User         @relation(fields: [userId], references: [id])
+  org  Organization @relation(fields: [orgId], references: [id])
+
+  @@unique([userId, orgId])
+  @@index([orgId, role])
+  @@map("memberships")
+}
+
 // ─── User / Auth ────────────────────────────────────────────────────────────
 
 model User {
   id           String    @id @db.Uuid
   email        String    @unique
-  passwordHash String    @map("password_hash")
+  // Optional: users created via OAuth (e.g. Google) carry no local password.
+  // Local accounts still get a bcrypt hash on accept-invitation / set-password.
+  passwordHash String?   @map("password_hash")
+  // Legacy global role. Authorization migrates to Membership.role during
+  // Phase 1.2; this column is retained for backward compat in the
+  // migration window and removed at end of Phase 1. New code must read
+  // role from the active Membership, not from here.
   role         UserRole  @default(VIEWER)
+  // Platform-level capability that crosses org boundaries. Brodie + ops staff.
+  // null = no platform privileges. STAFF = read-only cross-org. SUPER =
+  // unrestricted. Independent from any Membership.
+  platformRole PlatformRole? @map("platform_role")
   mfaEnabled   Boolean   @default(false) @map("mfa_enabled")
   mfaSecret    String?   @map("mfa_secret")
+  // Federated identity. Stable Google `sub` claim — emails can change, sub
+  // cannot. Unique so two local accounts can't claim the same Google identity.
+  googleSub    String?   @unique @map("google_sub")
   lastLoginAt  DateTime? @map("last_login_at") @db.Timestamptz(6)
   deletedAt    DateTime? @map("deleted_at") @db.Timestamptz(6)
   createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt    DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
 
+  memberships          Membership[]
   refreshTokens        RefreshToken[]
   auditLogs            AuditLog[]
   apiTokens            ApiToken[]
-  exports              Export[]
+  exports               Export[]
   webhookSubscriptions WebhookSubscription[]
   notes                Note[]
   tagAssignments       TagAssignment[]
@@ -341,8 +436,43 @@ model User {
   scheduledReports     ScheduledReport[]
   casesOpened          Case[]                @relation("CaseOpenedBy")
   casesAssigned        Case[]                @relation("CaseAssignee")
+  rtbfRequests         RtbfRequest[]         @relation("RtbfRequestedBy")
+  invitationsIssued    UserInvitation[]      @relation("InviteIssuedBy")
 
+  @@index([platformRole])
   @@map("users")
+}
+
+/// Email-based invitation flow. An admin issues a UserInvitation; the
+/// invitee receives a one-time link to set their own password. We store
+/// only the SHA-256 of the token — the plaintext lives in the email and
+/// is unrecoverable from a compromised DB.
+model UserInvitation {
+  id           String    @id @db.Uuid
+  email        String
+  // OrgRole going forward. Legacy rows pre-Phase-1.2 retain their
+  // historic UserRole value (same enum values, different name) — see
+  // migration 20260508150000 for the in-place type swap.
+  role         OrgRole
+  tokenHash    String    @unique @map("token_hash")
+  invitedById  String    @map("invited_by_id") @db.Uuid
+  // Org the invitation grants access to. Resolved at issue time from
+  // the issuer's active org context. Required: an invitation cannot
+  // exist without an org to belong to.
+  orgId        String    @map("org_id") @db.Uuid
+  expiresAt    DateTime  @map("expires_at") @db.Timestamptz(6)
+  acceptedAt   DateTime? @map("accepted_at") @db.Timestamptz(6)
+  acceptedById String?   @map("accepted_by_id") @db.Uuid
+  revokedAt    DateTime? @map("revoked_at") @db.Timestamptz(6)
+  createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  invitedBy User         @relation("InviteIssuedBy", fields: [invitedById], references: [id])
+  org       Organization @relation("OrgInvitations", fields: [orgId], references: [id])
+
+  @@index([email])
+  @@index([expiresAt])
+  @@index([orgId])
+  @@map("user_invitations")
 }
 
 model RefreshToken {
@@ -365,6 +495,11 @@ model RefreshToken {
 model AuditLog {
   id           String   @id @db.Uuid
   userId       String?  @map("user_id") @db.Uuid
+  // Org the action took place within. Nullable: platform-level events
+  // (org creation, FX rate updates, system lifecycle jobs) have no org.
+  // Tenant audit views filter by orgId; platform-staff views can query
+  // across orgs (with their own audit trail). See ADR-001 §9.
+  orgId        String?  @map("org_id") @db.Uuid
   action       String
   resourceType String   @map("resource_type")
   resourceId   String?  @map("resource_id")
@@ -373,9 +508,11 @@ model AuditLog {
   userAgent    String?  @map("user_agent")
   createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
 
-  user User? @relation(fields: [userId], references: [id])
+  user User?         @relation(fields: [userId], references: [id])
+  org  Organization? @relation("OrgAuditLogs", fields: [orgId], references: [id])
 
   @@index([userId, createdAt(sort: Desc)])
+  @@index([orgId, createdAt(sort: Desc)])
   @@index([resourceType, resourceId])
   @@index([action, createdAt(sort: Desc)])
   @@map("audit_logs")
@@ -461,6 +598,11 @@ enum CaseType {
 model ApiToken {
   id           String          @id @db.Uuid
   userId       String          @map("user_id") @db.Uuid
+  // Org this PAT can act within. PATs are pinned to one org by design;
+  // a user with N memberships gets N PATs (one per org), not one PAT
+  // that magically spans orgs. The bearer-auth middleware verifies the
+  // PAT's orgId matches the request's resolved org.
+  orgId        String          @map("org_id") @db.Uuid
   name         String
   prefix       String          @unique // visible part of the token, e.g. "epi_pk_a1b2c3d4"
   hashedSecret String          @map("hashed_secret") // SHA-256 of the secret half
@@ -470,9 +612,11 @@ model ApiToken {
   revokedAt    DateTime?       @map("revoked_at") @db.Timestamptz(6)
   createdAt    DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
 
-  user User @relation(fields: [userId], references: [id])
+  user User         @relation(fields: [userId], references: [id])
+  org  Organization @relation("OrgApiTokens", fields: [orgId], references: [id])
 
   @@index([userId, revokedAt])
+  @@index([orgId])
   @@map("api_tokens")
 }
 
@@ -592,6 +736,252 @@ model Alert {
   @@index([state, firedAt(sort: Desc)])
   @@index([ruleId, firedAt(sort: Desc)])
   @@map("alerts")
+}
+
+// ─── Portfolio (silos) ─────────────────────────────────────────────────────
+// Holdco view. Each `PortfolioVertical` (coaching / medical / home-improvement
+// / …) groups one or more `PortfolioBusiness` rows (the actual silos). Every
+// silo has its own monthly P&L, revenue channels, product lines, unit
+// economics, cohorts, and headcount snapshots — same shape across silos so
+// rollups are trivially aggregable.
+//
+// Persistence replaces the in-memory `Map`-backed fixtures that lived in
+// `portfolio.fixtures.ts`. The deterministic mock generators are still used
+// by `prisma/seed-portfolio.ts` to seed demo data; runtime reads come
+// straight from these tables.
+
+enum PortfolioBusinessStatus {
+  ACTIVE
+  INTEGRATING
+  EXITED
+  PROSPECT
+}
+
+model PortfolioVertical {
+  slug        String   @id
+  name        String
+  description String   @default("")
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  businesses PortfolioBusiness[]
+
+  @@map("portfolio_verticals")
+}
+
+model PortfolioBusiness {
+  slug           String                  @id
+  name           String
+  verticalSlug   String                  @map("vertical_slug")
+  status         PortfolioBusinessStatus @default(ACTIVE)
+  acquiredAt     DateTime                @map("acquired_at") @db.Date
+  ownershipPct   Decimal                 @map("ownership_pct") @db.Decimal(5, 4)
+  hqRegion       String                  @map("hq_region")
+  segment        String
+  fteCount       Int                     @map("fte_count")
+  // Trailing-twelve-months snapshot. Currency follows the platform default
+  // (USD) unless the silo's accounting feed reports in a different ISO.
+  currency       String                  @default("USD") @db.Char(3)
+  ttmRevenue     Decimal                 @map("ttm_revenue") @db.Decimal(18, 2)
+  ttmEbitda      Decimal                 @map("ttm_ebitda") @db.Decimal(18, 2)
+  ttmGrossProfit Decimal                 @map("ttm_gross_profit") @db.Decimal(18, 2)
+  arr            Decimal                 @default(0) @db.Decimal(18, 2)
+  nrr            Decimal                 @db.Decimal(5, 4)
+  grossMargin    Decimal                 @map("gross_margin") @db.Decimal(5, 4)
+  cashOnHand     Decimal                 @map("cash_on_hand") @db.Decimal(18, 2)
+  netDebt        Decimal                 @map("net_debt") @db.Decimal(18, 2)
+  createdAt      DateTime                @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt      DateTime                @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  vertical        PortfolioVertical          @relation(fields: [verticalSlug], references: [slug])
+  pnlPeriods      PortfolioFinancialPeriod[]
+  revenueChannels PortfolioRevenueChannel[]
+  productLines    PortfolioProductLine[]
+  unitEconomics   PortfolioUnitEconomics?
+  cohorts         PortfolioCohort[]
+  headcount       PortfolioHeadcount[]
+
+  @@index([verticalSlug])
+  @@index([status])
+  @@map("portfolio_businesses")
+}
+
+model PortfolioFinancialPeriod {
+  id           String   @id @db.Uuid
+  businessSlug String   @map("business_slug")
+  periodStart  DateTime @map("period_start") @db.Date
+  periodLabel  String   @map("period_label")
+  // Full P&L line items in reporting currency.
+  revenue              Decimal @db.Decimal(18, 2)
+  cogs                 Decimal @db.Decimal(18, 2)
+  grossProfit          Decimal @map("gross_profit") @db.Decimal(18, 2)
+  marketingSpend       Decimal @map("marketing_spend") @db.Decimal(18, 2)
+  payroll              Decimal @db.Decimal(18, 2)
+  rentAndUtilities     Decimal @map("rent_and_utilities") @db.Decimal(18, 2)
+  softwareAndTools     Decimal @map("software_and_tools") @db.Decimal(18, 2)
+  professionalServices Decimal @map("professional_services") @db.Decimal(18, 2)
+  otherOpex            Decimal @map("other_opex") @db.Decimal(18, 2)
+  ebitda               Decimal @db.Decimal(18, 2)
+  depreciation         Decimal @db.Decimal(18, 2)
+  interest             Decimal @db.Decimal(18, 2)
+  tax                  Decimal @db.Decimal(18, 2)
+  netIncome            Decimal @map("net_income") @db.Decimal(18, 2)
+  cashIn               Decimal @map("cash_in") @db.Decimal(18, 2)
+  cashOut              Decimal @map("cash_out") @db.Decimal(18, 2)
+  arBalance            Decimal @map("ar_balance") @db.Decimal(18, 2)
+  apBalance            Decimal @map("ap_balance") @db.Decimal(18, 2)
+  createdAt            DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  business PortfolioBusiness @relation(fields: [businessSlug], references: [slug], onDelete: Cascade)
+
+  @@unique([businessSlug, periodStart])
+  @@index([businessSlug, periodStart(sort: Desc)])
+  @@map("portfolio_financial_periods")
+}
+
+model PortfolioRevenueChannel {
+  id           String   @id @db.Uuid
+  businessSlug String   @map("business_slug")
+  asOf         DateTime @map("as_of") @db.Date
+  channel      String
+  revenue      Decimal  @db.Decimal(18, 2)
+  customers    Int
+  share        Decimal  @db.Decimal(5, 4)
+
+  business PortfolioBusiness @relation(fields: [businessSlug], references: [slug], onDelete: Cascade)
+
+  @@unique([businessSlug, asOf, channel])
+  @@index([businessSlug, asOf(sort: Desc)])
+  @@map("portfolio_revenue_channels")
+}
+
+model PortfolioProductLine {
+  id           String   @id @db.Uuid
+  businessSlug String   @map("business_slug")
+  asOf         DateTime @map("as_of") @db.Date
+  name         String
+  revenue      Decimal  @db.Decimal(18, 2)
+  units        Int
+  avgPrice     Decimal  @map("avg_price") @db.Decimal(18, 2)
+
+  business PortfolioBusiness @relation(fields: [businessSlug], references: [slug], onDelete: Cascade)
+
+  @@unique([businessSlug, asOf, name])
+  @@index([businessSlug, asOf(sort: Desc)])
+  @@map("portfolio_product_lines")
+}
+
+model PortfolioUnitEconomics {
+  businessSlug  String   @id @map("business_slug")
+  asOf          DateTime @map("as_of") @db.Date
+  cac           Decimal  @db.Decimal(18, 2)
+  ltv           Decimal  @db.Decimal(18, 2)
+  paybackMonths Decimal  @map("payback_months") @db.Decimal(8, 2)
+  arpu          Decimal  @db.Decimal(18, 2)
+  grossMargin   Decimal  @map("gross_margin") @db.Decimal(5, 4)
+  nrr           Decimal  @db.Decimal(5, 4)
+  churnMonthly  Decimal  @map("churn_monthly") @db.Decimal(5, 4)
+  updatedAt     DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  business PortfolioBusiness @relation(fields: [businessSlug], references: [slug], onDelete: Cascade)
+
+  @@map("portfolio_unit_economics")
+}
+
+model PortfolioCohort {
+  id           String   @id @db.Uuid
+  businessSlug String   @map("business_slug")
+  cohortMonth  DateTime @map("cohort_month") @db.Date
+  customers    Int
+  m0           Decimal  @db.Decimal(5, 4)
+  m3           Decimal  @db.Decimal(5, 4)
+  m6           Decimal  @db.Decimal(5, 4)
+  m12          Decimal  @db.Decimal(5, 4)
+
+  business PortfolioBusiness @relation(fields: [businessSlug], references: [slug], onDelete: Cascade)
+
+  @@unique([businessSlug, cohortMonth])
+  @@index([businessSlug, cohortMonth(sort: Desc)])
+  @@map("portfolio_cohorts")
+}
+
+model PortfolioHeadcount {
+  id             String   @id @db.Uuid
+  businessSlug   String   @map("business_slug")
+  asOf           DateTime @map("as_of") @db.Date
+  function       String
+  ftes           Int
+  payrollMonthly Decimal  @map("payroll_monthly") @db.Decimal(18, 2)
+  openRoles      Int      @map("open_roles")
+
+  business PortfolioBusiness @relation(fields: [businessSlug], references: [slug], onDelete: Cascade)
+
+  @@unique([businessSlug, asOf, function])
+  @@index([businessSlug, asOf(sort: Desc)])
+  @@map("portfolio_headcount")
+}
+
+// ─── FX rates for multi-currency reporting ─────────────────────────────────
+// Stored per (asOf date, base, quote). The FX service picks the latest
+// row at-or-before the requested timestamp to convert revenue amounts into
+// the configured REPORTING_CURRENCY for cross-portfolio rollups.
+//
+// Sources are pluggable: ECB / OpenExchangeRates / Wise / a partner's own
+// rate-of-record. The `source` column captures provenance for audit.
+
+model FxRate {
+  id            String   @id @db.Uuid
+  asOf          DateTime @map("as_of") @db.Date
+  baseCurrency  String   @map("base_currency") @db.Char(3)
+  quoteCurrency String   @map("quote_currency") @db.Char(3)
+  // Multiplier: 1 unit of base = `rate` units of quote.
+  rate          Decimal  @db.Decimal(18, 8)
+  source        String   @default("manual")
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@unique([asOf, baseCurrency, quoteCurrency])
+  @@index([baseCurrency, quoteCurrency, asOf(sort: Desc)])
+  @@map("fx_rates")
+}
+
+// ─── Right-to-be-forgotten (GDPR Art. 17 / APP) ────────────────────────────
+// One row per data-subject erasure request. The lifecycle worker processes
+// PENDING rows: finds every Application carrying the customer's email hash,
+// overwrites the encrypted PII columns with zeros, and stamps COMPLETED.
+//
+// Why we keep the rows after scrub: lender_decisions, revenue_events, and
+// audit_logs reference applications. Hard-deleting an application would
+// orphan a financial record (we have a 7-year regulatory retention on
+// those). Cryptoshred + scrub + audit is the GDPR-aligned compromise: the
+// data subject's PII is irrecoverable, the financial trail survives.
+
+enum RtbfRequestStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
+model RtbfRequest {
+  id              String            @id @db.Uuid
+  // Hash of the consumer's email. Matches Application.consumerEmailHash so
+  // the worker can locate every related row.
+  emailHash       Bytes             @map("email_hash")
+  status          RtbfRequestStatus @default(PENDING)
+  // Free-text reason from the partner / data subject (kept for audit).
+  reason          String?
+  requestedById   String            @map("requested_by_id") @db.Uuid
+  requestedAt     DateTime          @default(now()) @map("requested_at") @db.Timestamptz(6)
+  startedAt       DateTime?         @map("started_at") @db.Timestamptz(6)
+  completedAt     DateTime?         @map("completed_at") @db.Timestamptz(6)
+  applicationsScrubbed Int          @default(0) @map("applications_scrubbed")
+  error           String?
+
+  requestedBy User @relation("RtbfRequestedBy", fields: [requestedById], references: [id])
+
+  @@index([status, requestedAt(sort: Desc)])
+  @@index([emailHash])
+  @@map("rtbf_requests")
 }
 
 // ─── Notes + tags (cross-resource) ─────────────────────────────────────────
@@ -760,4 +1150,247 @@ model OutboxEvent {
   @@index([publishedAt, createdAt])  // sweeper scans WHERE publishedAt IS NULL ORDER BY createdAt
   @@index([kind, publishedAt])
   @@map("outbox_events")
+}
+
+// ─── Multi-tenant infrastructure (Phase 1.2f) ───────────────────────────────
+
+/// Vendor → org mapping for inbound webhook signature verification.
+/// `signing_secret_hash` stores SHA-256(HMAC_secret), never the plaintext.
+/// Partial unique index (DB-level) on (source, hash) WHERE is_active=true
+/// ensures no two active rows share the same secret across orgs.
+model WebhookCredential {
+  id                String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  orgId             String        @map("org_id") @db.Uuid
+  source            WebhookSource
+  signingSecretHash String        @map("signing_secret_hash")
+  isActive          Boolean       @default(true) @map("is_active")
+  createdAt         DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
+  retiredAt         DateTime?     @map("retired_at") @db.Timestamptz(6)
+  deletedAt         DateTime?     @map("deleted_at") @db.Timestamptz(6)
+
+  org Organization @relation("OrgWebhookCredentials", fields: [orgId], references: [id])
+
+  @@index([source, signingSecretHash])
+  @@index([orgId])
+  @@map("webhook_credentials")
+}
+
+/// Per-tenant Data Encryption Key wrapped by a KMS Key Encryption Key.
+/// The plaintext DEK is never persisted — only the KMS-wrapped ciphertext
+/// is stored in `wrappedDek`. Recovering the plaintext requires a live,
+/// authorised KMS call. See ADR-002 for the full design + rotation runbook.
+model TenantEncryptionKey {
+  id         String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  orgId      String    @map("org_id") @db.Uuid
+  version    Int
+  /// 'PII' | 'AUDIT'. TEXT (not enum) for forward-compat per ADR-002 §3.
+  purpose    String    @default("PII")
+  wrappedDek Bytes     @map("wrapped_dek")
+  /// Production: AWS KMS key ARN. Dev: literal 'local-dev'.
+  kekKeyId   String    @map("kek_key_id")
+  algorithm  String    @default("AES-256-GCM")
+  isActive   Boolean   @default(true) @map("is_active")
+  createdAt  DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  retiredAt  DateTime? @map("retired_at") @db.Timestamptz(6)
+
+  org Organization @relation("OrgEncryptionKeys", fields: [orgId], references: [id])
+
+  @@unique([orgId, purpose, version])
+  @@index([orgId, purpose, isActive])
+  @@map("tenant_encryption_keys")
+}
+
+// ─── HighSale credit enrichment (Plane 2) ──────────────────────────────────
+//
+// Per-application credit-data snapshot pulled by HighSale ("EZ Check")
+// on every BNPL application across medpay/tradepay/coachpay. Faithful
+// capture of HighSale's full payload — ~70 fields across 10 logical
+// blocks. See:
+//   apps/api/src/domains/integration/highsale/highsale-snapshot.schema.ts
+//   docs/architecture/data-warehouse-overview.md § Plane 2
+//
+// Governance:
+//   • request_body PII is AES-256-GCM ciphertext + HMAC hash for
+//     analytical join. Mirrors the Application PII pattern.
+//   • Demographics block (ethnicity, gender, marital_status, language,
+//     etc.) is FCRA / fair-lending protected class — captured here but
+//     ONLY readable through stg_credit_enrichments_protected dbt model
+//     and via roles holding the `protected_class_read` permission.
+//     Never feeds underwriting / decisioning analytics.
+
+enum HighsaleVertical {
+  medpay
+  tradepay
+  coachpay
+}
+
+model CreditEnrichment {
+  id    String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  orgId String @map("org_id") @db.Uuid
+
+  // ── Identity / linkage ───────────────────────────────────────────────────
+  /// HighSale's own transaction id. Globally unique per pull.
+  highsaleTransactionId String           @unique @map("highsale_transaction_id")
+  /// Our internal application id — threaded App → HighSale → back via
+  /// the correlation-token approach (option 1, decided 2026-05-14).
+  /// Nullable during App-side rollout window; reconciled to non-null
+  /// once App's HighSale client passes the token through.
+  applicationId         String?          @map("application_id") @db.Uuid
+  /// External application id from the upstream form. May be present
+  /// before we've resolved the internal application uuid.
+  externalApplicationId String?          @map("external_application_id")
+  vertical              HighsaleVertical
+  pulledAt              DateTime         @map("pulled_at") @db.Timestamptz(6)
+
+  // ── PII echo (encrypted at rest) ─────────────────────────────────────────
+  consumerNameCiphertext    Bytes  @map("consumer_name_ciphertext")
+  consumerEmailCiphertext   Bytes  @map("consumer_email_ciphertext")
+  consumerEmailHash         Bytes  @map("consumer_email_hash")
+  consumerPhoneCiphertext   Bytes  @map("consumer_phone_ciphertext")
+  consumerPhoneHash         Bytes  @map("consumer_phone_hash")
+  dateOfBirthCiphertext     Bytes  @map("date_of_birth_ciphertext")
+  dateOfBirthHash           Bytes  @map("date_of_birth_hash")
+  /// Concatenated address ciphertext (line1 + line2 + city + state + zip).
+  /// Kept as a single field — we don't anchor analytics on address
+  /// components, and a single envelope is cheaper than five.
+  addressCiphertext         Bytes  @map("address_ciphertext")
+  /// Stated income from the application form (NOT the credit-bureau
+  /// trended_income). Plaintext — already coarse-grained and operator-
+  /// surfaced at the partner level.
+  verifiableIncomeCents     Int    @map("verifiable_income_cents")
+  rentPaymentCents          Int    @map("rent_payment_cents")
+
+  // ── Lookup outcome flags ─────────────────────────────────────────────────
+  isFrozen                 Boolean @map("is_frozen")
+  isNoHit                  Boolean @map("is_no_hit")
+  isAddressAppend          Boolean @map("is_address_append")
+  isAddressNoHit           Boolean @map("is_address_no_hit")
+  isInsufficientCreditData Boolean @map("is_insufficient_credit_data")
+
+  // ── HighSale grades (10 categorical 0..N) ────────────────────────────────
+  score                Int
+  creditLineGrade      Int @map("credit_line_grade")
+  revolvingLinesGrade  Int @map("revolving_lines_grade")
+  oldestAccountGrade   Int @map("oldest_account_grade")
+  latePaymentsGrade    Int @map("late_payments_grade")
+  collectionsGrade     Int @map("collections_grade")
+  newLinesGrade        Int @map("new_lines_grade")
+  utilizationGrade     Int @map("utilization_grade")
+  recentInquiriesGrade Int @map("recent_inquiries_grade")
+  averageGrade         Int @map("average_grade")
+
+  // ── Decision rates ───────────────────────────────────────────────────────
+  declineRate  Decimal @map("decline_rate") @db.Decimal(5, 4)
+  approvalRate Decimal @map("approval_rate") @db.Decimal(5, 4)
+
+  // ── Inquiry quotas ───────────────────────────────────────────────────────
+  personalRemainingInquiries     Int @map("personal_remaining_inquiries")
+  personalLoanRemainingInquiries Int @map("personal_loan_remaining_inquiries")
+  businessRemainingInquiries     Int @map("business_remaining_inquiries")
+
+  // ── Aggregate credit profile ─────────────────────────────────────────────
+  totalLines               Int     @map("total_lines")
+  totalRevolvingLines      Int     @map("total_revolving_lines")
+  availableCreditCents     Int     @map("available_credit_cents")
+  averageCreditLimitCents  Int     @map("average_credit_limit_cents")
+  totalCreditLimitCents    Int     @map("total_credit_limit_cents")
+  oldestCreditAge          Int     @map("oldest_credit_age")
+  averageCreditAge         Int     @map("average_credit_age")
+  totalInquiries           Int     @map("total_inquiries")
+  utilization              Decimal @db.Decimal(5, 4)
+  latePayments             Int     @map("late_payments")
+  collections              Int
+  trendedIncomeCents       Int     @map("trended_income_cents")
+  trendedDebtCents         Int     @map("trended_debt_cents")
+
+  // ── Qualification outputs ────────────────────────────────────────────────
+  isQualified                  Boolean  @map("is_qualified")
+  /// Reason codes when not qualified. Empty array when qualified.
+  dqReasons                    String[] @map("dq_reasons")
+  confidenceScore              Decimal  @map("confidence_score") @db.Decimal(5, 4)
+  fundingEstimateCents         Int      @map("funding_estimate_cents")
+  isQualifiedBnpl              Boolean  @map("is_qualified_bnpl")
+  confidenceScoreBnpl          Decimal  @map("confidence_score_bnpl") @db.Decimal(5, 4)
+  fundingEstimateBnplCents     Int      @map("funding_estimate_bnpl_cents")
+  isQualifiedConsumerLoan      Boolean  @map("is_qualified_consumer_loan")
+  fundingEstimateConsumerLoanCents Int  @map("funding_estimate_consumer_loan_cents")
+
+  // ── Tradeline detail (28 fields) ─────────────────────────────────────────
+  numSatisfactoryTradeLines                                Int     @map("num_satisfactory_trade_lines")
+  numTradeLinesOpenedInLast6Months                         Int     @map("num_trade_lines_opened_in_last_6_months")
+  monthsSinceMostRecentDelinquency                         Int     @map("months_since_most_recent_delinquency")
+  numPrBankruptciesInLast24Months                          Int     @map("num_pr_bankruptcies_in_last_24_months")
+  totalMonthlyObligationCents                              Int     @map("total_monthly_obligation_cents")
+  numThirdPartyCollectionsWithBalance                      Int     @map("num_third_party_collections_with_balance")
+  numOpenHomeEquityLoanTrades                              Int     @map("num_open_home_equity_loan_trades")
+  totalCreditUnionCreditLinesInLast12Months                Int     @map("total_credit_union_credit_lines_in_last_12_months")
+  totalBalanceOfOpenCreditUnionTradeLinesInLast12MonthsCents Int   @map("total_balance_of_open_credit_union_trade_lines_in_last_12_months_cents")
+  monthsSinceMostRecentCreditUnionTradeOpened              Int     @map("months_since_most_recent_credit_union_trade_opened")
+  totalBalanceOfOpenRevolvingTradesInLast12MonthsCents     Int     @map("total_balance_of_open_revolving_trades_in_last_12_months_cents")
+  utilizationOfOpenRevolvingTradesInLast12Months           Decimal @map("utilization_of_open_revolving_trades_in_last_12_months") @db.Decimal(5, 4)
+  numOfRepoTrades                                          Int     @map("num_of_repo_trades")
+  totalBalanceOfRepoTradesCents                            Int     @map("total_balance_of_repo_trades_cents")
+  numOfRetailTrades                                        Int     @map("num_of_retail_trades")
+  numOfOpenRetailTrades                                    Int     @map("num_of_open_retail_trades")
+  numOfThirdPartyCollections                               Int     @map("num_of_third_party_collections")
+  numOfNonMedicalThirdPartyCollections                     Int     @map("num_of_non_medical_third_party_collections")
+  numOfThirdPartyCollectionsInTheLast36Months              Int     @map("num_of_third_party_collections_in_the_last_36_months")
+  numOfStudentLoanTrades                                   Int     @map("num_of_student_loan_trades")
+  numOfOpenStudentLoanTrades                               Int     @map("num_of_open_student_loan_trades")
+  numOfSatisfactoryOpenStudentLoanTrades                   Int     @map("num_of_satisfactory_open_student_loan_trades")
+  numOf90PlusDaysPastDueStudentLoans                       Int     @map("num_of_90_plus_days_past_due_student_loans")
+  numOfAuthUserTrades                                      Int     @map("num_of_auth_user_trades")
+  numOpenUnsecuredInstallmentTrades                        Int     @map("num_open_unsecured_installment_trades")
+  totalOpenUnsecuredInstallmentTradesInLast12Months        Int     @map("total_open_unsecured_installment_trades_in_last_12_months")
+  percentOfOpenUnsecuredInstallmentTradesGt75InLast12Months Decimal @map("percent_of_open_unsecured_installment_trades_gt_75_in_last_12_months") @db.Decimal(5, 4)
+  utilizationOfOpenUnsecuredVerifiedInstallmentTradesInLast12Months Decimal @map("utilization_of_open_unsecured_verified_installment_trades_in_last_12_months") @db.Decimal(5, 4)
+
+  // ── Adverse events ───────────────────────────────────────────────────────
+  numOfChargeOffs   Int @map("num_of_charge_offs")
+  numOfRepos        Int @map("num_of_repos")
+  numOfForeclosures Int @map("num_of_foreclosures")
+
+  // ── HighSale-proprietary ML output ───────────────────────────────────────
+  saleConfidenceScore Decimal @map("sale_confidence_score") @db.Decimal(5, 4)
+
+  // ── Demographics (protected-class — read-gated downstream) ───────────────
+  /// FCRA / fair-lending protected-class fields. Captured because
+  /// HighSale sends them, but NEVER feed underwriting / decisioning.
+  /// Surfaced only through stg_credit_enrichments_protected dbt model.
+  estimatedIncomeBand       String? @map("estimated_income_band")
+  numberOfChildren          String? @map("number_of_children")
+  maritalStatus             String? @map("marital_status")
+  occupationGroup           String? @map("occupation_group")
+  occupation                String?
+  education                 String?
+  businessOwner             String? @map("business_owner")
+  gender                    String?
+  netWorth                  String? @map("net_worth")
+  estimatedCurrentHomeValue String? @map("estimated_current_home_value")
+  ethnicity                 String?
+  ethnicGroup               String? @map("ethnic_group")
+  language                  String?
+
+  // ── Forensic completeness ────────────────────────────────────────────────
+  /// Full raw HighSale JSON. Belt-and-braces — captures any field
+  /// HighSale adds before we promote it to a typed column, and lets
+  /// support reproduce decisions made against historical payloads.
+  rawPayload Json @map("raw_payload") @db.JsonB
+
+  // ── Bookkeeping ──────────────────────────────────────────────────────────
+  receivedAt DateTime  @default(now()) @map("received_at") @db.Timestamptz(6)
+  deletedAt  DateTime? @map("deleted_at") @db.Timestamptz(6)
+  createdAt  DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt  DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  org Organization @relation("OrgCreditEnrichments", fields: [orgId], references: [id])
+
+  @@index([orgId, pulledAt(sort: Desc)])
+  @@index([vertical, pulledAt(sort: Desc)])
+  @@index([applicationId])
+  @@index([externalApplicationId])
+  @@index([consumerEmailHash])
+  @@index([consumerPhoneHash])
+  @@index([isQualifiedBnpl, vertical, pulledAt(sort: Desc)])
+  @@map("credit_enrichments")
 }

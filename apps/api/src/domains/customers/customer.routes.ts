@@ -1,7 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { Prisma } from '@prisma/client';
-import { getPrisma } from '../../config/database.js';
+import { getPrismaReader } from '../../config/database.js';
 import { requireAuth } from '../../shared/middleware/auth.middleware.js';
 import { writeAuditLog } from '../../shared/middleware/audit-log.middleware.js';
 import { decryptPII } from '../../shared/utils/encryption.js';
@@ -47,31 +47,40 @@ function riskBandFor(score: number | null | undefined): string {
 }
 
 export async function registerCustomerRoutes(app: FastifyInstance): Promise<void> {
-  const prisma = getPrisma();
+  const prisma = getPrismaReader();
 
   // ─── Customer book ───────────────────────────────────────────────────────
   app.get('/customers', { preHandler: requireAuth }, async (req) => {
     const q = ListQuery.parse(req.query);
     const conds: Prisma.Sql[] = [];
     if (q.partnerId) conds.push(Prisma.sql`a.partner_id = ${q.partnerId}::uuid`);
-    if (q.hasFunded === 'true') conds.push(Prisma.sql`EXISTS (SELECT 1 FROM lender_decisions ld WHERE ld.application_id = a.id AND ld.funding_status = 'FUNDED')`);
-    if (q.hasFunded === 'false') conds.push(Prisma.sql`NOT EXISTS (SELECT 1 FROM lender_decisions ld WHERE ld.application_id = a.id AND ld.funding_status = 'FUNDED')`);
+    if (q.hasFunded === 'true')
+      conds.push(
+        Prisma.sql`EXISTS (SELECT 1 FROM lender_decisions ld WHERE ld.application_id = a.id AND ld.funding_status = 'FUNDED')`,
+      );
+    if (q.hasFunded === 'false')
+      conds.push(
+        Prisma.sql`NOT EXISTS (SELECT 1 FROM lender_decisions ld WHERE ld.application_id = a.id AND ld.funding_status = 'FUNDED')`,
+      );
 
-    const where = conds.length === 0 ? Prisma.sql`` : Prisma.sql`WHERE ${Prisma.join(conds, ' AND ')}`;
+    const where =
+      conds.length === 0 ? Prisma.sql`` : Prisma.sql`WHERE ${Prisma.join(conds, ' AND ')}`;
 
-    const rows = await prisma.$queryRaw<Array<{
-      email_hash: Buffer;
-      applications: bigint;
-      partner_count: bigint;
-      fundings: bigint;
-      latest_app_at: Date;
-      latest_partner_id: string;
-      latest_status: string;
-      latest_credit: number | null;
-      latest_income: string | null;
-      latest_propensity: string | null;
-      total_funded: string;
-    }>>(Prisma.sql`
+    const rows = await prisma.$queryRaw<
+      Array<{
+        email_hash: Buffer;
+        applications: bigint;
+        partner_count: bigint;
+        fundings: bigint;
+        latest_app_at: Date;
+        latest_partner_id: string;
+        latest_status: string;
+        latest_credit: number | null;
+        latest_income: string | null;
+        latest_propensity: string | null;
+        total_funded: string;
+      }>
+    >(Prisma.sql`
       WITH apps AS (
         SELECT a.consumer_email_hash AS email_hash,
                a.id AS application_id,
@@ -155,15 +164,19 @@ export async function registerCustomerRoutes(app: FastifyInstance): Promise<void
     if (apps.length === 0) throw errors.notFound('Customer', params.hash);
 
     const decisionIds = apps.flatMap((a) => a.lenderDecisions.map((d) => d.id));
-    const revenueEvents = decisionIds.length === 0 ? [] : await prisma.revenueEvent.findMany({
-      where: { lenderDecisionId: { in: decisionIds } },
-      orderBy: { effectiveAt: 'asc' },
-    });
+    const revenueEvents =
+      decisionIds.length === 0
+        ? []
+        : await prisma.revenueEvent.findMany({
+            where: { lenderDecisionId: { in: decisionIds } },
+            orderBy: { effectiveAt: 'asc' },
+          });
 
     // Aggregate the financial picture
     const latest = apps[0]!;
     const allCreditScores = apps.map((a) => a.creditScore).filter((s): s is number => s != null);
-    const totalFunded = apps.flatMap((a) => a.lenderDecisions)
+    const totalFunded = apps
+      .flatMap((a) => a.lenderDecisions)
       .filter((d) => d.fundingStatus === 'FUNDED' && d.fundingAmount)
       .reduce((s, d) => s + Number(d.fundingAmount!.toString()), 0);
     const totalRevenue = revenueEvents.reduce((s, r) => s + Number(r.amount.toString()), 0);
@@ -178,8 +191,12 @@ export async function registerCustomerRoutes(app: FastifyInstance): Promise<void
         partners: partners.length,
         riskBand: riskBandFor(latest.creditScore),
         latestCreditScore: latest.creditScore,
-        avgCreditScore: allCreditScores.length ? Math.round(allCreditScores.reduce((s, n) => s + n, 0) / allCreditScores.length) : null,
-        creditScoreTrend: apps.map((a) => ({ at: a.createdAt.toISOString(), score: a.creditScore })).reverse(),
+        avgCreditScore: allCreditScores.length
+          ? Math.round(allCreditScores.reduce((s, n) => s + n, 0) / allCreditScores.length)
+          : null,
+        creditScoreTrend: apps
+          .map((a) => ({ at: a.createdAt.toISOString(), score: a.creditScore }))
+          .reverse(),
         latestIncome: latest.notedAnnualIncome?.toString() ?? null,
         latestPropensity: latest.propensityScore?.toString() ?? null,
         latestAvailableCredit: latest.availableCredit?.toString() ?? null,
@@ -191,7 +208,9 @@ export async function registerCustomerRoutes(app: FastifyInstance): Promise<void
       financial: {
         totalFunded: totalFunded.toFixed(2),
         totalRevenue: totalRevenue.toFixed(2),
-        totalFundingEstimate: apps.reduce((s, a) => s + Number(a.fundingEstimate?.toString() ?? '0'), 0).toFixed(2),
+        totalFundingEstimate: apps
+          .reduce((s, a) => s + Number(a.fundingEstimate?.toString() ?? '0'), 0)
+          .toFixed(2),
       },
       applications: apps.map((a) => ({
         id: a.id,
@@ -256,12 +275,83 @@ export async function registerCustomerRoutes(app: FastifyInstance): Promise<void
       resourceId: params.hash,
       metadata: { fields: ['name', 'email', 'phone'] },
     });
-    return { emailHash: params.hash, consumerName: name, consumerEmail: email, consumerPhone: phone };
+    return {
+      emailHash: params.hash,
+      consumerName: name,
+      consumerEmail: email,
+      consumerPhone: phone,
+    };
+  });
+
+  // ─── HighSale credit-enrichment snapshots per customer ──────────────────
+  //
+  // Returns the latest credit_enrichments row(s) for the customer
+  // identified by consumerEmailHash. Excludes the protected-class
+  // demographics block by design — surfacing those requires the
+  // `protected_class_read` permission via a separate endpoint.
+  app.get('/customers/:hash/credit-enrichments', { preHandler: requireAuth }, async (req) => {
+    const params = z.object({ hash: z.string().regex(/^[a-f0-9]{64}$/) }).parse(req.params);
+    const hashBuf = Buffer.from(params.hash, 'hex');
+    const rows = await prisma.creditEnrichment.findMany({
+      where: { consumerEmailHash: hashBuf, deletedAt: null },
+      orderBy: { pulledAt: 'desc' },
+      take: 10,
+      select: {
+        id: true,
+        vertical: true,
+        pulledAt: true,
+        highsaleTransactionId: true,
+        externalApplicationId: true,
+        // Lookup
+        isFrozen: true,
+        isNoHit: true,
+        isInsufficientCreditData: true,
+        // Grades + decision
+        score: true,
+        averageGrade: true,
+        declineRate: true,
+        approvalRate: true,
+        // Qualification
+        isQualified: true,
+        isQualifiedBnpl: true,
+        isQualifiedConsumerLoan: true,
+        dqReasons: true,
+        confidenceScore: true,
+        confidenceScoreBnpl: true,
+        fundingEstimateCents: true,
+        fundingEstimateBnplCents: true,
+        fundingEstimateConsumerLoanCents: true,
+        // Credit profile headline
+        totalLines: true,
+        availableCreditCents: true,
+        totalCreditLimitCents: true,
+        utilization: true,
+        oldestCreditAge: true,
+        averageCreditAge: true,
+        latePayments: true,
+        collections: true,
+        trendedIncomeCents: true,
+        trendedDebtCents: true,
+        // Adverse events
+        numOfChargeOffs: true,
+        numOfRepos: true,
+        numOfForeclosures: true,
+        numPrBankruptciesInLast24Months: true,
+        // ML
+        saleConfidenceScore: true,
+        // Stated (from application form)
+        verifiableIncomeCents: true,
+        rentPaymentCents: true,
+      },
+    });
+    return { data: rows };
   });
 
   // ─── Risk distribution ───────────────────────────────────────────────────
   app.get('/analytics/risk-distribution', { preHandler: requireAuth }, async () => {
-    const buckets = await prisma.$queryRaw<Array<{ bucket: number; n: bigint; avg_income: string | null; avg_propensity: string | null }>>(Prisma.sql`
+    const buckets = await prisma.$queryRaw<
+      Array<{ bucket: number; n: bigint; avg_income: string | null; avg_propensity: string | null }>
+    >(Prisma.sql`
       SELECT CASE
                WHEN credit_score IS NULL THEN -1
                WHEN credit_score < 580 THEN 0
@@ -279,17 +369,28 @@ export async function registerCustomerRoutes(app: FastifyInstance): Promise<void
     `);
     return buckets.map((b) => {
       const bucket = Number(b.bucket);
-      const label = bucket === -1 ? 'Unscored'
-        : bucket === 0 ? '< 580'
-        : bucket === 580 ? '580–659'
-        : bucket === 660 ? '660–719'
-        : bucket === 720 ? '720–799'
-        : '800+';
-      const band = bucket === -1 ? 'UNSCORED'
-        : bucket === 0 ? 'DEEP_SUBPRIME'
-        : bucket === 580 ? 'SUBPRIME'
-        : bucket === 660 ? 'NEAR_PRIME'
-        : 'PRIME';
+      const label =
+        bucket === -1
+          ? 'Unscored'
+          : bucket === 0
+            ? '< 580'
+            : bucket === 580
+              ? '580–659'
+              : bucket === 660
+                ? '660–719'
+                : bucket === 720
+                  ? '720–799'
+                  : '800+';
+      const band =
+        bucket === -1
+          ? 'UNSCORED'
+          : bucket === 0
+            ? 'DEEP_SUBPRIME'
+            : bucket === 580
+              ? 'SUBPRIME'
+              : bucket === 660
+                ? 'NEAR_PRIME'
+                : 'PRIME';
       return {
         bucket,
         label,
@@ -303,7 +404,9 @@ export async function registerCustomerRoutes(app: FastifyInstance): Promise<void
 
   // ─── Income / affordability distribution ─────────────────────────────────
   app.get('/analytics/income-distribution', { preHandler: requireAuth }, async () => {
-    const buckets = await prisma.$queryRaw<Array<{ bucket: number; n: bigint; avg_credit: number | null; avg_funded: string | null }>>(Prisma.sql`
+    const buckets = await prisma.$queryRaw<
+      Array<{ bucket: number; n: bigint; avg_credit: number | null; avg_funded: string | null }>
+    >(Prisma.sql`
       SELECT CASE
                WHEN noted_annual_income IS NULL THEN -1
                WHEN noted_annual_income < 50000 THEN 0
@@ -321,12 +424,18 @@ export async function registerCustomerRoutes(app: FastifyInstance): Promise<void
     `);
     return buckets.map((b) => {
       const bucket = Number(b.bucket);
-      const label = bucket === -1 ? 'Not provided'
-        : bucket === 0 ? '< $50k'
-        : bucket === 50000 ? '$50–80k'
-        : bucket === 80000 ? '$80–120k'
-        : bucket === 120000 ? '$120–200k'
-        : '$200k+';
+      const label =
+        bucket === -1
+          ? 'Not provided'
+          : bucket === 0
+            ? '< $50k'
+            : bucket === 50000
+              ? '$50–80k'
+              : bucket === 80000
+                ? '$80–120k'
+                : bucket === 120000
+                  ? '$120–200k'
+                  : '$200k+';
       return {
         bucket,
         label,
@@ -340,7 +449,9 @@ export async function registerCustomerRoutes(app: FastifyInstance): Promise<void
   // ─── Propensity calibration ──────────────────────────────────────────────
   // How well does HighSale's propensity score predict actual approval / funding?
   app.get('/analytics/propensity-calibration', { preHandler: requireAuth }, async () => {
-    const rows = await prisma.$queryRaw<Array<{ bucket: number; n: bigint; approved: bigint; funded: bigint }>>(Prisma.sql`
+    const rows = await prisma.$queryRaw<
+      Array<{ bucket: number; n: bigint; approved: bigint; funded: bigint }>
+    >(Prisma.sql`
       SELECT FLOOR(propensity_score * 10)::int AS bucket,
              COUNT(*)::bigint AS n,
              COUNT(*) FILTER (WHERE EXISTS (SELECT 1 FROM lender_decisions ld WHERE ld.application_id = applications.id AND ld.decision='APPROVED'))::bigint AS approved,

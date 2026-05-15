@@ -1,7 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { Prisma } from '@prisma/client';
-import { getPrisma } from '../../config/database.js';
+import { getPrismaReader } from '../../config/database.js';
 import { getRedis } from '../../config/redis.js';
 import { requireAuth } from '../../shared/middleware/auth.middleware.js';
 import { denyInvestorScope, requireRole } from '../../shared/middleware/rbac.middleware.js';
@@ -24,7 +24,7 @@ const ListAuditQuery = z.object({
  * All locked behind ADMIN role + denyInvestorScope.
  */
 export async function registerAdminRoutes(app: FastifyInstance): Promise<void> {
-  const prisma = getPrisma();
+  const prisma = getPrismaReader();
   const redis = getRedis();
 
   // ─── Webhook events ──────────────────────────────────────────────────────
@@ -84,8 +84,9 @@ export async function registerAdminRoutes(app: FastifyInstance): Promise<void> {
             processed,
             failed,
             backlog: received,
-            successRate: total ? (processed / total) : 0,
-            lastReceivedAt: lastReceived.find((l) => l.source === src)?._max.receivedAt?.toISOString() ?? null,
+            successRate: total ? processed / total : 0,
+            lastReceivedAt:
+              lastReceived.find((l) => l.source === src)?._max.receivedAt?.toISOString() ?? null,
           };
         }),
       };
@@ -124,56 +125,304 @@ export async function registerAdminRoutes(app: FastifyInstance): Promise<void> {
     },
   );
 
+  // ─── Data-source ingestion stats ────────────────────────────────────────
+  //
+  // Powers the /data-sources hub: one row per inbound plane with last-24h
+  // event count, last-received timestamp, and a HEALTHY/STALE/IDLE pill.
+  //
+  //   HEALTHY = received an event in the last hour
+  //   STALE   = received an event in the last 24h but not the last hour
+  //   IDLE    = no events in the last 24h (or never)
+  app.get('/data-sources/stats', { preHandler: requireAuth }, async () => {
+    const now = Date.now();
+    const HOUR = 3600_000;
+    const DAY = 24 * HOUR;
+    const since24h = new Date(now - DAY);
+
+    // Webhook-sourced planes (HighSale, MiCamp, Pixie, etc.) — every row
+    // lands in webhook_events.
+    const webhookCounts = await prisma.webhookEvent.groupBy({
+      by: ['source'],
+      where: { receivedAt: { gte: since24h } },
+      _count: { _all: true },
+      _max: { receivedAt: true },
+    });
+
+    // HighSale also writes a typed row to credit_enrichments — count that
+    // separately since some snapshots may pre-date the webhook_events row
+    // when the route is called by clients without HMAC headers.
+    const highsaleCount = await prisma.creditEnrichment.count({
+      where: { pulledAt: { gte: since24h }, deletedAt: null },
+    });
+    const highsaleLast = await prisma.creditEnrichment.findFirst({
+      where: { deletedAt: null },
+      orderBy: { pulledAt: 'desc' },
+      select: { pulledAt: true },
+    });
+
+    const partnerCount = await prisma.partner.count({ where: { deletedAt: null } });
+    const partnerLast = await prisma.partner.findFirst({
+      where: { deletedAt: null },
+      orderBy: { createdAt: 'desc' },
+      select: { createdAt: true },
+    });
+
+    const lenderCount = await prisma.lenderDecision.count({
+      where: { createdAt: { gte: since24h } },
+    });
+    const lenderLast = await prisma.lenderDecision.findFirst({
+      orderBy: { createdAt: 'desc' },
+      select: { createdAt: true },
+    });
+
+    const classify = (lastReceivedAt: Date | null): 'HEALTHY' | 'STALE' | 'IDLE' => {
+      if (!lastReceivedAt) return 'IDLE';
+      const age = now - lastReceivedAt.getTime();
+      if (age < HOUR) return 'HEALTHY';
+      if (age < DAY) return 'STALE';
+      return 'IDLE';
+    };
+
+    type StatRow = {
+      source: string;
+      last24h: number;
+      lastReceivedAt: string | null;
+      status: 'HEALTHY' | 'STALE' | 'IDLE';
+    };
+
+    const byWebhookSource = new Map<string, (typeof webhookCounts)[number]>(
+      webhookCounts.map((r) => [r.source.toLowerCase(), r]),
+    );
+    const out: StatRow[] = [];
+
+    // HighSale — prefer typed-table counts; fall back to webhook counts.
+    out.push({
+      source: 'highsale',
+      last24h:
+        highsaleCount > 0 ? highsaleCount : (byWebhookSource.get('highsale')?._count._all ?? 0),
+      lastReceivedAt: highsaleLast?.pulledAt.toISOString() ?? null,
+      status: classify(highsaleLast?.pulledAt ?? null),
+    });
+
+    for (const src of ['micamp', 'pixie'] as const) {
+      const row = byWebhookSource.get(src);
+      const last = row?._max.receivedAt ?? null;
+      out.push({
+        source: src,
+        last24h: row?._count._all ?? 0,
+        lastReceivedAt: last?.toISOString() ?? null,
+        status: classify(last),
+      });
+    }
+
+    out.push({
+      source: 'lenders',
+      last24h: lenderCount,
+      lastReceivedAt: lenderLast?.createdAt.toISOString() ?? null,
+      status: classify(lenderLast?.createdAt ?? null),
+    });
+
+    out.push({
+      source: 'partners',
+      last24h: partnerCount, // partner directory grows slowly; render the total
+      lastReceivedAt: partnerLast?.createdAt.toISOString() ?? null,
+      status: classify(partnerLast?.createdAt ?? null),
+    });
+
+    out.push({
+      source: 'webhooks',
+      last24h: webhookCounts.reduce((s, r) => s + r._count._all, 0),
+      lastReceivedAt:
+        webhookCounts
+          .reduce<Date | null>((max, r) => {
+            if (!r._max.receivedAt) return max;
+            if (!max || r._max.receivedAt > max) return r._max.receivedAt;
+            return max;
+          }, null)
+          ?.toISOString() ?? null,
+      status: classify(
+        webhookCounts.reduce<Date | null>((max, r) => {
+          if (!r._max.receivedAt) return max;
+          if (!max || r._max.receivedAt > max) return r._max.receivedAt;
+          return max;
+        }, null),
+      ),
+    });
+
+    return { data: out };
+  });
+
+  // ─── Warehouse landscape: tables, row counts, last-row timestamps ───────
+  //
+  // Powers the "Warehouse landscape" panel on /overview: every analytical
+  // table at a glance, sized and freshness-coloured. Driven by pg_stat
+  // (cheap — no full scans) for counts and a per-table MAX(timestamp)
+  // for freshness.
+  app.get('/warehouse/landscape', { preHandler: requireAuth }, async () => {
+    type LandscapeRow = {
+      table: string;
+      label: string;
+      group: 'application' | 'credit' | 'revenue' | 'partners' | 'audit';
+      rows: number;
+      lastAt: string | null;
+    };
+
+    // pg_stat_user_tables gives us approximate row counts without a
+    // full scan. n_live_tup is sufficient for "landscape" sizing.
+    const rowCounts = await prisma.$queryRaw<Array<{ relname: string; count: bigint }>>(Prisma.sql`
+      SELECT relname, n_live_tup AS count
+      FROM pg_stat_user_tables
+      WHERE relname IN (
+        'applications', 'lender_decisions', 'credit_enrichments',
+        'revenue_events', 'partners', 'pixie_metrics', 'webhook_events',
+        'audit_logs', 'merchants', 'organizations'
+      )
+    `);
+    const countMap = new Map(rowCounts.map((r) => [r.relname, Number(r.count)]));
+
+    // Freshness — one MAX(timestamp) per table. Cheap because each
+    // table has an index on the timestamp column.
+    const [lastApp, lastDec, lastEnr, lastRev, lastPxm, lastWeh, lastAud] = await Promise.all([
+      prisma.application.findFirst({ orderBy: { createdAt: 'desc' }, select: { createdAt: true } }),
+      prisma.lenderDecision.findFirst({
+        orderBy: { createdAt: 'desc' },
+        select: { createdAt: true },
+      }),
+      prisma.creditEnrichment.findFirst({
+        where: { deletedAt: null },
+        orderBy: { pulledAt: 'desc' },
+        select: { pulledAt: true },
+      }),
+      prisma.revenueEvent.findFirst({
+        orderBy: { effectiveAt: 'desc' },
+        select: { effectiveAt: true },
+      }),
+      prisma.pixieMetric.findFirst({
+        orderBy: { periodStart: 'desc' },
+        select: { periodStart: true },
+      }),
+      prisma.webhookEvent.findFirst({
+        orderBy: { receivedAt: 'desc' },
+        select: { receivedAt: true },
+      }),
+      prisma.auditLog.findFirst({ orderBy: { createdAt: 'desc' }, select: { createdAt: true } }),
+    ]);
+
+    const out: LandscapeRow[] = [
+      {
+        table: 'applications',
+        label: 'Applications',
+        group: 'application',
+        rows: countMap.get('applications') ?? 0,
+        lastAt: lastApp?.createdAt.toISOString() ?? null,
+      },
+      {
+        table: 'lender_decisions',
+        label: 'Lender decisions',
+        group: 'application',
+        rows: countMap.get('lender_decisions') ?? 0,
+        lastAt: lastDec?.createdAt.toISOString() ?? null,
+      },
+      {
+        table: 'credit_enrichments',
+        label: 'Credit enrichments',
+        group: 'credit',
+        rows: countMap.get('credit_enrichments') ?? 0,
+        lastAt: lastEnr?.pulledAt.toISOString() ?? null,
+      },
+      {
+        table: 'pixie_metrics',
+        label: 'Pixie metrics',
+        group: 'credit',
+        rows: countMap.get('pixie_metrics') ?? 0,
+        lastAt: lastPxm?.periodStart.toISOString() ?? null,
+      },
+      {
+        table: 'revenue_events',
+        label: 'Revenue events',
+        group: 'revenue',
+        rows: countMap.get('revenue_events') ?? 0,
+        lastAt: lastRev?.effectiveAt.toISOString() ?? null,
+      },
+      {
+        table: 'partners',
+        label: 'Partners',
+        group: 'partners',
+        rows: countMap.get('partners') ?? 0,
+        lastAt: null,
+      },
+      {
+        table: 'webhook_events',
+        label: 'Webhook events',
+        group: 'audit',
+        rows: countMap.get('webhook_events') ?? 0,
+        lastAt: lastWeh?.receivedAt.toISOString() ?? null,
+      },
+      {
+        table: 'audit_logs',
+        label: 'Audit logs',
+        group: 'audit',
+        rows: countMap.get('audit_logs') ?? 0,
+        lastAt: lastAud?.createdAt.toISOString() ?? null,
+      },
+    ];
+
+    return { data: out };
+  });
+
   // ─── System health (operational telemetry) ───────────────────────────────
-  app.get(
-    '/admin/health',
-    { preHandler: [requireAuth, denyInvestorScope] },
-    async () => {
-      const dbStart = Date.now();
-      const dbCounts = await prisma.$queryRaw<Array<{ relname: string; count: bigint }>>(Prisma.sql`
+  app.get('/admin/health', { preHandler: [requireAuth, denyInvestorScope] }, async () => {
+    const dbStart = Date.now();
+    const dbCounts = await prisma.$queryRaw<Array<{ relname: string; count: bigint }>>(Prisma.sql`
         SELECT relname, n_live_tup AS count
         FROM pg_stat_user_tables
         WHERE relname IN ('partners','applications','lender_decisions','revenue_events','webhook_events','pixie_metrics','users','audit_logs','refresh_tokens')
         ORDER BY relname
       `);
-      const dbLatency = Date.now() - dbStart;
+    const dbLatency = Date.now() - dbStart;
 
-      const redisStart = Date.now();
-      const queueDepth = {
-        webhook: Number(await redis.llen('bull:eazepay.webhook:wait').catch(() => 0)),
-        webhookActive: Number(await redis.llen('bull:eazepay.webhook:active').catch(() => 0)),
-        webhookFailed: Number(await redis.llen('bull:eazepay.webhook:failed').catch(() => 0)),
-        aggregation: Number(await redis.llen('bull:eazepay.aggregation:wait').catch(() => 0)),
-      };
-      const redisLatency = Date.now() - redisStart;
+    const redisStart = Date.now();
+    const queueDepth = {
+      webhook: Number(await redis.llen('bull:eazepay.webhook:wait').catch(() => 0)),
+      webhookActive: Number(await redis.llen('bull:eazepay.webhook:active').catch(() => 0)),
+      webhookFailed: Number(await redis.llen('bull:eazepay.webhook:failed').catch(() => 0)),
+      aggregation: Number(await redis.llen('bull:eazepay.aggregation:wait').catch(() => 0)),
+    };
+    const redisLatency = Date.now() - redisStart;
 
-      const recentLogins = await prisma.auditLog.count({
-        where: { action: 'USER_LOGIN', createdAt: { gte: new Date(Date.now() - 24 * 3600_000) } },
-      });
-      const failedLogins = await prisma.auditLog.count({
-        where: { action: 'USER_LOGIN_FAILED', createdAt: { gte: new Date(Date.now() - 24 * 3600_000) } },
-      });
-      const piiAccess24h = await prisma.auditLog.count({
-        where: { action: 'PII_ACCESSED', createdAt: { gte: new Date(Date.now() - 24 * 3600_000) } },
-      });
+    const recentLogins = await prisma.auditLog.count({
+      where: { action: 'USER_LOGIN', createdAt: { gte: new Date(Date.now() - 24 * 3600_000) } },
+    });
+    const failedLogins = await prisma.auditLog.count({
+      where: {
+        action: 'USER_LOGIN_FAILED',
+        createdAt: { gte: new Date(Date.now() - 24 * 3600_000) },
+      },
+    });
+    const piiAccess24h = await prisma.auditLog.count({
+      where: { action: 'PII_ACCESSED', createdAt: { gte: new Date(Date.now() - 24 * 3600_000) } },
+    });
 
-      const activeSessions = await prisma.refreshToken.count({
-        where: { revokedAt: null, expiresAt: { gt: new Date() } },
-      });
+    const activeSessions = await prisma.refreshToken.count({
+      where: { revokedAt: null, expiresAt: { gt: new Date() } },
+    });
 
-      return {
-        generatedAt: new Date().toISOString(),
-        database: {
-          status: 'ok',
-          latencyMs: dbLatency,
-          rowCounts: dbCounts.map((r) => ({ table: r.relname, rows: Number(r.count) })),
-        },
-        redis: { status: 'ok', latencyMs: redisLatency, queueDepth },
-        sessions: { active: activeSessions, recentLogins24h: recentLogins, failedLogins24h: failedLogins },
-        privacy: { piiAccess24h },
-      };
-    },
-  );
+    return {
+      generatedAt: new Date().toISOString(),
+      database: {
+        status: 'ok',
+        latencyMs: dbLatency,
+        rowCounts: dbCounts.map((r) => ({ table: r.relname, rows: Number(r.count) })),
+      },
+      redis: { status: 'ok', latencyMs: redisLatency, queueDepth },
+      sessions: {
+        active: activeSessions,
+        recentLogins24h: recentLogins,
+        failedLogins24h: failedLogins,
+      },
+      privacy: { piiAccess24h },
+    };
+  });
 
   // ─── Sessions (active refresh tokens) ────────────────────────────────────
   app.get(
@@ -267,11 +516,8 @@ export async function registerAdminRoutes(app: FastifyInstance): Promise<void> {
   );
 
   // ─── Reconciliation: ledger SUM vs aggregation rollup ────────────────────
-  app.get(
-    '/admin/reconciliation',
-    { preHandler: [requireAuth, denyInvestorScope] },
-    async () => {
-      const ledger = await prisma.$queryRaw<Array<{ month: Date; total: string }>>(Prisma.sql`
+  app.get('/admin/reconciliation', { preHandler: [requireAuth, denyInvestorScope] }, async () => {
+    const ledger = await prisma.$queryRaw<Array<{ month: Date; total: string }>>(Prisma.sql`
         SELECT date_trunc('month', effective_at) AS month,
                COALESCE(SUM(amount), 0)::text   AS total
         FROM revenue_events
@@ -279,7 +525,7 @@ export async function registerAdminRoutes(app: FastifyInstance): Promise<void> {
         ORDER BY month DESC
         LIMIT 12
       `);
-      const rollup = await prisma.$queryRaw<Array<{ month: Date; total: string }>>(Prisma.sql`
+    const rollup = await prisma.$queryRaw<Array<{ month: Date; total: string }>>(Prisma.sql`
         SELECT date_trunc('month', period_start) AS month,
                COALESCE(SUM(total_revenue), 0)::text AS total
         FROM revenue_aggregations
@@ -288,37 +534,48 @@ export async function registerAdminRoutes(app: FastifyInstance): Promise<void> {
         ORDER BY month DESC
         LIMIT 12
       `);
-      const ledgerMap = new Map(ledger.map((r) => [r.month.toISOString(), r.total]));
-      const rollupMap = new Map(rollup.map((r) => [r.month.toISOString(), r.total]));
-      const months = Array.from(new Set([...ledgerMap.keys(), ...rollupMap.keys()])).sort().reverse();
-      const rows = months.map((m) => {
-        const ledgerTotal = ledgerMap.get(m) ?? '0';
-        const rollupTotal = rollupMap.get(m) ?? '0';
-        const drift = (Number(rollupTotal) - Number(ledgerTotal)).toFixed(2);
-        return { month: m, ledgerTotal, rollupTotal, drift, drifted: Math.abs(Number(drift)) > 0.005 };
-      });
-      const driftedCount = rows.filter((r) => r.drifted).length;
+    const ledgerMap = new Map(ledger.map((r) => [r.month.toISOString(), r.total]));
+    const rollupMap = new Map(rollup.map((r) => [r.month.toISOString(), r.total]));
+    const months = Array.from(new Set([...ledgerMap.keys(), ...rollupMap.keys()]))
+      .sort()
+      .reverse();
+    const rows = months.map((m) => {
+      const ledgerTotal = ledgerMap.get(m) ?? '0';
+      const rollupTotal = rollupMap.get(m) ?? '0';
+      const drift = (Number(rollupTotal) - Number(ledgerTotal)).toFixed(2);
       return {
-        months: rows,
-        summary: {
-          monthsTracked: rows.length,
-          driftedMonths: driftedCount,
-          allClean: driftedCount === 0,
-        },
-        generatedAt: new Date().toISOString(),
+        month: m,
+        ledgerTotal,
+        rollupTotal,
+        drift,
+        drifted: Math.abs(Number(drift)) > 0.005,
       };
-    },
-  );
+    });
+    const driftedCount = rows.filter((r) => r.drifted).length;
+    return {
+      months: rows,
+      summary: {
+        monthsTracked: rows.length,
+        driftedMonths: driftedCount,
+        allClean: driftedCount === 0,
+      },
+      generatedAt: new Date().toISOString(),
+    };
+  });
 
   // ─── Lender deep-dive (per-month + APR distribution) ─────────────────────
-  app.get(
-    '/lenders/:name/timeline',
-    { preHandler: requireAuth },
-    async (req) => {
-      const params = z.object({ name: z.string().min(1) }).parse(req.params);
-      const monthly = await prisma.$queryRaw<
-        Array<{ bucket: Date; submitted: bigint; approved: bigint; funded: bigint; avg_apr: string | null; funded_amount: string }>
-      >(Prisma.sql`
+  app.get('/lenders/:name/timeline', { preHandler: requireAuth }, async (req) => {
+    const params = z.object({ name: z.string().min(1) }).parse(req.params);
+    const monthly = await prisma.$queryRaw<
+      Array<{
+        bucket: Date;
+        submitted: bigint;
+        approved: bigint;
+        funded: bigint;
+        avg_apr: string | null;
+        funded_amount: string;
+      }>
+    >(Prisma.sql`
         SELECT date_trunc('month', decision_timestamp) AS bucket,
                COUNT(*)::bigint AS submitted,
                COUNT(*) FILTER (WHERE decision='APPROVED')::bigint AS approved,
@@ -331,7 +588,7 @@ export async function registerAdminRoutes(app: FastifyInstance): Promise<void> {
         ORDER BY bucket DESC
         LIMIT 24
       `);
-      const aprBuckets = await prisma.$queryRaw<Array<{ bucket: number; n: bigint }>>(Prisma.sql`
+    const aprBuckets = await prisma.$queryRaw<Array<{ bucket: number; n: bigint }>>(Prisma.sql`
         SELECT CASE
                  WHEN apr < 10 THEN 0
                  WHEN apr < 15 THEN 10
@@ -346,34 +603,36 @@ export async function registerAdminRoutes(app: FastifyInstance): Promise<void> {
         GROUP BY bucket
         ORDER BY bucket
       `);
-      const recent = await prisma.lenderDecision.findMany({
-        where: { lenderName: params.name },
-        orderBy: { decisionTimestamp: 'desc' },
-        take: 50,
-        include: { application: { select: { externalApplicationId: true } } },
-      });
-      return {
-        lenderName: params.name,
-        monthly: monthly.map((m) => ({
-          bucket: m.bucket.toISOString(),
-          submitted: Number(m.submitted),
-          approved: Number(m.approved),
-          funded: Number(m.funded),
-          avgApr: m.avg_apr,
-          fundedAmount: m.funded_amount,
-        })),
-        aprDistribution: aprBuckets.map((b) => ({ bucketLabel: `${b.bucket}–${b.bucket + 5}%`, count: Number(b.n) })),
-        recentDecisions: recent.map((d) => ({
-          id: d.id,
-          externalApplicationId: d.application.externalApplicationId,
-          decision: d.decision,
-          decisionTimestamp: d.decisionTimestamp.toISOString(),
-          apr: d.apr?.toString() ?? null,
-          approvalAmount: d.approvalAmount?.toString() ?? null,
-          fundingStatus: d.fundingStatus,
-          fundingAmount: d.fundingAmount?.toString() ?? null,
-        })),
-      };
-    },
-  );
+    const recent = await prisma.lenderDecision.findMany({
+      where: { lenderName: params.name },
+      orderBy: { decisionTimestamp: 'desc' },
+      take: 50,
+      include: { application: { select: { externalApplicationId: true } } },
+    });
+    return {
+      lenderName: params.name,
+      monthly: monthly.map((m) => ({
+        bucket: m.bucket.toISOString(),
+        submitted: Number(m.submitted),
+        approved: Number(m.approved),
+        funded: Number(m.funded),
+        avgApr: m.avg_apr,
+        fundedAmount: m.funded_amount,
+      })),
+      aprDistribution: aprBuckets.map((b) => ({
+        bucketLabel: `${b.bucket}–${b.bucket + 5}%`,
+        count: Number(b.n),
+      })),
+      recentDecisions: recent.map((d) => ({
+        id: d.id,
+        externalApplicationId: d.application.externalApplicationId,
+        decision: d.decision,
+        decisionTimestamp: d.decisionTimestamp.toISOString(),
+        apr: d.apr?.toString() ?? null,
+        approvalAmount: d.approvalAmount?.toString() ?? null,
+        fundingStatus: d.fundingStatus,
+        fundingAmount: d.fundingAmount?.toString() ?? null,
+      })),
+    };
+  });
 }

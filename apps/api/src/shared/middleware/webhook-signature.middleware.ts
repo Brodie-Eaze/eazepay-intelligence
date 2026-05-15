@@ -62,12 +62,14 @@ declare module 'fastify' {
 function secretFor(source: WebhookSource): string {
   const env = getEnv();
   switch (source) {
-    case WebhookSource.BUZZPAY:
-      return env.BUZZPAY_WEBHOOK_SECRET;
     case WebhookSource.PIXIE:
       return env.PIXIE_WEBHOOK_SECRET;
     case WebhookSource.MICAMP:
       return env.MICAMP_WEBHOOK_SECRET;
+    case WebhookSource.BUZZPAY:
+      // Retired vendor — see docs/cuts/buzzpay-removal.md. Routes are gone;
+      // this branch is unreachable unless an old queued job is replayed.
+      throw new Error('BUZZPAY webhook source is retired');
   }
 }
 

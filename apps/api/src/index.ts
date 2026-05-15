@@ -1,3 +1,9 @@
+// Telemetry MUST be the first import — auto-instrumentation hooks
+// require() at construction time, so anything imported before this line
+// won't be traced.
+import { startTelemetry } from './config/telemetry.js';
+startTelemetry({ serviceName: 'eazepay-intelligence-api' });
+
 import { buildServer } from './server.js';
 import { getEnv } from './config/env.js';
 import { getLogger } from './config/logger.js';
@@ -17,15 +23,35 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
+  // Graceful shutdown.
+  //
+  // Order: stop accepting new requests → drain in-flight (Fastify `app.close()`
+  // waits for handlers to finish + connections to drain) → disconnect Prisma →
+  // disconnect Redis. Hard timeout at 30s so we don't hang an orchestrator
+  // restart forever. Re-entrant guard so duplicate signals are ignored.
+  //
+  // SOC 2 mapping: A1.1 (capacity), A1.2 (availability), CC7.5 (recovery).
+  let shuttingDown = false;
   const shutdown = async (signal: NodeJS.Signals): Promise<void> => {
+    if (shuttingDown) return;
+    shuttingDown = true;
     log.info({ signal }, 'eazepay.intelligence.api.shutdown.begin');
+
+    const hardTimeout = setTimeout(() => {
+      log.fatal('eazepay.intelligence.api.shutdown.hard_timeout');
+      process.exit(1);
+    }, 30_000);
+    hardTimeout.unref();
+
     try {
       await app.close();
       await disconnectPrisma();
       await disconnectRedis();
+      clearTimeout(hardTimeout);
       log.info('eazepay.intelligence.api.shutdown.complete');
       process.exit(0);
     } catch (err) {
+      clearTimeout(hardTimeout);
       log.error({ err }, 'eazepay.intelligence.api.shutdown.error');
       process.exit(1);
     }

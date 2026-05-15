@@ -24,20 +24,27 @@ SELECT create_hypertable(
 );
 
 -- Continuous aggregate: daily revenue rollup, refresh every 15 minutes.
-CREATE MATERIALIZED VIEW IF NOT EXISTS revenue_daily_cagg
+--
+-- Sources from `revenue_events` (the append-only ledger, source of truth)
+-- rather than from `revenue_aggregations` (which is itself a derivative).
+-- A CAGG over an already-aggregated table is a no-op aggregation; this
+-- one buckets the underlying event stream so dashboard queries hit the
+-- materialised view instead of scanning millions of ledger rows.
+--
+-- We DROP first so re-running this script on an existing deployment
+-- replaces the prior (incorrect) view definition. The script remains
+-- idempotent: a fresh DB drops nothing and creates the new view.
+DROP MATERIALIZED VIEW IF EXISTS revenue_daily_cagg;
+CREATE MATERIALIZED VIEW revenue_daily_cagg
 WITH (timescaledb.continuous) AS
 SELECT
-  time_bucket(INTERVAL '1 day', period_start) AS bucket,
-  SUM(total_revenue)         AS total_revenue,
-  SUM(buzzpay_revshare_total) AS buzzpay_revshare_total,
-  SUM(processing_fees_total)  AS processing_fees_total,
-  SUM(pixie_margin_total)     AS pixie_margin_total,
-  SUM(total_applications)     AS total_applications,
-  SUM(approved_applications)  AS approved_applications,
-  SUM(funded_applications)    AS funded_applications
-FROM revenue_aggregations
-WHERE period = 'DAILY'
-GROUP BY bucket
+  time_bucket(INTERVAL '1 day', effective_at) AS bucket,
+  source,
+  stream,
+  SUM(amount)            AS total_amount,
+  COUNT(*)::bigint       AS event_count
+FROM revenue_events
+GROUP BY bucket, source, stream
 WITH NO DATA;
 
 SELECT add_continuous_aggregate_policy(
@@ -99,8 +106,52 @@ REVOKE UPDATE, DELETE ON outbox_events    FROM eazepay_app;
 -- and you'll need a `eazepay_outbox` sub-role instead. Documented as a
 -- v1.1 deployment task.
 
+-- ─── Connection-level safety on the runtime role ─────────────────────────
+-- Prevent any single misbehaving query from pinning a connection or holding
+-- locks for unbounded time. Set at the role level so every connection the
+-- runtime opens inherits these — application code cannot opt out.
+--
+-- statement_timeout                       30s — cancels long-running queries
+-- idle_in_transaction_session_timeout     10s — kills sessions sitting in BEGIN
+-- lock_timeout                             5s — fails fast on contention
+--
+-- Workers that legitimately need longer (export pipelines, aggregation
+-- backfills, scheduled-report runners) connect as a separate role with
+-- extended timeouts. Same SELECT/INSERT grants, same REVOKE on append-only
+-- tables, just longer per-statement budget.
+ALTER ROLE eazepay_app SET statement_timeout = '30s';
+ALTER ROLE eazepay_app SET idle_in_transaction_session_timeout = '10s';
+ALTER ROLE eazepay_app SET lock_timeout = '5s';
+
+-- ─── Long-running worker role: eazepay_worker_long ────────────────────────
+-- Inherits the same write-restriction posture as eazepay_app (cannot UPDATE/
+-- DELETE on append-only tables) but with a 5-minute statement budget for
+-- exports / backfills / monthly-rollup queries that legitimately scan
+-- millions of rows.
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'eazepay_worker_long') THEN
+    CREATE ROLE eazepay_worker_long LOGIN;
+  END IF;
+END$$;
+
+GRANT USAGE ON SCHEMA public TO eazepay_worker_long;
+GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES   IN SCHEMA public TO eazepay_worker_long;
+GRANT USAGE, SELECT                ON ALL SEQUENCES IN SCHEMA public TO eazepay_worker_long;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public
+  GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES   TO eazepay_worker_long;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public
+  GRANT USAGE, SELECT                ON SEQUENCES TO eazepay_worker_long;
+
+REVOKE UPDATE, DELETE ON audit_logs     FROM eazepay_worker_long;
+REVOKE UPDATE, DELETE ON revenue_events FROM eazepay_worker_long;
+
+ALTER ROLE eazepay_worker_long SET statement_timeout = '5min';
+ALTER ROLE eazepay_worker_long SET idle_in_transaction_session_timeout = '30s';
+ALTER ROLE eazepay_worker_long SET lock_timeout = '10s';
+
 -- Sanity check the policy.
 DO $$
 BEGIN
-  RAISE NOTICE 'eazepay_app role: SELECT/INSERT granted on all tables; UPDATE/DELETE REVOKED on audit_logs, revenue_events, outbox_events';
+  RAISE NOTICE 'eazepay_app: stmt=30s idle=10s lock=5s; eazepay_worker_long: stmt=5min idle=30s lock=10s; UPDATE/DELETE REVOKED on audit_logs + revenue_events for both';
 END$$;

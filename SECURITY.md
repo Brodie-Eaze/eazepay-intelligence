@@ -69,20 +69,22 @@ PII set is compromised at once.
    given row, or eagerly via a backfill job
 
 This is the standard pattern at financial platforms that hold PII at scale
-(Stripe, Plaid, Block). It is documented in `docs/ROADMAP.md` P1 alongside
-the secrets-vendor decision. The architectural placeholder is already in
-`encryption.ts`'s `KEY_VERSIONS` map — extending it from "version → KEK" to
-"version → KMS key reference" is mechanical when KMS lands.
+(Stripe, Plaid, Block). It is documented in [`docs/PLATFORM_V2.md`](docs/PLATFORM_V2.md)
+Phase 1.5 + Phase 6 alongside the secrets-vendor decision. The
+architectural placeholder is already in `encryption.ts`'s
+`KEY_VERSIONS` map — extending it from "version → KEK" to
+"version → KMS key reference" is mechanical, and v2 envelope encryption
+(per-tenant DEK wrapped under KMS) has already landed.
 
 ## Secret strategy
 
-| Secret                                | Format                   | Rotation                                                                                 |
-| ------------------------------------- | ------------------------ | ---------------------------------------------------------------------------------------- |
-| `JWT_ACCESS_SECRET`                   | string ≥32 chars (HS256) | RS256+KMS deferred to v1.1                                                               |
-| `JWT_REFRESH_SECRET`                  | string ≥32 chars (HS256) | same                                                                                     |
-| `PII_ENCRYPTION_KEY`                  | base64 32 bytes          | versioning supported (envelope byte 0); add v2 key, transition writes, decrypt-as-needed |
-| `PII_HASH_SECRET`                     | string ≥16 chars         | rotation requires re-hashing all PII; do not rotate without a backfill plan              |
-| `BUZZPAY/PIXIE/MICAMP_WEBHOOK_SECRET` | string ≥16 chars         | coordinate with each vendor; supports overlap window via secondary verification (v1.1)   |
+| Secret                                             | Format                   | Rotation                                                                                 |
+| -------------------------------------------------- | ------------------------ | ---------------------------------------------------------------------------------------- |
+| `JWT_ACCESS_SECRET`                                | string ≥32 chars (HS256) | RS256+KMS deferred to v1.1                                                               |
+| `JWT_REFRESH_SECRET`                               | string ≥32 chars (HS256) | same                                                                                     |
+| `PII_ENCRYPTION_KEY`                               | base64 32 bytes          | versioning supported (envelope byte 0); add v2 key, transition writes, decrypt-as-needed |
+| `PII_HASH_SECRET`                                  | string ≥16 chars         | rotation requires re-hashing all PII; do not rotate without a backfill plan              |
+| `PIXIE/MICAMP/HIGHSALE/EAZEPAY_APP_WEBHOOK_SECRET` | string ≥32 chars         | coordinate with each upstream; supports overlap window via secondary verification (v1.1) |
 
 Secrets live in `.env` for v1. Production roadmap: AWS KMS / 1Password Secrets Automation (vendor TBD).
 
@@ -102,6 +104,21 @@ Two roles required in production:
 3. **Investigate** — webhook payload is durably stored on the `WebhookEvent` row; replay manually against the worker after fix.
 4. **Recover** — `/admin → Webhook events → Replay` button re-enqueues a failed event. The processor is idempotent on `(source, idempotency_key)` so safe to retry.
 5. **Postmortem** — write up; if PII was accessed inappropriately, audit log shows exact `userId` + `applicationId` + timestamp.
+
+## Supply-chain controls
+
+Every PR runs four scans, each gated as a required check:
+
+| Tool                                             | Surface                                                   | Fails on         |
+| ------------------------------------------------ | --------------------------------------------------------- | ---------------- |
+| `pnpm audit --audit-level=high` (prod deps only) | Lockfile advisory matches                                 | HIGH or CRITICAL |
+| Trivy (fs mode)                                  | Resolved deps incl. transitives                           | HIGH or CRITICAL |
+| CodeQL (`security-extended`)                     | TypeScript AST — injection, ReDoS, hardcoded-secret flows | any finding      |
+| Trivy (image mode)                               | Container layers + base image                             | HIGH or CRITICAL |
+
+Each Trivy run uploads a SARIF to GitHub Code Scanning. A CycloneDX SBOM is generated from the container image and attached to every workflow run as a 90-day artifact — ready to ship with a release for downstream attestation.
+
+Dependabot (`.github/dependabot.yml`) raises PRs as new advisories land; those PRs run the same gates so a regression-introducing bump can't merge.
 
 ## Vulnerability disclosure
 

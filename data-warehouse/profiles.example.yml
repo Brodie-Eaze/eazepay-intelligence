@@ -1,0 +1,47 @@
+# Copy to ~/.dbt/profiles.yml and fill credentials.
+#
+# In dev: the same Postgres the API uses. dbt connects as a separate user
+# (`eazepay_dbt` — see init-timescale.sql when extended) so reporting
+# queries run with a longer statement_timeout than the API (60s vs 30s).
+#
+# In prod: should connect to a read-replica or a downstream warehouse
+# fed by CDC (Phase 11.2). NEVER point dbt at the production primary —
+# `dbt run` materialises tables, which would compete with the API for
+# write capacity.
+
+eazepay_warehouse:
+  target: dev
+  outputs:
+    dev:
+      type: postgres
+      host: localhost
+      port: 5432
+      user: Brodie
+      password: ''
+      dbname: eazepay_platform
+      schema: analytics_staging
+      threads: 4
+      keepalives_idle: 0
+      sslmode: prefer
+
+    # Connect to the read replica when DATABASE_REPLICA_URL is set.
+    # replica:
+    #   type: postgres
+    #   host: replica.internal
+    #   port: 5432
+    #   user: dbt_reader
+    #   password: '{{ env_var("DBT_PG_PASSWORD") }}'
+    #   dbname: eazepay_platform
+    #   schema: analytics_staging
+    #   threads: 8
+
+    # Production target via CDC-fed warehouse (Phase 11.2 expansion).
+    # prod:
+    #   type: postgres
+    #   host: warehouse.internal
+    #   port: 5432
+    #   user: dbt_writer
+    #   password: '{{ env_var("DBT_PG_PASSWORD") }}'
+    #   dbname: eazepay_warehouse
+    #   schema: analytics_staging
+    #   threads: 16

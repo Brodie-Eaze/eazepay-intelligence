@@ -23,12 +23,15 @@ import { ZodError } from 'zod';
 
 import { getEnv } from './config/env.js';
 import { getLogger } from './config/logger.js';
-import { getPrisma } from './config/database.js';
+import { getPrisma, getPrismaReader, disconnectPrisma } from './config/database.js';
 import { getRedis } from './config/redis.js';
 import { AppError, errors, isAppError } from './shared/errors/app-error.js';
 
 import { registerHealthRoute } from './domains/health.routes.js';
 import { registerAuthRoutes } from './domains/auth/auth.routes.js';
+import { registerOAuthRoutes } from './domains/auth/oauth.routes.js';
+import { registerInvitationRoutes } from './domains/users/invitation.routes.js';
+import { registerPlatformRoutes } from './domains/platform/platform.routes.js';
 import { registerPartnerRoutes } from './domains/partners/partner.routes.js';
 import { registerApplicationRoutes } from './domains/applications/application.routes.js';
 import { registerLenderRoutes } from './domains/lenders/lender.routes.js';
@@ -47,6 +50,12 @@ import { registerNoteRoutes } from './domains/notes/note.routes.js';
 import { registerTagRoutes } from './domains/tags/tag.routes.js';
 import { registerAlertRoutes } from './domains/alerts/alert.routes.js';
 import { registerScheduledReportRoutes } from './domains/scheduled-reports/scheduled-report.routes.js';
+import { registerPortfolioRoutes } from './domains/portfolio/portfolio.routes.js';
+import { registerIngestionRoutes } from './domains/ingestion/ingestion.routes.js';
+import { registerEazepayAppIntegrationRoutes } from './domains/integration/eazepay-app/eazepay-app.routes.js';
+import { registerHighsaleIntegrationRoutes } from './domains/integration/highsale/highsale.routes.js';
+import { registerRtbfRoutes } from './domains/rtbf/rtbf.routes.js';
+import { registerFxRoutes } from './domains/fx/fx.routes.js';
 import { registerAnalyticsWebSocket } from './websocket/analytics.gateway.js';
 
 /**
@@ -64,7 +73,13 @@ export async function buildServer(): Promise<FastifyInstance> {
     requestIdLogLabel: 'requestId',
     disableRequestLogging: false,
     trustProxy: true,
-    bodyLimit: 1 * 1024 * 1024, // 1 MiB — webhooks must remain compact
+    // Default body limit. Routes that genuinely need more (bulk ingestion,
+    // webhook bursts) declare a higher limit per route via routeOptions.
+    bodyLimit: env.BODY_LIMIT_DEFAULT_BYTES,
+    // Hard cap on listener queue / connection accept rate at the OS level
+    // is the platform's job; here we ensure no individual request can stall.
+    connectionTimeout: 60_000,
+    keepAliveTimeout: 65_000,
   });
 
   // ─── Plugins (order matters) ─────────────────────────────────────────────
@@ -85,12 +100,58 @@ export async function buildServer(): Promise<FastifyInstance> {
 
   await app.register(sensible);
 
+  // Tiered rate limiting.
+  //
+  // The default bucket is the floor — anonymous + dashboard traffic. Routes
+  // with their own throughput characteristics declare a per-route override
+  // (the @fastify/rate-limit `config.rateLimit` option on routeOptions).
+  //
+  // Keying:
+  //   - Authenticated requests (cookie OR PAT): keyed on `auth.userId` so
+  //     all of a dev's traffic from any IP shares one bucket. Per-user is
+  //     the right primitive for SaaS rate-limiting; per-IP punishes shared
+  //     office NATs.
+  //   - Unauthenticated: keyed on req.ip.
+  //
+  // Denials surface as 429 with a X-RateLimit-* header set by the plugin
+  // and an audit row written by `errorResponseBuilder`.
   await app.register(rateLimit, {
-    max: env.RATE_LIMIT_PER_IP_PER_MIN,
+    global: true,
+    max: env.RATE_LIMIT_PER_USER_PER_MIN,
     timeWindow: '1 minute',
     redis: getRedis(),
-    keyGenerator: (req) => req.ip,
+    keyGenerator: (req) => req.auth?.userId ?? `ip:${req.ip}`,
+    // skipOnError=false means a Redis outage fails closed. That's correct
+    // for SOC 2 — we'd rather a brief outage than unbounded request volume.
     skipOnError: false,
+    addHeadersOnExceeding: {
+      'x-ratelimit-limit': true,
+      'x-ratelimit-remaining': true,
+      'x-ratelimit-reset': true,
+    },
+    addHeaders: {
+      'x-ratelimit-limit': true,
+      'x-ratelimit-remaining': true,
+      'x-ratelimit-reset': true,
+      'retry-after': true,
+    },
+    errorResponseBuilder: (req, context) => {
+      // Best-effort denial audit. Writing to Postgres on every 429 would
+      // amplify the storm we're trying to throttle, so we stay fire-and-forget
+      // and only on requests that have an authenticated principal.
+      if (req.auth) {
+        void getRedis()
+          .incr(`ratelimit:denied:${req.auth.userId}:${new Date().toISOString().slice(0, 13)}`)
+          .catch(() => {});
+      }
+      return {
+        error: {
+          code: 'RATE_LIMIT_EXCEEDED',
+          message: `Rate limit exceeded. Retry after ${context.after}.`,
+          requestId: req.id,
+        },
+      };
+    },
   });
 
   await app.register(websocket, {
@@ -178,6 +239,9 @@ export async function buildServer(): Promise<FastifyInstance> {
   await app.register(
     async (instance) => {
       await registerAuthRoutes(instance);
+      await registerOAuthRoutes(instance);
+      await registerInvitationRoutes(instance);
+      await registerPlatformRoutes(instance);
       await registerPartnerRoutes(instance);
       await registerApplicationRoutes(instance);
       await registerLenderRoutes(instance);
@@ -196,6 +260,12 @@ export async function buildServer(): Promise<FastifyInstance> {
       await registerTagRoutes(instance);
       await registerAlertRoutes(instance);
       await registerScheduledReportRoutes(instance);
+      await registerPortfolioRoutes(instance);
+      await registerIngestionRoutes(instance);
+      await registerEazepayAppIntegrationRoutes(instance);
+      await registerHighsaleIntegrationRoutes(instance);
+      await registerRtbfRoutes(instance);
+      await registerFxRoutes(instance);
     },
     { prefix: '/api/v1' },
   );
@@ -204,12 +274,18 @@ export async function buildServer(): Promise<FastifyInstance> {
     await registerAnalyticsWebSocket(instance);
   });
 
-  // Touch deps so their lazy singletons construct at boot, surfacing config errors.
+  // Touch deps so their lazy singletons construct at boot, surfacing config errors
+  // (writer + reader; reader is a no-op when DATABASE_REPLICA_URL is unset since
+  // it falls back to the writer instance).
   getPrisma();
+  getPrismaReader();
   getRedis();
 
+  // Drain BOTH clients on close. Previously only the writer disconnected, which
+  // leaked the reader's pool when a replica was configured. `disconnectPrisma`
+  // handles writer+reader and de-dupes when reader is the writer fallback.
   app.addHook('onClose', async () => {
-    await getPrisma().$disconnect();
+    await disconnectPrisma();
   });
 
   return app as unknown as FastifyInstance;

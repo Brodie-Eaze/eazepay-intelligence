@@ -1,31 +1,14 @@
 import { createHmac, randomBytes } from 'node:crypto';
-import type { PrismaClient, RefreshToken, User } from '@prisma/client';
+import type { OrgRole, PrismaClient, RefreshToken, User } from '@prisma/client';
 import { v7 as uuidv7 } from 'uuid';
 import { getEnv } from '../../config/env.js';
 
-export interface IAuthRepository {
-  findUserByEmail(email: string): Promise<User | null>;
-  findUserById(id: string): Promise<User | null>;
-  recordLogin(userId: string): Promise<void>;
-  createRefreshToken(args: {
-    userId: string;
-    familyId: string;
-    rawToken: string;
-    expiresAt: Date;
-  }): Promise<RefreshToken>;
-  findRefreshTokenByRaw(raw: string): Promise<RefreshToken | null>;
-  rotateRefreshToken(args: {
-    oldId: string;
-    newRaw: string;
-    userId: string;
-    familyId: string;
-    expiresAt: Date;
-  }): Promise<RefreshToken>;
-  revokeFamily(familyId: string): Promise<number>;
-  revokeAllForUser(userId: string): Promise<number>;
+export interface MembershipRef {
+  orgId: string;
+  role: OrgRole;
 }
 
-export class AuthRepository implements IAuthRepository {
+export class AuthRepository {
   constructor(private readonly prisma: PrismaClient) {}
 
   /**
@@ -57,6 +40,15 @@ export class AuthRepository implements IAuthRepository {
 
   async findUserById(id: string): Promise<User | null> {
     return this.prisma.user.findFirst({ where: { id, deletedAt: null } });
+  }
+
+  async findOldestMembership(userId: string): Promise<MembershipRef | null> {
+    const m = await this.prisma.membership.findFirst({
+      where: { userId },
+      orderBy: { createdAt: 'asc' },
+      select: { orgId: true, role: true },
+    });
+    return m;
   }
 
   async recordLogin(userId: string): Promise<void> {

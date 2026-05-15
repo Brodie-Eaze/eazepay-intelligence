@@ -2,7 +2,7 @@
  * API client. Cookies handle auth — fetch with credentials and mirror the
  * CSRF cookie into X-CSRF-Token on every state-changing request.
  */
-const BASE = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3000';
+const BASE = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3010';
 
 function readCookie(name: string): string | undefined {
   if (typeof document === 'undefined') return undefined;
@@ -11,7 +11,12 @@ function readCookie(name: string): string | undefined {
 }
 
 export class ApiError extends Error {
-  constructor(public status: number, public code: string, message: string, public details?: unknown) {
+  constructor(
+    public status: number,
+    public code: string,
+    message: string,
+    public details?: unknown,
+  ) {
     super(message);
   }
 }

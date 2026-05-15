@@ -1,7 +1,11 @@
+import { startTelemetry } from '../config/telemetry.js';
+startTelemetry({ serviceName: 'eazepay-intelligence-worker-webhook-delivery' });
+
 import { Worker } from 'bullmq';
 import { getRedis } from '../config/redis.js';
 import { getPrisma } from '../config/database.js';
 import { getLogger } from '../config/logger.js';
+import { getEnv } from '../config/env.js';
 import {
   WEBHOOK_DELIVERY_QUEUE_NAME,
   type WebhookDeliveryJob,
@@ -22,7 +26,7 @@ async function main(): Promise<void> {
       await service.deliver(job.data.deliveryId);
       log.info({ jobId: job.id }, 'webhook-delivery.done');
     },
-    { connection: getRedis(), concurrency: 8, autorun: true },
+    { connection: getRedis(), concurrency: getEnv().WORKER_DELIVERY_CONCURRENCY, autorun: true },
   );
 
   worker.on('failed', async (job, err) => {

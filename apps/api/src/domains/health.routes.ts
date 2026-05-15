@@ -1,5 +1,11 @@
 import type { FastifyInstance } from 'fastify';
-import { getPrisma } from '../config/database.js';
+import {
+  getPrisma,
+  getPrismaReader,
+  getPrismaLong,
+  isReaderUsingFallback,
+  isLongUsingFallback,
+} from '../config/database.js';
 import { getRedis } from '../config/redis.js';
 
 interface DependencyStatus {
@@ -40,6 +46,97 @@ export function registerHealthRoute(app: FastifyInstance): void {
 
     reply.status(overall === 'down' ? 503 : 200).send(body);
   });
+
+  // /health/live — liveness. Process is up; no dependency checks.
+  // K8s / ECS uses this to decide whether to restart the container.
+  app.get('/health/live', async (_req, reply) => {
+    reply.status(200).send({
+      status: 'ok',
+      uptimeSeconds: Math.floor((Date.now() - startedAt) / 1000),
+    });
+  });
+
+  // /health/ready — readiness. Primary + Redis must be reachable. The replica
+  // is a soft check: if it's down we degrade to "primary handles both" — still
+  // ready to serve traffic, but operators get a `replica: degraded` signal.
+  // K8s / ECS uses this to decide whether to route traffic here.
+  app.get('/health/ready', async (_req, reply) => {
+    const [database, redis, replica] = await Promise.all([
+      checkDatabase(),
+      checkRedis(),
+      checkReplica(),
+    ]);
+    const ready = database.status === 'ok' && redis.status === 'ok';
+    reply.status(ready ? 200 : 503).send({
+      status: ready ? 'ready' : 'not_ready',
+      checks: {
+        database: database.status,
+        redis: redis.status,
+        replica: replica.status,
+        replicaConfigured: !isReaderUsingFallback(),
+        longRoleConfigured: !isLongUsingFallback(),
+        ...(replica.lagMs !== undefined ? { replicaLagMs: replica.lagMs } : {}),
+      },
+    });
+  });
+
+  // /metrics — Prometheus exposition. Aggregates pool + query metrics from
+  // every Prisma client (writer, reader, long-running). Each client's metrics
+  // are namespaced via the `db` label so a Prometheus dashboard can split
+  // primary vs replica vs long-running pool pressure.
+  //
+  // Use Prometheus scrape with a scrape interval ≥ 10s. The endpoint is
+  // unauthenticated by design — it must work for k8s/ECS service-discovery
+  // scrapers — but expose it on a private network only (Fastify's listen
+  // binding is :0.0.0.0 in dev; deploy behind a private ALB).
+  app.get('/metrics', async (_req, reply) => {
+    const writer = await getPrisma().$metrics.prometheus({ globalLabels: { db: 'writer' } });
+    const reader = isReaderUsingFallback()
+      ? ''
+      : await getPrismaReader().$metrics.prometheus({ globalLabels: { db: 'reader' } });
+    const long = isLongUsingFallback()
+      ? ''
+      : await getPrismaLong().$metrics.prometheus({ globalLabels: { db: 'long' } });
+    reply.header('content-type', 'text/plain; version=0.0.4').send(writer + reader + long);
+  });
+}
+
+/**
+ * Replica health + replication lag.
+ *
+ * When a replica is configured, we don't just check it can answer SELECT 1 —
+ * we also measure how far it's lagging the primary using
+ * `pg_last_xact_replay_timestamp()`. Lag above 30 seconds is operationally
+ * meaningful: analytics dashboards stop being a fair representation of the
+ * write path. We surface this as `lag: degraded` so ops sees it without
+ * failing readiness (the reader still falls back to the writer transparently,
+ * so the platform stays available).
+ *
+ * SOC 2 mapping:
+ *   - A1.2 (availability) — explicit signal when reads diverge from writes
+ *   - CC7.2 (monitoring)  — replication lag is a leading indicator of
+ *                            replica problems hours before they cascade
+ */
+async function checkReplica(): Promise<DependencyStatus & { lagMs?: number }> {
+  if (isReaderUsingFallback()) return { status: 'ok' };
+  const t = Date.now();
+  try {
+    await getPrismaReader().$queryRaw`SELECT 1`;
+    // pg_last_xact_replay_timestamp() returns NULL on the primary and the
+    // last replayed-tx timestamp on a standby. Lag = now() - that ts.
+    const rows = await getPrismaReader().$queryRaw<Array<{ lag_ms: number | null }>>`
+      SELECT EXTRACT(EPOCH FROM (now() - pg_last_xact_replay_timestamp())) * 1000 AS lag_ms
+    `;
+    const lagMs = rows[0]?.lag_ms != null ? Math.round(Number(rows[0].lag_ms)) : undefined;
+    const overLagBudget = lagMs !== undefined && lagMs > 30_000;
+    return {
+      status: overLagBudget ? 'degraded' : 'ok',
+      latencyMs: Date.now() - t,
+      ...(lagMs !== undefined ? { lagMs } : {}),
+    };
+  } catch (err) {
+    return { status: 'degraded', error: (err as Error).message };
+  }
 }
 
 async function checkDatabase(): Promise<DependencyStatus> {

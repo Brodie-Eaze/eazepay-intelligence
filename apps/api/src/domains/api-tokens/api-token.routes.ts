@@ -51,10 +51,23 @@ export async function registerApiTokenRoutes(app: FastifyInstance): Promise<void
     const expiresAt = input.expiresInDays
       ? new Date(Date.now() + input.expiresInDays * 86_400_000)
       : null;
+    // Phase 1.3: orgId is in the JWT after login. Fallback to membership
+    // lookup for tokens minted before the embed change.
+    let orgId = auth.orgId;
+    if (!orgId) {
+      const fallback = await prisma.membership.findFirst({
+        where: { userId: auth.userId },
+        orderBy: { createdAt: 'asc' },
+        select: { orgId: true },
+      });
+      if (!fallback) throw new Error('Issuer has no organisation membership');
+      orgId = fallback.orgId;
+    }
     const created = await prisma.apiToken.create({
       data: {
         id: uuidv7(),
         userId: auth.userId,
+        orgId,
         name: input.name,
         prefix,
         hashedSecret,

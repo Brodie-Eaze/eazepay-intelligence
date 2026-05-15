@@ -5,6 +5,7 @@ import { requireAuth } from '../../shared/middleware/auth.middleware.js';
 import { csrfGuard } from '../../shared/middleware/csrf.middleware.js';
 import { requireRole } from '../../shared/middleware/rbac.middleware.js';
 import { writeAuditLog } from '../../shared/middleware/audit-log.middleware.js';
+import { rowsToCsv, attachmentHeader } from '../../shared/utils/csv.js';
 import { PartnerRepository } from './partner.repository.js';
 import { PartnerService } from './partner.service.js';
 import {
@@ -32,6 +33,54 @@ export async function registerPartnerRoutes(app: FastifyInstance): Promise<void>
       nextCursor: page.nextCursor,
       hasMore: page.hasMore,
     };
+  });
+
+  // ─── Export — partners directory as CSV / JSON ─────────────────────────
+  app.get('/partners/export', { preHandler: requireAuth }, async (req, reply) => {
+    const fmt = z
+      .object({ format: z.enum(['csv', 'json']).default('csv') })
+      .parse(req.query).format;
+
+    // Pull all partners with a large page. Investor-scope omits sensitive fields.
+    const page = await service.list({ limit: 10_000 });
+    const isInvestor = req.auth!.scope === 'investor';
+    const rows = isInvestor
+      ? page.data.map((p) => toPartnerInvestorResponse(p))
+      : page.data.map((p) => toPartnerResponse(p));
+
+    await writeAuditLog({
+      req,
+      action: 'DATA_EXPORTED',
+      resourceType: 'partner',
+      metadata: {
+        source: 'partners',
+        format: fmt,
+        rowCount: rows.length,
+        scope: req.auth!.scope ?? 'operator',
+      },
+    });
+
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const filename = `partners_${timestamp}.${fmt}`;
+
+    if (fmt === 'json') {
+      reply.header('Content-Type', 'application/json');
+      reply.header('Content-Disposition', attachmentHeader(filename));
+      return rows;
+    }
+
+    // Stringify the union — investor view is a strict subset of the operator
+    // view, so iterating the first row's keys captures all columns regardless
+    // of which response shape we're emitting.
+    const first = rows[0] ?? {};
+    const columns = Object.keys(first).map((k) => ({
+      key: k,
+      pick: (r: Record<string, unknown>) => r[k],
+    }));
+
+    reply.header('Content-Type', 'text/csv; charset=utf-8');
+    reply.header('Content-Disposition', attachmentHeader(filename));
+    return rowsToCsv(rows as Array<Record<string, unknown>>, columns);
   });
 
   app.post(

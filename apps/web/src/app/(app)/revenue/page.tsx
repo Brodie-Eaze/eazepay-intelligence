@@ -26,7 +26,9 @@ export default function RevenuePage(): JSX.Element {
     queryFn: () => {
       const to = new Date().toISOString();
       const from = new Date(Date.now() - range.days * 86_400_000).toISOString();
-      return api<RevenueByStreamRow[]>(`/analytics/revenue?from=${from}&to=${to}&bucket=${range.bucket}`);
+      return api<RevenueByStreamRow[]>(
+        `/analytics/revenue?from=${from}&to=${to}&bucket=${range.bucket}`,
+      );
     },
   });
 
@@ -40,7 +42,7 @@ export default function RevenuePage(): JSX.Element {
     <div className="space-y-6">
       <PageHeader
         title="Revenue"
-        subtitle="Stream breakdown · projected from append-only ledger · clawbacks netted"
+        subtitle="Stream breakdown · projected from append-only commission ledger"
         action={
           <div className="flex gap-1">
             {RANGES.map((r) => (
@@ -56,11 +58,18 @@ export default function RevenuePage(): JSX.Element {
         }
       />
 
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <KpiCard label="Total revenue" value={formatMoney(grand)} hint={`${range.label} window`} />
-        <KpiCard label="BuzzPay rev share" value={formatMoney(totals.BUZZPAY ?? 0)} hint={`${pct(totals.BUZZPAY, grand)} of total`} />
-        <KpiCard label="Pixie margin" value={formatMoney(totals.PIXIE ?? 0)} hint={`${pct(totals.PIXIE, grand)} of total`} />
-        <KpiCard label="MiCamp processing" value={formatMoney(totals.MICAMP ?? 0)} hint={`${pct(totals.MICAMP, grand)} of total · 50/50 split`} />
+        <KpiCard
+          label="Pixie margin"
+          value={formatMoney(totals.PIXIE ?? 0)}
+          hint={`${pct(totals.PIXIE, grand)} of total`}
+        />
+        <KpiCard
+          label="MiCamp processing"
+          value={formatMoney(totals.MICAMP ?? 0)}
+          hint={`${pct(totals.MICAMP, grand)} of total · 50/50 split`}
+        />
       </div>
 
       <SectionCard
@@ -68,7 +77,11 @@ export default function RevenuePage(): JSX.Element {
         subtitle={`bucket: ${range.bucket}`}
         bodyClassName="p-3"
       >
-        {q.data ? <RevenueAreaChart data={q.data} height={360} /> : <div className="text-muted p-6">Loading…</div>}
+        {q.data ? (
+          <RevenueAreaChart data={q.data} height={360} />
+        ) : (
+          <div className="text-muted p-6">Loading…</div>
+        )}
       </SectionCard>
     </div>
   );
@@ -78,4 +91,3 @@ function pct(part: number | undefined, whole: number): string {
   if (!whole || !part) return '0%';
   return `${((part / whole) * 100).toFixed(0)}%`;
 }
-

@@ -31,10 +31,14 @@ export default function ApplicationsPage(): JSX.Element {
     <div className="space-y-6">
       <PageHeader
         title="Applications"
-        subtitle="Read-only ledger from BuzzPay · PII masked by default · operator+ only"
+        subtitle="Read-only application ledger · PII masked by default · operator+ only"
       />
 
-      <SectionCard title={`${rows.length} most-recent applications`} subtitle="Click an ID to open the full timeline" bodyClassName="p-0">
+      <SectionCard
+        title={`${rows.length} most-recent applications`}
+        subtitle="Click an ID to open the full timeline"
+        bodyClassName="p-0"
+      >
         <div className="overflow-x-auto">
           <table className="tbl">
             <thead>
@@ -51,16 +55,28 @@ export default function ApplicationsPage(): JSX.Element {
             <tbody>
               {rows.map((a) => (
                 <tr key={a.id}>
-                  <td className="numeric text-muted whitespace-nowrap">{formatDateTime(a.createdAt)}</td>
-                  <td className="numeric"><code className="kbd">{a.externalApplicationId}</code></td>
+                  <td className="numeric text-muted whitespace-nowrap">
+                    {formatDateTime(a.createdAt)}
+                  </td>
+                  <td className="numeric">
+                    <code className="kbd">{a.externalApplicationId}</code>
+                  </td>
                   <td className="text-ink">{a.consumerNameMasked}</td>
                   <td className="text-muted">{a.consumerEmailMasked}</td>
                   <td className="numeric text-muted">{a.consumerPhoneMasked}</td>
                   <td className="numeric text-right text-ink2">{a.creditScore ?? '—'}</td>
-                  <td><StatusPill>{a.status}</StatusPill></td>
+                  <td>
+                    <StatusPill>{a.status}</StatusPill>
+                  </td>
                 </tr>
               ))}
-              {rows.length === 0 && <tr><td colSpan={7} className="text-center py-8 text-muted">No applications yet.</td></tr>}
+              {rows.length === 0 && (
+                <tr>
+                  <td colSpan={7} className="text-center py-8 text-muted">
+                    No applications yet.
+                  </td>
+                </tr>
+              )}
             </tbody>
           </table>
         </div>

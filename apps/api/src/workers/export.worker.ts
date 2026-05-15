@@ -1,13 +1,20 @@
+import { startTelemetry } from '../config/telemetry.js';
+startTelemetry({ serviceName: 'eazepay-intelligence-worker-export' });
+
 import { Worker } from 'bullmq';
 import { getRedis } from '../config/redis.js';
-import { getPrisma } from '../config/database.js';
+import { getPrisma, getPrismaLong } from '../config/database.js';
 import { getLogger } from '../config/logger.js';
 import { EXPORT_QUEUE_NAME, type ExportJob } from '../shared/queues/export.queue.js';
 import { ExportService } from '../domains/exports/export.service.js';
 
 async function main(): Promise<void> {
   const log = getLogger();
-  const service = new ExportService(getPrisma());
+  // Writer for Export-row status transitions (read-after-write consistent),
+  // long-running role for the bulk row extraction (5-min statement budget,
+  // separate connection pool from the API request path). When
+  // DATABASE_LONG_URL is unset, the long client falls back to the writer.
+  const service = new ExportService(getPrisma(), getPrismaLong());
 
   const worker = new Worker<ExportJob>(
     EXPORT_QUEUE_NAME,

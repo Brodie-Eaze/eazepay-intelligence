@@ -1,4 +1,4 @@
-import { createHmac, randomBytes } from 'node:crypto';
+import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { authenticator } from 'otplib';
 import { v7 as uuidv7 } from 'uuid';
 import type { Redis } from 'ioredis';
@@ -8,7 +8,6 @@ import { getEnv } from '../../config/env.js';
 import { errors } from '../../shared/errors/app-error.js';
 import { verifyPassword } from '../../shared/utils/password.js';
 import { newJti, newRefreshFamilyId, signJwt, verifyJwt } from '../../shared/utils/jwt.js';
-import type { IAuthRepository } from './auth.repository.js';
 import { AuthRepository } from './auth.repository.js';
 
 export type AuthScope = 'standard' | 'investor';
@@ -23,13 +22,18 @@ export interface IssuedTokens {
 
 export class AuthService {
   constructor(
-    private readonly repo: IAuthRepository,
+    private readonly repo: AuthRepository,
     private readonly redis: Redis,
   ) {}
 
   async login(args: { email: string; password: string; mfaCode?: string }): Promise<IssuedTokens> {
     const user = await this.repo.findUserByEmail(args.email);
     if (!user) throw errors.unauthorized('Invalid credentials');
+
+    // OAuth-only users (no local password) cannot use the password path.
+    // Returning the same generic error keeps the response indistinguishable
+    // from a wrong password — no email-existence enumeration.
+    if (!user.passwordHash) throw errors.unauthorized('Invalid credentials');
 
     const ok = await verifyPassword(user.passwordHash, args.password);
     if (!ok) throw errors.unauthorized('Invalid credentials');
@@ -69,7 +73,7 @@ export class AuthService {
       familyId: stored.familyId,
       expiresAt: newExpires,
     });
-    const access = this.signAccess(user, 'standard');
+    const access = await this.signAccess(user, 'standard');
     return {
       access,
       refresh: { token: newRaw, expiresAt: newExpires },
@@ -96,7 +100,7 @@ export class AuthService {
       rawToken: refreshRaw,
       expiresAt: refreshExpires,
     });
-    const access = this.signAccess(user, requestedScope);
+    const access = await this.signAccess(user, requestedScope);
     return {
       access,
       refresh: { token: refreshRaw, expiresAt: refreshExpires },
@@ -112,7 +116,10 @@ export class AuthService {
     if (stored) await this.repo.revokeFamily(stored.familyId);
   }
 
-  async issueWsTicket(userId: string, scope: AuthScope): Promise<{ ticket: string; expiresInSeconds: number }> {
+  async issueWsTicket(
+    userId: string,
+    scope: AuthScope,
+  ): Promise<{ ticket: string; expiresInSeconds: number }> {
     const ttlSeconds = 30;
     const ticketId = uuidv7();
     const token = signJwt(
@@ -137,9 +144,24 @@ export class AuthService {
     return parsed;
   }
 
+  /**
+   * Public issue-session helper for non-password login paths (invitation
+   * acceptance, OAuth callback). Goes through the same token machinery as
+   * the password login so refresh-token rotation + family revocation behave
+   * identically.
+   */
+  async issueSessionForUser(user: User, scope: AuthScope = 'standard'): Promise<IssuedTokens> {
+    await this.repo.recordLogin(user.id);
+    return this.issueSession(user, scope, newRefreshFamilyId());
+  }
+
   // ─── internal ──────────────────────────────────────────────────────────────
 
-  private async issueSession(user: User, scope: AuthScope, familyId: string): Promise<IssuedTokens> {
+  private async issueSession(
+    user: User,
+    scope: AuthScope,
+    familyId: string,
+  ): Promise<IssuedTokens> {
     const env = getEnv();
     const refreshRaw = AuthRepository.newRawRefreshToken();
     const refreshExpires = new Date(Date.now() + env.JWT_REFRESH_TTL_SECONDS * 1000);
@@ -149,7 +171,7 @@ export class AuthService {
       rawToken: refreshRaw,
       expiresAt: refreshExpires,
     });
-    const access = this.signAccess(user, scope);
+    const access = await this.signAccess(user, scope);
     return {
       access,
       refresh: { token: refreshRaw, expiresAt: refreshExpires },
@@ -159,10 +181,29 @@ export class AuthService {
     };
   }
 
-  private signAccess(user: User, scope: AuthScope): { token: string; expiresAt: Date } {
+  private async signAccess(
+    user: User,
+    scope: AuthScope,
+  ): Promise<{ token: string; expiresAt: Date }> {
     const env = getEnv();
+    // Phase 1.3: embed the user's active organisation + per-org role in the
+    // access token. Resolution: oldest Membership (first org joined) wins
+    // during the migration window; an explicit org-switcher endpoint
+    // (Phase 1.3 expansion) lets the user change active org later.
+    // Platform staff are embedded so requireAuth can short-circuit
+    // platform-route checks without an extra DB hit.
+    const membership = await this.repo.findOldestMembership(user.id);
     const token = signJwt(
-      { sub: user.id, role: user.role, kind: 'access', jti: newJti(), scope },
+      {
+        sub: user.id,
+        role: user.role,
+        org: membership?.orgId,
+        orgRole: membership?.role,
+        platformRole: user.platformRole ?? null,
+        kind: 'access',
+        jti: newJti(),
+        scope,
+      },
       env.JWT_ACCESS_TTL_SECONDS,
     );
     return { token, expiresAt: new Date(Date.now() + env.JWT_ACCESS_TTL_SECONDS * 1000) };
@@ -184,5 +225,11 @@ export function verifyCsrfToken(token: string | undefined): boolean {
   const [random, sig] = parts as [string, string];
   const env = getEnv();
   const expected = createHmac('sha256', env.JWT_ACCESS_SECRET).update(random).digest('base64url');
-  return sig === expected;
+  // Constant-time compare. A naive `sig === expected` short-circuits on the
+  // first byte mismatch and would leak the signature byte-by-byte under a
+  // chatty attacker. Use timingSafeEqual with a length-equality pre-check.
+  const sigBuf = Buffer.from(sig, 'utf8');
+  const expBuf = Buffer.from(expected, 'utf8');
+  if (sigBuf.length !== expBuf.length) return false;
+  return timingSafeEqual(sigBuf, expBuf);
 }

@@ -64,7 +64,11 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
     }
   });
 
-  app.post('/auth/refresh', async (req, reply) => {
+  // CSRF on refresh: even though it's "just" reading the refresh cookie, the
+  // rotation produces a fresh access cookie under the same identity. Without
+  // the guard, SameSite=None means a malicious site can keep a stolen refresh
+  // token alive indefinitely by silently refreshing it from any browser tab.
+  app.post('/auth/refresh', { preHandler: csrfGuard }, async (req, reply) => {
     const raw = readCookie(req, COOKIE.REFRESH);
     if (!raw) throw errors.unauthorized('Missing refresh cookie');
     const issued = await service.refresh(raw);
@@ -87,7 +91,13 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
     clearCookie(reply, COOKIE.REFRESH);
     clearCookie(reply, COOKIE.CSRF);
     if (userId) {
-      await writeAuditLog({ req, userId, action: 'USER_LOGOUT', resourceType: 'user', resourceId: userId });
+      await writeAuditLog({
+        req,
+        userId,
+        action: 'USER_LOGOUT',
+        resourceType: 'user',
+        resourceId: userId,
+      });
     }
     reply.status(204).send();
   });
@@ -193,8 +203,14 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
   function writeAuthCookies(reply: Parameters<typeof setCookie>[0], issued: IssuedTokens): void {
     const accessTtl = Math.floor((issued.access.expiresAt.getTime() - Date.now()) / 1000);
     const refreshTtl = Math.floor((issued.refresh.expiresAt.getTime() - Date.now()) / 1000);
-    setCookie(reply, COOKIE.ACCESS, issued.access.token, { maxAgeSeconds: accessTtl, httpOnly: true });
-    setCookie(reply, COOKIE.REFRESH, issued.refresh.token, { maxAgeSeconds: refreshTtl, httpOnly: true });
+    setCookie(reply, COOKIE.ACCESS, issued.access.token, {
+      maxAgeSeconds: accessTtl,
+      httpOnly: true,
+    });
+    setCookie(reply, COOKIE.REFRESH, issued.refresh.token, {
+      maxAgeSeconds: refreshTtl,
+      httpOnly: true,
+    });
     setCookie(reply, COOKIE.CSRF, issued.csrf, { maxAgeSeconds: accessTtl, httpOnly: false });
   }
 

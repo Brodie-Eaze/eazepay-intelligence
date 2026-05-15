@@ -2,20 +2,20 @@
 
 **Jurisdiction:** Australia (Australian Privacy Principles under the Privacy Act 1988). GDPR alignment maintained for forward compatibility.
 
-**Data we hold:** consumer PII received via signed webhook from BuzzPay applications — name, email, phone — plus financial enrichment (credit score, income, available credit, propensity score, pre-approval status) tied to that consumer.
+**Data we hold:** consumer PII received via signed webhook from the EazePay App (application lifecycle) and HighSale (per-application credit-data snapshots) — name, email, phone, plus the financial enrichment fields surfaced by HighSale (credit score, income, available credit, propensity score, pre-approval status, etc.).
 
-**Data we do not collect directly:** we have no consumer-facing surface. Consumers interact with Pixie's smart-form on a partner's site. BuzzPay relays the data to us.
+**Data we do not collect directly:** we have no consumer-facing surface. Consumers interact with the application form on a partner's site (operated by EazePay App). App orchestrates the submission and relays events to us. HighSale is called from inside that form and pushes its credit-data snapshot to us in parallel.
 
 ---
 
 ## Roles under the Privacy Act / GDPR
 
-| Role                       | Party                                                               |
-| -------------------------- | ------------------------------------------------------------------- |
-| **Data subject**           | The consumer applying for a BuzzPay loan via a partner              |
-| **Collector / Controller** | The partner business + Pixie (HighSale) at point of capture         |
-| **Processor**              | EazePay Intelligence (us) — we receive, store, project, and display |
-| **Sub-processors**         | Postgres host, Redis host, deployment platform                      |
+| Role                       | Party                                                                                                |
+| -------------------------- | ---------------------------------------------------------------------------------------------------- |
+| **Data subject**           | The consumer applying for a BNPL loan via a partner business                                         |
+| **Collector / Controller** | The partner business + EazePay App + HighSale at point of capture                                    |
+| **Processor**              | EazePay Intelligence (us) — we receive, store, project, and display                                  |
+| **Sub-processors**         | Postgres host, Redis host, deployment platform, Resend (transactional email), Google (OAuth sign-in) |
 
 We act as a **processor** under GDPR-style framing (an APP entity under AU law). Our lawful basis for processing depends on the partner-collected consent.
 
@@ -33,31 +33,31 @@ We act as a **processor** under GDPR-style framing (an APP entity under AU law).
 | **APP 6**  | Use or disclosure                             | Data is used solely for: (a) operator visibility into application + decision flow, (b) financial-intelligence reporting. Not used for marketing. Not disclosed to third parties without explicit consent.                           |
 | **APP 7**  | Direct marketing                              | n/a — we do not market to consumers.                                                                                                                                                                                                |
 | **APP 8**  | Cross-border disclosure                       | If hosted outside AU, the deployment region is documented. Any cross-border transfer requires a DPA with the destination provider.                                                                                                  |
-| **APP 9**  | Government identifiers                        | We do not store TFNs, Medicare numbers, or driver's licences. If BuzzPay ever transmits one, the `webhook.service.ts` schema rejects unknown PII fields by default.                                                                 |
-| **APP 10** | Quality of personal information               | Source of truth is BuzzPay. On every application we re-receive PII; latest values overwrite. No standalone customer-edit surface.                                                                                                   |
+| **APP 9**  | Government identifiers                        | We do not store TFNs, Medicare numbers, or driver's licences. If any upstream pushes one, the relevant Zod schema rejects unknown PII fields by default.                                                                            |
+| **APP 10** | Quality of personal information               | Source of truth is upstream (EazePay App + HighSale). On every application we re-receive PII; latest values overwrite. No standalone customer-edit surface.                                                                         |
 | **APP 11** | Security of personal information              | See `SECURITY.md`. AES-256-GCM at rest; TLS in transit; RBAC; audit logging; key versioning.                                                                                                                                        |
 | **APP 12** | Access to personal information                | Data subjects can request a copy via the partner. Operator UI exposes per-customer detail at `/customers/:hash` (PII gated by reveal flow). API endpoint `GET /customers/:hash/pii` returns full plaintext to authorised operators. |
-| **APP 13** | Correction of personal information            | Corrections flow upstream — the partner re-submits the application via Pixie / BuzzPay; we re-receive and update on `externalApplicationId` upsert.                                                                                 |
+| **APP 13** | Correction of personal information            | Corrections flow upstream — the partner re-submits the application via EazePay App; we re-receive and update on `externalApplicationId` upsert.                                                                                     |
 
 ---
 
 ## GDPR-specific provisions (forward compatibility)
 
-| Article | Right                                      | Implementation                                                                                                                                       |
-| ------- | ------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Art. 15 | Right of access                            | API supports per-customer PII retrieval; export-to-portable-JSON pending (see `ROADMAP.md`).                                                         |
-| Art. 16 | Right to rectification                     | Upstream — re-submit to BuzzPay.                                                                                                                     |
-| Art. 17 | Right to erasure ("right to be forgotten") | Designed: cryptoshred via key version retirement + targeted row scrub. **Not yet implemented.**                                                      |
-| Art. 18 | Right to restriction of processing         | Soft-delete on `Partner`/`User` available; per-customer restriction flag pending.                                                                    |
-| Art. 20 | Right to data portability                  | JSON export endpoint pending.                                                                                                                        |
-| Art. 21 | Right to object                            | Routed to upstream partner.                                                                                                                          |
-| Art. 22 | Automated decision-making                  | We do not make automated decisions. The decision engine is BuzzPay; we render the outcome.                                                           |
-| Art. 25 | Data protection by design and default      | Built into the architecture (encryption, redaction, RBAC) rather than bolted on.                                                                     |
-| Art. 28 | Processor obligations                      | Documented in this file + `SOC2_CONTROLS.md`. DPA template available.                                                                                |
-| Art. 30 | Records of processing activities           | `webhook_events` (every inbound) + `audit_logs` (every access) + `revenue_events` (every dollar). All three are durable, append-only, and queryable. |
-| Art. 32 | Security of processing                     | Covered by `SECURITY.md`.                                                                                                                            |
-| Art. 33 | Breach notification (72h)                  | Incident response playbook in `SECURITY.md`.                                                                                                         |
-| Art. 34 | Communication of breach to data subject    | Routed via the partner who collected the data.                                                                                                       |
+| Article | Right                                      | Implementation                                                                                                                                                                                                                                                                              |
+| ------- | ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Art. 15 | Right of access                            | API supports per-customer PII retrieval; export-to-portable-JSON pending (see `docs/PLATFORM_V2.md` Phase 11).                                                                                                                                                                              |
+| Art. 16 | Right to rectification                     | Upstream — re-submit via the EazePay App application flow.                                                                                                                                                                                                                                  |
+| Art. 17 | Right to erasure ("right to be forgotten") | **Implemented.** `POST /admin/rtbf` (admin + CSRF). Lifecycle worker drains PENDING requests; `RtbfService.process` overwrites encrypted PII columns on every Application carrying the email hash with zero buffers in one tx. Audit-logged: RTBF_SUBMITTED / RTBF_PROCESSED / RTBF_FAILED. |
+| Art. 18 | Right to restriction of processing         | Soft-delete on `Partner`/`User` available; per-customer restriction flag pending.                                                                                                                                                                                                           |
+| Art. 20 | Right to data portability                  | JSON export endpoint pending.                                                                                                                                                                                                                                                               |
+| Art. 21 | Right to object                            | Routed to upstream partner.                                                                                                                                                                                                                                                                 |
+| Art. 22 | Automated decision-making                  | We do not make automated decisions. Underwriting happens at the third-party lender; we render the outcome read-only.                                                                                                                                                                        |
+| Art. 25 | Data protection by design and default      | Built into the architecture (encryption, redaction, RBAC) rather than bolted on.                                                                                                                                                                                                            |
+| Art. 28 | Processor obligations                      | Documented in this file + `SOC2_CONTROLS.md`. DPA template available.                                                                                                                                                                                                                       |
+| Art. 30 | Records of processing activities           | `webhook_events` (every inbound) + `audit_logs` (every access) + `revenue_events` (every dollar). All three are durable, append-only, and queryable.                                                                                                                                        |
+| Art. 32 | Security of processing                     | Covered by `SECURITY.md`.                                                                                                                                                                                                                                                                   |
+| Art. 33 | Breach notification (72h)                  | Incident response playbook in `SECURITY.md`.                                                                                                                                                                                                                                                |
+| Art. 34 | Communication of breach to data subject    | Routed via the partner who collected the data.                                                                                                                                                                                                                                              |
 
 ---
 
@@ -127,17 +127,51 @@ The encryption key (`PII_ENCRYPTION_KEY`) is base64-encoded 32 random bytes. In 
 
 ## Data retention
 
-| Data                         | Retention                                                         | Mechanism                                           |
-| ---------------------------- | ----------------------------------------------------------------- | --------------------------------------------------- |
-| Customer PII (encrypted)     | Until partner deletion request, or 7 years after last application | Cryptoshred via key version retirement + row delete |
-| Application records          | 7 years (AU regulatory baseline)                                  | Hard delete via lifecycle job                       |
-| Audit logs                   | 7 years                                                           | Append-only, no delete during retention window      |
-| Revenue events               | 7 years (financial record retention)                              | Append-only, no delete                              |
-| Refresh tokens               | 30 days after expiry                                              | Lifecycle job (pending implementation)              |
-| Webhook events (raw payload) | 90 days                                                           | Lifecycle job (pending implementation)              |
-| Sessions                     | Until logout / 7-day expiry                                       | Application logic                                   |
+| Data                         | Retention                                                         | Mechanism                                                                     |
+| ---------------------------- | ----------------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| Customer PII (encrypted)     | Until partner deletion request, or 7 years after last application | Cryptoshred via key version retirement + row delete                           |
+| Application records          | 7 years (AU regulatory baseline)                                  | Hard delete via lifecycle job                                                 |
+| Audit logs                   | 7 years                                                           | Append-only, no delete during retention window                                |
+| Revenue events               | 7 years (financial record retention)                              | Append-only, no delete                                                        |
+| Refresh tokens               | 30 days after expiry                                              | **Implemented** — `worker:lifecycle` deletes expired/revoked rows past grace  |
+| Webhook events (raw payload) | 90 days                                                           | **Implemented** — `worker:lifecycle` clears `webhook_events.payload` past TTL |
+| Sessions                     | Until logout / 7-day expiry                                       | Application logic                                                             |
 
-Lifecycle jobs not yet implemented — see `ROADMAP.md`.
+Lifecycle jobs are now implemented in `apps/api/src/workers/lifecycle.worker.ts` (`pnpm --filter api worker:lifecycle`). Tasks per cycle:
+
+1. **Webhook payload scrub** — clears `webhook_events.payload` JSON past `LIFECYCLE_WEBHOOK_PAYLOAD_TTL_DAYS` (default 90). Row + metadata kept for audit.
+2. **Refresh-token purge** — hard-deletes `refresh_tokens` revoked or expired more than `LIFECYCLE_REFRESH_TOKEN_GRACE_DAYS` (default 30) ago.
+3. **RTBF processor** — drains PENDING `rtbf_requests` rows via `RtbfService.process` (cryptoshred PII columns on every matching Application).
+
+Each task writes a `LIFECYCLE_PURGE` audit row with `task`, `count`, and `cutoffIso`. RTBF processing writes `RTBF_PROCESSED` / `RTBF_FAILED`.
+
+Application + revenue-event 7-year retention is **not** in this worker; those tables are append-only by Postgres role REVOKE and the regulatory horizon is far enough out that lifecycle deletion is a v1.1+ concern.
+
+---
+
+## Sub-processors
+
+The system entrusts personal data to a small, deliberately bounded set of
+external providers. Each is documented below with the exact data category
+shared, the lawful basis, and the minimisation control we apply.
+
+| Sub-processor       | Data category shared                              | Purpose                            | Lawful basis            | Notes                                                                                                                                                                                                                                                                       |
+| ------------------- | ------------------------------------------------- | ---------------------------------- | ----------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Postgres host       | All persisted data (encrypted at rest)            | Primary durable store              | Performance of contract | Infrastructure provider; under DPA. Region documented per deployment.                                                                                                                                                                                                       |
+| Redis host          | Sessions, rate-limit counters, OAuth state nonces | Cache, rate limit, session         | Performance of contract | No PII; opaque tokens only.                                                                                                                                                                                                                                                 |
+| Deployment platform | App logs (excluding decrypted PII), metrics       | Hosting + observability            | Performance of contract | PII is encrypted/hashed before any operational telemetry leaves the process.                                                                                                                                                                                                |
+| **Resend**          | Operator email address only                       | Transactional email (invitations)  | Legitimate interest     | Used exclusively for admin-issued user invitations. Consumer PII is **never** sent through Resend. Plaintext invitation tokens are NOT stored on our side — only a sha256 hash.                                                                                             |
+| **Google**          | Operator email + Google `sub` (subject id) + name | OAuth federated sign-in (optional) | Consent                 | Activated only when `GOOGLE_OAUTH_*` env is set. We do NOT auto-create accounts: an admin must invite the email first, so Google is a verification layer, not an enrolment one. We persist `google_sub` to bind future logins to the stable Google identity, not the email. |
+
+**Operator data only.** Resend and Google handle exclusively operator-side
+data (the people who use this dashboard). Consumer-side PII (loan
+applicants) never reaches either provider.
+
+**Withdrawal.** A deployment can disable Google OAuth at any time by
+unsetting `GOOGLE_OAUTH_CLIENT_ID`; users with stamped `google_sub` rows
+fall back to password-based login. Resend can be disabled by unsetting
+`RESEND_API_KEY`; invitation links are then surfaced in the admin UI for
+manual delivery.
 
 ---
 

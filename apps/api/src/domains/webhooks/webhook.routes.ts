@@ -28,6 +28,8 @@ import { WebhookSource } from '@prisma/client';
 import { getPrisma } from '../../config/database.js';
 import { verifyWebhookSignature } from '../../shared/middleware/webhook-signature.middleware.js';
 import { appendToOutbox } from '../../shared/utils/outbox.js';
+import { webhookRateLimit } from '../../shared/middleware/rate-limit-tiers.js';
+import { getEnv } from '../../config/env.js';
 
 export async function registerWebhookRoutes(app: FastifyInstance): Promise<void> {
   const prisma = getPrisma();
@@ -61,20 +63,12 @@ export async function registerWebhookRoutes(app: FastifyInstance): Promise<void>
     reply.status(202).send({ accepted: true, eventId: wh.eventId });
   };
 
-  for (const evt of ['application', 'lender-decision', 'funding-status', 'clawback'] as const) {
-    app.post(
-      `/webhooks/buzzpay/${evt}`,
-      {
-        preHandler: verifyWebhookSignature(WebhookSource.BUZZPAY),
-      },
-      ingest,
-    );
-  }
-
   app.post(
     '/webhooks/pixie/usage',
     {
       preHandler: verifyWebhookSignature(WebhookSource.PIXIE),
+      config: webhookRateLimit(),
+      bodyLimit: getEnv().BODY_LIMIT_WEBHOOK_BYTES,
     },
     ingest,
   );
@@ -84,6 +78,8 @@ export async function registerWebhookRoutes(app: FastifyInstance): Promise<void>
       `/webhooks/micamp/${evt}`,
       {
         preHandler: verifyWebhookSignature(WebhookSource.MICAMP),
+        config: webhookRateLimit(),
+        bodyLimit: getEnv().BODY_LIMIT_WEBHOOK_BYTES,
       },
       ingest,
     );

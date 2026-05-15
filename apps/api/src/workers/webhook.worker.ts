@@ -1,7 +1,11 @@
+import { startTelemetry } from '../config/telemetry.js';
+startTelemetry({ serviceName: 'eazepay-intelligence-worker-webhook' });
+
 import { Worker } from 'bullmq';
 import { getRedis } from '../config/redis.js';
 import { getPrisma } from '../config/database.js';
 import { getLogger } from '../config/logger.js';
+import { getEnv } from '../config/env.js';
 import { WEBHOOK_QUEUE_NAME, type WebhookJob } from '../shared/queues/webhook.queue.js';
 import { WebhookProcessor } from '../domains/webhooks/webhook.service.js';
 
@@ -17,19 +21,25 @@ async function main(): Promise<void> {
   const worker = new Worker<WebhookJob>(
     WEBHOOK_QUEUE_NAME,
     async (job) => {
-      log.info({ jobId: job.id, source: job.data.source, eventType: job.data.eventType }, 'webhook.process.start');
+      log.info(
+        { jobId: job.id, source: job.data.source, eventType: job.data.eventType },
+        'webhook.process.start',
+      );
       await processor.process(job.data);
       log.info({ jobId: job.id }, 'webhook.process.done');
     },
     {
       connection: getRedis(),
-      concurrency: 8,
+      concurrency: getEnv().WORKER_WEBHOOK_CONCURRENCY,
       autorun: true,
     },
   );
 
   worker.on('failed', (job, err) => {
-    log.error({ jobId: job?.id, attempt: job?.attemptsMade, err: err.message }, 'webhook.process.failed');
+    log.error(
+      { jobId: job?.id, attempt: job?.attemptsMade, err: err.message },
+      'webhook.process.failed',
+    );
   });
 
   const shutdown = async (signal: NodeJS.Signals): Promise<void> => {

@@ -10,7 +10,7 @@
 import type { FastifyInstance } from 'fastify';
 import { v7 as uuidv7 } from 'uuid';
 import { z } from 'zod';
-import { getPrisma } from '../../config/database.js';
+import { getPrismaReader, getPrismaWriter } from '../../config/database.js';
 import { requireAuth } from '../../shared/middleware/auth.middleware.js';
 import { csrfGuard } from '../../shared/middleware/csrf.middleware.js';
 import { errors } from '../../shared/errors/app-error.js';
@@ -30,7 +30,10 @@ const SearchQuery = z.object({
 });
 
 export async function registerSearchRoutes(app: FastifyInstance): Promise<void> {
-  const prisma = getPrisma();
+  // Mixed-mode: search is read-only and routes to the replica; saved-views
+  // CRUD writes to the primary. Per-route below decides which client.
+  const prisma = getPrismaReader();
+  const prismaW = getPrismaWriter();
 
   app.get('/search', { preHandler: requireAuth }, async (req) => {
     const { q, kinds: kindsCsv, limit } = SearchQuery.parse(req.query);
@@ -160,7 +163,7 @@ export async function registerSearchRoutes(app: FastifyInstance): Promise<void> 
   app.post('/saved-views', { preHandler: [requireAuth, csrfGuard] }, async (req, reply) => {
     const auth = req.auth!;
     const input = SavedViewSchema.parse(req.body);
-    const created = await prisma.savedView.create({
+    const created = await prismaW.savedView.create({
       data: {
         id: uuidv7(),
         userId: auth.userId,
@@ -177,9 +180,11 @@ export async function registerSearchRoutes(app: FastifyInstance): Promise<void> 
   app.delete('/saved-views/:id', { preHandler: [requireAuth, csrfGuard] }, async (req, reply) => {
     const auth = req.auth!;
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
-    const row = await prisma.savedView.findUnique({ where: { id } });
+    // Use writer for the read-then-delete: avoids the rare race where the
+    // replica hasn't caught up to a recent create from this same user.
+    const row = await prismaW.savedView.findUnique({ where: { id } });
     if (!row || row.userId !== auth.userId) throw errors.notFound('SavedView', id);
-    await prisma.savedView.delete({ where: { id } });
+    await prismaW.savedView.delete({ where: { id } });
     reply.status(204).send();
   });
 }
