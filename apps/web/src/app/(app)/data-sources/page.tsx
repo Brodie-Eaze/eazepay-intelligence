@@ -144,7 +144,7 @@ export default function DataSourcesPage(): JSX.Element {
           </h1>
           <p className="text-[14px] text-blue-100/70 max-w-2xl mb-6">
             Four inbound planes feed the warehouse. Each one has its own ingestion path, HMAC
-            secret, and freshness SLO. Click a source to drill into the data it's produced.
+            secret, and freshness SLO. Click a source to drill into the data it&apos;s produced.
           </p>
           <div className="grid grid-cols-2 md:grid-cols-3 gap-x-10 gap-y-4">
             <div>

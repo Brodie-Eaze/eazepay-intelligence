@@ -108,7 +108,7 @@ export default function TokensPage(): JSX.Element {
             onClick={() => setReveal(null)}
             className="ml-2 text-xs text-muted hover:text-ink"
           >
-            I've saved it
+            I&apos;ve saved it
           </button>
         </SectionCard>
       )}
