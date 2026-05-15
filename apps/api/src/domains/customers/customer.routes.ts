@@ -5,6 +5,7 @@ import { getPrismaReader } from '../../config/database.js';
 import { requireAuth } from '../../shared/middleware/auth.middleware.js';
 import { writeAuditLog } from '../../shared/middleware/audit-log.middleware.js';
 import { decryptPII } from '../../shared/utils/encryption.js';
+import { decryptEnvelopeAuto } from '../../shared/kms/tenant-dek.js';
 import { errors } from '../../shared/errors/app-error.js';
 
 /**
@@ -265,9 +266,13 @@ export async function registerCustomerRoutes(app: FastifyInstance): Promise<void
       orderBy: { createdAt: 'desc' },
     });
     if (!app) throw errors.notFound('Customer', params.hash);
-    const name = decryptPII(app.consumerNameCiphertext);
-    const email = decryptPII(app.consumerEmailCiphertext);
-    const phone = decryptPII(app.consumerPhoneCiphertext);
+    // Phase 3 continued: auto-dispatch v1 (global key) and v2 (per-org DEK)
+    // so historical rows + new per-org rows both decrypt on this hot path.
+    const [name, email, phone] = await Promise.all([
+      decryptEnvelopeAuto(prisma, app.consumerNameCiphertext, decryptPII),
+      decryptEnvelopeAuto(prisma, app.consumerEmailCiphertext, decryptPII),
+      decryptEnvelopeAuto(prisma, app.consumerPhoneCiphertext, decryptPII),
+    ]);
     await writeAuditLog({
       req,
       action: 'PII_ACCESSED',

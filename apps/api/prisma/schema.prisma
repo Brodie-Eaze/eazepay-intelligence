@@ -1326,12 +1326,17 @@ model OutboxEvent {
   publishedAt   DateTime?   @map("published_at") @db.Timestamptz(6)
   publishError  String?     @map("publish_error")
   attemptCount  Int         @default(0) @map("attempt_count")
+  /// Phase 7 (SF-006): after OUTBOX_MAX_ATTEMPTS failed dispatches the sweeper
+  /// stops re-claiming the row and stamps dlqedAt. Operator-visible surface
+  /// for poison-pill rows; replay via POST /platform/outbox/dlq/:id/replay.
+  dlqedAt       DateTime?   @map("dlqed_at") @db.Timestamptz(6)
 
   org Organization @relation("OrgOutboxEvents", fields: [orgId], references: [id])
 
   @@index([orgId, publishedAt, createdAt])
   @@index([publishedAt, createdAt])  // sweeper scans WHERE publishedAt IS NULL ORDER BY createdAt
   @@index([kind, publishedAt])
+  @@index([dlqedAt])                // operator surface for DLQ list
   @@map("outbox_events")
 }
 

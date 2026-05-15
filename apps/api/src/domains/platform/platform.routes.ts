@@ -453,4 +453,81 @@ export async function registerPlatformRoutes(app: FastifyInstance): Promise<void
       };
     },
   );
+
+  // ─── Outbox DLQ (Phase 7, SF-006) ─────────────────────────────────────────
+  //
+  // List quarantined outbox rows that crossed MAX_ATTEMPTS. Operators
+  // inspect, root-cause, then either re-queue via the replay endpoint or
+  // archive externally. Cross-org by design — platform-staff scope.
+  app.get(
+    '/platform/outbox/dlq',
+    { preHandler: [requireAuth, requirePlatformRole('STAFF')] },
+    async (req) => {
+      const query = z
+        .object({
+          limit: z.coerce.number().int().positive().max(200).default(50),
+        })
+        .parse(req.query);
+      const rows = await prisma.outboxEvent.findMany({
+        where: { dlqedAt: { not: null } },
+        select: {
+          id: true,
+          orgId: true,
+          kind: true,
+          refType: true,
+          refId: true,
+          attemptCount: true,
+          publishError: true,
+          createdAt: true,
+          dlqedAt: true,
+        },
+        orderBy: { dlqedAt: 'desc' },
+        take: query.limit,
+      });
+      await writeAuditLog({
+        req,
+        action: 'PLATFORM_CROSS_TENANT_ACCESS',
+        resourceType: 'outbox_dlq',
+        metadata: { route: 'GET /platform/outbox/dlq', count: rows.length },
+      });
+      return {
+        rows: rows.map((r) => ({
+          ...r,
+          createdAt: r.createdAt.toISOString(),
+          dlqedAt: r.dlqedAt?.toISOString() ?? null,
+        })),
+      };
+    },
+  );
+
+  // Re-queue a DLQ'd row. SUPER only — re-running a poison-pill against
+  // the same root cause loops the failure; operators must confirm the
+  // root cause is fixed before unblocking the row.
+  app.post(
+    '/platform/outbox/dlq/:id/replay',
+    { preHandler: [requireAuth, requirePlatformRole('SUPER'), csrfGuard] },
+    async (req) => {
+      const params = z.object({ id: z.string().uuid() }).parse(req.params);
+      const row = await prisma.outboxEvent.findUnique({ where: { id: params.id } });
+      if (!row || !row.dlqedAt) {
+        throw errors.notFound('Outbox row not in DLQ');
+      }
+      await prisma.outboxEvent.update({
+        where: { id: params.id },
+        data: { dlqedAt: null, attemptCount: 0, publishError: null },
+      });
+      await writeAuditLog({
+        req,
+        action: 'PLATFORM_CROSS_TENANT_ACCESS',
+        resourceType: 'outbox_dlq',
+        resourceId: params.id,
+        metadata: {
+          route: 'POST /platform/outbox/dlq/:id/replay',
+          orgId: row.orgId,
+          kind: row.kind,
+        },
+      });
+      return { ok: true, outboxId: params.id };
+    },
+  );
 }
