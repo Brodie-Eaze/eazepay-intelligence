@@ -29,7 +29,16 @@ import { LenderSubmissionService } from '../domains/lenders/lender-submission.se
 import { getLenderAdapter } from '../domains/lenders/adapter/lender-adapter-registry.js';
 import { bootstrapLenderAdapters } from '../domains/lenders/adapter/bootstrap.js';
 import { CircuitBreaker } from '../domains/lenders/adapter/circuit-breaker.js';
-import { lenderPollsTotal, lenderPollDurationSeconds } from '../shared/metrics/metrics.js';
+import { listLenderAdapters } from '../domains/lenders/adapter/lender-adapter-registry.js';
+import {
+  lenderPollsTotal,
+  lenderPollDurationSeconds,
+  lenderCircuitState,
+} from '../shared/metrics/metrics.js';
+
+function stateNumber(s: 'CLOSED' | 'HALF_OPEN' | 'OPEN'): number {
+  return s === 'CLOSED' ? 0 : s === 'HALF_OPEN' ? 1 : 2;
+}
 
 const POLL_INTERVAL_MS = Number(process.env.LENDER_POLL_INTERVAL_MS ?? 60_000);
 const BATCH_SIZE = Number(process.env.LENDER_POLL_BATCH_SIZE ?? 200);
@@ -119,6 +128,7 @@ async function processBatch(prisma: PrismaClient): Promise<number> {
         const breaker = breakerFor(slug);
         if (breaker.shouldSkip()) {
           lenderPollsTotal.inc({ adapter: slug, outcome: 'breaker_open' });
+          lenderCircuitState.set(stateNumber(breaker.getState()), { adapter: slug });
           continue;
         }
         const endTimer = lenderPollDurationSeconds.startTimer({ adapter: slug });
@@ -143,10 +153,22 @@ async function processBatch(prisma: PrismaClient): Promise<number> {
           );
         } finally {
           endTimer();
+          // Phase H reviewer fix (arch #5): emit state per call so
+          // dashboards see transitions, not just terminal state.
+          lenderCircuitState.set(stateNumber(breaker.getState()), { adapter: slug });
         }
       }
     }),
   );
+
+  // SEC-307 fix: also emit state for registered adapters with no
+  // candidates this tick — otherwise a quiet lender would never appear
+  // in the metric. listLenderAdapters() bounds cardinality at the
+  // registered set; tenant-controlled lenderName never reaches the
+  // gauge label.
+  for (const a of listLenderAdapters()) {
+    lenderCircuitState.set(stateNumber(breakerFor(a.slug).getState()), { adapter: a.slug });
+  }
 
   log.info({ scanned: candidates.length }, 'lender.poll.batch.done');
   return candidates.length;

@@ -39,13 +39,22 @@ import { COOKIE, readCookie } from '../utils/cookies.js';
 
 const STEP_UP_COOKIE = '__Host-mfa_stepup';
 const STEP_UP_TTL_SECONDS = 300; // 5 minutes
-// In-process replay-detection set — same single-use guarantee as ws_ticket.
+// In-process replay-detection store — same single-use guarantee as ws_ticket.
 // Process-local is acceptable here because step-up tokens are short-lived
 // and a balanced load-balancer routes the same user to the same pod most
 // of the time. A determined attacker re-using a token across pods within
 // 5 minutes is theoretically possible but caught by the cookie's bound
 // `sub` claim — the attacker needs to be the same user.
-const consumedJtis = new Set<string>();
+//
+// Phase H reviewer fix (arch-critic #3): the previous implementation
+// `consumedJtis.clear()` on bloat would have opened a small replay window
+// — a token consumed at t=0 with `iat=t` could be replayed at t=29s if
+// the set was cleared at t=30s, because the 300s freshness check still
+// passed. Now we store {jti → exp} and prune only entries that have
+// already expired (the iat freshness check would reject them anyway), so
+// shrinking the store can never re-enable a still-valid jti.
+const consumedJtis = new Map<string, number /* exp unix seconds */>();
+const PRUNE_THRESHOLD = 10_000;
 
 function stepUpSecret(): string {
   const env = getEnv();
@@ -118,16 +127,17 @@ export const requireMfaStepUp: preHandlerHookHandler = async (
   if (consumedJtis.has(payload.jti)) {
     throw errors.forbidden('Step-up token already used');
   }
-  // Consume on success — single-use within the 5-min window.
-  consumedJtis.add(payload.jti);
-  // Bounded set: prune lazily when it grows past 10k entries.
-  if (consumedJtis.size > 10_000) {
-    const cutoff = Math.floor(Date.now() / 1000) - STEP_UP_TTL_SECONDS;
-    // We don't store iat per-jti, so a soft clear when the set bloats is
-    // acceptable — re-using a previously-consumed jti after the clear
-    // still fails the iat freshness check.
-    void cutoff;
-    consumedJtis.clear();
+  // Consume on success — single-use until the token's natural exp.
+  const exp = payload.iat + STEP_UP_TTL_SECONDS;
+  consumedJtis.set(payload.jti, exp);
+  // Prune lazily once we hit the threshold. Only drop entries past their
+  // exp — the freshness check would already reject re-use of those, so
+  // shrinking the store can never re-enable a still-valid jti.
+  if (consumedJtis.size > PRUNE_THRESHOLD) {
+    const nowSec = Math.floor(Date.now() / 1000);
+    for (const [jti, jtiExp] of consumedJtis) {
+      if (jtiExp <= nowSec) consumedJtis.delete(jti);
+    }
   }
 };
 
@@ -136,4 +146,8 @@ export const STEP_UP_TTL = STEP_UP_TTL_SECONDS;
 
 export function __resetStepUpStateForTests(): void {
   consumedJtis.clear();
+}
+
+export function __consumedJtiCountForTests(): number {
+  return consumedJtis.size;
 }

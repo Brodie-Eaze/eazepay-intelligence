@@ -80,25 +80,25 @@ export function registerHealthRoute(app: FastifyInstance): void {
     });
   });
 
-  // /metrics — Prometheus exposition. Aggregates pool + query metrics from
-  // every Prisma client (writer, reader, long-running). Each client's metrics
-  // are namespaced via the `db` label so a Prometheus dashboard can split
-  // primary vs replica vs long-running pool pressure.
-  //
-  // Use Prometheus scrape with a scrape interval ≥ 10s. The endpoint is
-  // unauthenticated by design — it must work for k8s/ECS service-discovery
-  // scrapers — but expose it on a private network only (Fastify's listen
-  // binding is :0.0.0.0 in dev; deploy behind a private ALB).
-  app.get('/metrics', async (_req, reply) => {
-    const writer = await getPrisma().$metrics.prometheus({ globalLabels: { db: 'writer' } });
-    const reader = isReaderUsingFallback()
-      ? ''
-      : await getPrismaReader().$metrics.prometheus({ globalLabels: { db: 'reader' } });
-    const long = isLongUsingFallback()
-      ? ''
-      : await getPrismaLong().$metrics.prometheus({ globalLabels: { db: 'long' } });
-    reply.header('content-type', 'text/plain; version=0.0.4').send(writer + reader + long);
-  });
+  // Prisma pool metrics moved into shared/metrics/metrics.routes.ts so we
+  // have one /metrics endpoint emitting BOTH Prisma pool stats and the
+  // domain counters (SEC-305 fix — duplicate route would crash Fastify).
+  // The metrics route at /metrics now fans out to `prismaPoolMetricsText()`
+  // exported below.
+}
+
+/** Emit Prisma pool metrics in Prometheus text format. Imported by
+ *  shared/metrics/metrics.routes.ts so /metrics carries both surfaces.
+ */
+export async function prismaPoolMetricsText(): Promise<string> {
+  const writer = await getPrisma().$metrics.prometheus({ globalLabels: { db: 'writer' } });
+  const reader = isReaderUsingFallback()
+    ? ''
+    : await getPrismaReader().$metrics.prometheus({ globalLabels: { db: 'reader' } });
+  const long = isLongUsingFallback()
+    ? ''
+    : await getPrismaLong().$metrics.prometheus({ globalLabels: { db: 'long' } });
+  return writer + reader + long;
 }
 
 /**

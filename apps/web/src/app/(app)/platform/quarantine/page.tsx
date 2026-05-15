@@ -23,6 +23,7 @@ import { formatDateTime } from '@/lib/format';
 import { PageHeader } from '@/components/PageHeader';
 import { SectionCard } from '@/components/SectionCard';
 import { StatusPill } from '@/components/StatusPill';
+import { ConfirmDialog } from '@/components/ConfirmDialog';
 
 interface QuarantineRow {
   id: string;
@@ -152,17 +153,35 @@ function QuarantineTable(props: {
                   value={reassignBy[r.id] ?? ''}
                   onChange={(e) => setReassignBy((v) => ({ ...v, [r.id]: e.target.value }))}
                 />
-                <button
-                  className="rounded border border-zinc-300 px-2 py-1 text-xs hover:bg-zinc-50 disabled:opacity-50"
-                  disabled={props.pending}
-                  onClick={() => {
+                <ConfirmDialog
+                  title="Replay quarantined event?"
+                  body={
+                    <>
+                      <p>The event will re-enter the drain queue.</p>
+                      {(reassignBy[r.id] ?? '').trim() && (
+                        <p className="mt-2 font-mono text-xs">
+                          Reassign to: {(reassignBy[r.id] ?? '').trim()}
+                        </p>
+                      )}
+                    </>
+                  }
+                  danger
+                  confirmLabel="Replay"
+                  onConfirm={() => {
                     const reassign = (reassignBy[r.id] ?? '').trim() || undefined;
-                    if (!confirm('Replay this event?')) return;
                     props.onReplay(r.id, reassign);
                   }}
-                >
-                  Replay
-                </button>
+                  trigger={(open) => (
+                    <button
+                      className="rounded border border-zinc-300 px-2 py-1 text-xs hover:bg-zinc-50 disabled:opacity-50"
+                      disabled={props.pending}
+                      onClick={open}
+                      type="button"
+                    >
+                      Replay
+                    </button>
+                  )}
+                />
               </td>
             </tr>
           ))}
@@ -207,16 +226,23 @@ function DlqTable(props: {
               <td className="max-w-md truncate text-xs">{r.publishError ?? '—'}</td>
               <td>{r.dlqedAt ? formatDateTime(r.dlqedAt) : '—'}</td>
               <td className="text-right">
-                <button
-                  className="rounded border border-zinc-300 px-2 py-1 text-xs hover:bg-zinc-50 disabled:opacity-50"
-                  disabled={props.pending}
-                  onClick={() => {
-                    if (!confirm('Re-queue this DLQ row?')) return;
-                    props.onReplay(r.id);
-                  }}
-                >
-                  Re-queue
-                </button>
+                <ConfirmDialog
+                  title="Re-queue DLQ row?"
+                  body="The row's attempt counter resets and the sweeper picks it up on the next tick. Make sure the root cause is fixed."
+                  danger
+                  confirmLabel="Re-queue"
+                  onConfirm={() => props.onReplay(r.id)}
+                  trigger={(open) => (
+                    <button
+                      className="rounded border border-zinc-300 px-2 py-1 text-xs hover:bg-zinc-50 disabled:opacity-50"
+                      disabled={props.pending}
+                      onClick={open}
+                      type="button"
+                    >
+                      Re-queue
+                    </button>
+                  )}
+                />
               </td>
             </tr>
           ))}

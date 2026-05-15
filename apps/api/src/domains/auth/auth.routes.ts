@@ -319,7 +319,12 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
   // that requireMfaStepUp() consumes.
   app.post(
     '/auth/mfa/step-up/verify',
-    { preHandler: [requireAuth, csrfGuard] },
+    // SEC-301: rate-limit the step-up verify the same way as /auth/mfa/verify.
+    // Without this, an attacker with a stolen session has unbounded TOTP
+    // attempts at the 6-digit code within a single 5-min replay window —
+    // statistically guaranteed to find a match. mfaRateLimit is the same
+    // per-user/per-90s envelope used elsewhere.
+    { preHandler: [requireAuth, csrfGuard, mfaRateLimit] },
     async (req, reply) => {
       const auth = req.auth!;
       const body = z.object({ code: z.string().regex(/^\d{6}$/) }).parse(req.body);

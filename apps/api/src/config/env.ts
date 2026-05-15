@@ -46,6 +46,13 @@ const EnvSchema = z.object({
   /// to issue short-lived (5min) re-auth tokens for SUPER actions.
   /// Production refuses to boot if unset.
   MFA_STEP_UP_SECRET: z.string().min(32, 'MFA_STEP_UP_SECRET must be ≥32 chars').optional(),
+
+  /// Bearer token for the /metrics scrape endpoint (Phase H reviewer fix).
+  /// Railway's HTTPS endpoints are public-Internet reachable; without this
+  /// the metric labels (lender slugs, orgs, error ids, etc.) are an
+  /// attacker recon goldmine. Required in production; optional in dev
+  /// where /metrics is consumed by a local Prometheus.
+  METRICS_BEARER_TOKEN: z.string().min(32, 'METRICS_BEARER_TOKEN must be ≥32 chars').optional(),
   // Pepper for API-token storage. Replaces the previous bare SHA-256 of the
   // token secret (CR-103). Optional during migration window — when unset,
   // hashes fall back to plain SHA-256 so existing tokens still verify; new
@@ -274,6 +281,8 @@ export function getEnv(): Env {
       ['API_TOKEN_HASH_SECRET', parsed.data.API_TOKEN_HASH_SECRET],
       // Phase H: MFA step-up + SUPER-action re-auth.
       ['MFA_STEP_UP_SECRET', parsed.data.MFA_STEP_UP_SECRET],
+      // Phase H reviewer fix: /metrics MUST be bearer-protected in prod.
+      ['METRICS_BEARER_TOKEN', parsed.data.METRICS_BEARER_TOKEN],
     ];
     for (const [name, value] of requiredPerKind) {
       if (!value) {

@@ -37,6 +37,11 @@ export class CircuitBreaker {
   private state: State = 'CLOSED';
   private samples: Array<'ok' | 'fail'> = [];
   private openedAt = 0;
+  // SEC-306 fix (Phase H round 2): a single probe-in-flight flag prevents
+  // two concurrent pollers from each transitioning OPEN → HALF_OPEN on
+  // the same tick and both hitting the (still-dead) adapter. Preserves
+  // the breaker's "one probe call" contract under MAX_PARALLEL=8.
+  private probeInFlight = false;
 
   constructor(
     public readonly name: string,
@@ -47,11 +52,14 @@ export class CircuitBreaker {
   shouldSkip(): boolean {
     if (this.state === 'OPEN') {
       if (Date.now() - this.openedAt > this.opts.openDurationMs) {
+        if (this.probeInFlight) return true;
         this.state = 'HALF_OPEN';
+        this.probeInFlight = true;
         return false;
       }
       return true;
     }
+    if (this.state === 'HALF_OPEN' && this.probeInFlight) return true;
     return false;
   }
 
@@ -59,6 +67,7 @@ export class CircuitBreaker {
     if (this.state === 'HALF_OPEN') {
       this.state = 'CLOSED';
       this.samples = [];
+      this.probeInFlight = false;
       return;
     }
     this.push('ok');
@@ -68,6 +77,7 @@ export class CircuitBreaker {
     if (this.state === 'HALF_OPEN') {
       this.state = 'OPEN';
       this.openedAt = Date.now();
+      this.probeInFlight = false;
       return;
     }
     this.push('fail');

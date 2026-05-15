@@ -270,6 +270,15 @@ export const lenderPollDurationSeconds = new Histogram(
   'eazepay_lender_poll_duration_seconds',
   'Lender adapter poll latency, by adapter.',
 );
+// Phase H reviewer fix (arch #5): emit breaker state so dashboards can
+// alert on transitions. 0 = CLOSED, 1 = HALF_OPEN, 2 = OPEN. One series
+// per registered adapter slug — REGISTERED slugs only, no unbounded
+// growth (SEC-307: tenant-controlled lenderName never reaches this
+// label).
+export const lenderCircuitState = new Gauge(
+  'eazepay_lender_circuit_state',
+  'Circuit-breaker state per lender adapter (0=CLOSED, 1=HALF_OPEN, 2=OPEN).',
+);
 
 export const piiReencryptedTotal = new Counter(
   'eazepay_pii_reencrypted_total',

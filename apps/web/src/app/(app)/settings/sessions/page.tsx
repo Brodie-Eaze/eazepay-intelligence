@@ -21,6 +21,7 @@ import { formatDateTime } from '@/lib/format';
 import { PageHeader } from '@/components/PageHeader';
 import { SectionCard } from '@/components/SectionCard';
 import { StatusPill } from '@/components/StatusPill';
+import { ConfirmDialog } from '@/components/ConfirmDialog';
 
 interface SessionRow {
   sessionId: string;
@@ -86,16 +87,23 @@ export default function SessionsPage(): JSX.Element {
                   <td>{formatDateTime(s.createdAt)}</td>
                   <td>{formatDateTime(s.expiresAt)}</td>
                   <td className="text-right">
-                    <button
-                      className="rounded border border-zinc-300 px-2 py-1 text-xs hover:bg-zinc-50 disabled:opacity-50"
-                      disabled={s.current || revoke.isPending}
-                      onClick={() => {
-                        if (!confirm('Revoke this session? The device will be signed out.')) return;
-                        revoke.mutate(s.sessionId);
-                      }}
-                    >
-                      Revoke
-                    </button>
+                    <ConfirmDialog
+                      title="Revoke this session?"
+                      body="The device using this session will be signed out the next time it makes a request."
+                      danger
+                      confirmLabel="Revoke"
+                      onConfirm={() => revoke.mutate(s.sessionId)}
+                      trigger={(open) => (
+                        <button
+                          className="rounded border border-zinc-300 px-2 py-1 text-xs hover:bg-zinc-50 disabled:opacity-50"
+                          disabled={s.current || revoke.isPending}
+                          onClick={open}
+                          type="button"
+                        >
+                          Revoke
+                        </button>
+                      )}
+                    />
                   </td>
                 </tr>
               ))}

@@ -410,10 +410,15 @@ export async function registerPlatformRoutes(app: FastifyInstance): Promise<void
           `Confirmation header X-Offboard-Confirm must equal the org slug "${org.slug}"`,
         );
       }
+      // SEC-303 fix: pass the OPERATOR-supplied header value (not the
+      // server-resolved org.slug) into the service. Otherwise the
+      // service's slug check is tautological — comparing org.slug to
+      // itself. With the operator's typed value threaded through, the
+      // service independently re-validates.
       const svc = new TenantOffboardingService(prisma);
       const summary = await svc.offboard({
         orgId: id,
-        confirmSlug: org.slug,
+        confirmSlug: confirmValue ?? '',
         operatorUserId: auth.userId,
       });
       return summary;
