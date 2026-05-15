@@ -176,6 +176,6 @@ The seed printed the initial PATs to stdout. They are stored as `epi_pk_<prefix>
 ## Future ingestion improvements (queued)
 
 - **Per-org webhook signing secrets** — Phase 1.3 follow-up. Will replace the env-var MICAMP/PIXIE secrets with per-credential rows in `webhook_credentials`, allowing each business to have its own signing key.
-- **`HIGHSALE` source enum** — once HighSale's event shapes stabilise, promote from free-form to a typed schema. Tracked in `docs/cuts/buzzpay-removal.md` follow-up.
+- **`HIGHSALE` source enum** — once HighSale's event shapes stabilise, promote from free-form to a typed schema with its own `WebhookSource` enum value. Tracked in PLATFORM_V2 Phase 2.8.
 - **EazePay App platform-sink** — landing the App-side webhook subscription that pushes all 3 BNPL brands into Intelligence. See `docs/integration/eazepay-app-contract.md`.
 - **Streaming connectors** — Kafka/Redpanda topic per business is the Phase 10 plan; until then, REST POST is the path.

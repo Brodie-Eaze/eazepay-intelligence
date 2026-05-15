@@ -101,11 +101,12 @@ Per-app READMEs: [`apps/api/README.md`](apps/api/README.md) · [`apps/web/README
 │   ├── architecture/       The system mental model
 │   ├── integration/        Cross-repo contracts (EazePay App, HighSale)
 │   ├── runbooks/           Step-by-step ops (deploy, ingestion)
-│   ├── cuts/               Queued removals (BuzzPay phase B/C, PE-MIS)
+│   ├── cuts/               Queued removals (BuzzPay Phase C migration, PE-MIS tables, fx domain)
 │   ├── reviews/            Handover audits
 │   └── governance/         PII / protected-class / SOC 2 framing
 ├── scripts/                Shell scripts (e.g. generate-prod-secrets.sh)
-└── infra/                  Local docker-compose (Postgres + Redis)
+├── docker/                 Postgres replica config for the integration-test compose
+└── docker-compose.yml      Local Postgres 16 + Redis 7 for dev
 ```
 
 ---

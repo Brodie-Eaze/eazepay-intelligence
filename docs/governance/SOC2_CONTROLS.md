@@ -14,30 +14,30 @@ This document maps every relevant SOC 2 Trust Services Criterion (TSC) to a conc
 
 ## CC1 — Control Environment
 
-| TSC   | Control                                                    | Status | Evidence                                                                       |
-| ----- | ---------------------------------------------------------- | ------ | ------------------------------------------------------------------------------ |
-| CC1.1 | Demonstrates commitment to integrity and ethical values    | ✅     | `CONTRIBUTING.md` — code of conduct, conventional commits, PR review checklist |
-| CC1.2 | Board oversight                                            | ⏳     | Pre-Series A; advisory board planned.                                          |
-| CC1.3 | Establishes structures, reporting lines, authorities       | 🟡     | `RBAC` matrix in `ARCHITECTURE.md` §14.2; org chart pending leadership hires.  |
-| CC1.4 | Demonstrates commitment to competence                      | ⏳     | Hiring plan + role JDs are next-quarter deliverables.                          |
-| CC1.5 | Holds individuals accountable for control responsibilities | ✅     | Audit log records actor for every mutation; `audit_logs` table append-only.    |
+| TSC   | Control                                                    | Status | Evidence                                                                                 |
+| ----- | ---------------------------------------------------------- | ------ | ---------------------------------------------------------------------------------------- |
+| CC1.1 | Demonstrates commitment to integrity and ethical values    | ✅     | `CONTRIBUTING.md` — code of conduct, conventional commits, PR review checklist           |
+| CC1.2 | Board oversight                                            | ⏳     | Pre-Series A; advisory board planned.                                                    |
+| CC1.3 | Establishes structures, reporting lines, authorities       | 🟡     | Role + scope model documented in `docs/GLOSSARY.md`; org chart pending leadership hires. |
+| CC1.4 | Demonstrates commitment to competence                      | ⏳     | Hiring plan + role JDs are next-quarter deliverables.                                    |
+| CC1.5 | Holds individuals accountable for control responsibilities | ✅     | Audit log records actor for every mutation; `audit_logs` table append-only.              |
 
 ## CC2 — Communication and Information
 
-| TSC   | Control                                          | Status | Evidence                                                                                         |
-| ----- | ------------------------------------------------ | ------ | ------------------------------------------------------------------------------------------------ |
-| CC2.1 | Internal information for control execution       | ✅     | This doc + `SECURITY.md` + `PRIVACY.md` + `DATA_CLASSIFICATION.md`.                              |
-| CC2.2 | Communicates control responsibilities internally | 🟡     | `CONTRIBUTING.md`, `ONBOARDING.md`. Onboarding presentation to be created at first hire.         |
-| CC2.3 | Communicates with external parties               | 🟡     | `SECURITY.md` includes vulnerability disclosure address. Customer-facing privacy notice pending. |
+| TSC   | Control                                          | Status | Evidence                                                                                                |
+| ----- | ------------------------------------------------ | ------ | ------------------------------------------------------------------------------------------------------- |
+| CC2.1 | Internal information for control execution       | ✅     | This doc + `SECURITY.md` + `PRIVACY.md` + `DATA_CLASSIFICATION.md`.                                     |
+| CC2.2 | Communicates control responsibilities internally | 🟡     | `CONTRIBUTING.md`, `HANDOVER.md`, per-app READMEs. Onboarding presentation to be created at first hire. |
+| CC2.3 | Communicates with external parties               | 🟡     | `SECURITY.md` includes vulnerability disclosure address. Customer-facing privacy notice pending.        |
 
 ## CC3 — Risk Assessment
 
-| TSC   | Control                        | Status | Evidence                                                                                                                              |
-| ----- | ------------------------------ | ------ | ------------------------------------------------------------------------------------------------------------------------------------- |
-| CC3.1 | Specifies suitable objectives  | ✅     | `PRD.md` §KPIs + `ROADMAP.md` define product + security objectives                                                                    |
-| CC3.2 | Identifies and analyzes risk   | ✅     | STRIDE model in `SECURITY.md`                                                                                                         |
-| CC3.3 | Considers fraud risk           | 🟡     | Refresh-token theft detection (family-revoke). Webhook replay protection. Customer-side fraud is upstream (BuzzPay's responsibility). |
-| CC3.4 | Identifies and assesses change | ✅     | Conventional commits + ADRs in `ARCHITECTURE.md`                                                                                      |
+| TSC   | Control                        | Status | Evidence                                                                                                                                                     |
+| ----- | ------------------------------ | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| CC3.1 | Specifies suitable objectives  | ✅     | `docs/PLATFORM_V2.md` phased roadmap defines product + security objectives                                                                                   |
+| CC3.2 | Identifies and analyzes risk   | ✅     | STRIDE model in `SECURITY.md`                                                                                                                                |
+| CC3.3 | Considers fraud risk           | 🟡     | Refresh-token theft detection (family-revoke). Webhook replay protection. Consumer-side fraud is upstream (third-party lender + EazePay App responsibility). |
+| CC3.4 | Identifies and assesses change | ✅     | Conventional commits + ADRs in `docs/architecture/adr/`                                                                                                      |
 
 ## CC4 — Monitoring Activities
 
@@ -51,14 +51,14 @@ This document maps every relevant SOC 2 Trust Services Criterion (TSC) to a conc
 | TSC   | Control                                             | Status | Evidence                                                                                 |
 | ----- | --------------------------------------------------- | ------ | ---------------------------------------------------------------------------------------- |
 | CC5.1 | Selects + develops control activities               | ✅     | This document                                                                            |
-| CC5.2 | Selects + develops general controls over technology | ✅     | `ARCHITECTURE.md` ADRs                                                                   |
+| CC5.2 | Selects + develops general controls over technology | ✅     | `docs/architecture/adr/` ADRs                                                            |
 | CC5.3 | Deploys through policies and procedures             | 🟡     | Code-level policies enforced; procedural docs (incident response, access review) pending |
 
 ## CC6 — Logical and Physical Access Controls
 
 | TSC       | Control                                                                    | Status | Evidence                                                                                                                                                                                                                                                                                                                                                                                         |
 | --------- | -------------------------------------------------------------------------- | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **CC6.1** | Implements logical access security software, infrastructure, architectures | ✅     | RBAC enforced in `shared/middleware/rbac.middleware.ts`. Roles: ADMIN / OPERATOR / INVESTOR / VIEWER. Matrix in `ARCHITECTURE.md` §14.2. Cookie-based session w/ httpOnly + Secure + SameSite=Strict.                                                                                                                                                                                            |
+| **CC6.1** | Implements logical access security software, infrastructure, architectures | ✅     | RBAC enforced in `shared/middleware/rbac.middleware.ts`. Roles: ADMIN / OPERATOR / INVESTOR / VIEWER. Roles + scopes documented in `docs/GLOSSARY.md`. Cookie-based session w/ httpOnly + Secure + SameSite=Strict.                                                                                                                                                                              |
 | **CC6.2** | Registers / authorizes new users prior to issuing credentials              | ✅     | `POST /api/v1/users` is admin-only. New user creation writes `USER_CREATED` audit row. UI at `/admin`.                                                                                                                                                                                                                                                                                           |
 | **CC6.3** | Authorizes, modifies, removes access                                       | ✅     | `PATCH /users/:id` (role change) + `DELETE /users/:id` (soft-delete + revoke all sessions) — admin-only. Both audit-logged. UI live at `/admin`.                                                                                                                                                                                                                                                 |
 | **CC6.4** | Restricts physical access                                                  | n/a    | Cloud-hosted; provider responsibility (target: Fly / AWS — physical security inherited from SOC 2 vendors).                                                                                                                                                                                                                                                                                      |
@@ -75,7 +75,7 @@ This document maps every relevant SOC 2 Trust Services Criterion (TSC) to a conc
 | **CC7.2** | Monitors system components                        | ✅     | Pino structured logs with request IDs + redaction. Prisma `/metrics` (Prometheus) for pool + query metrics. OpenTelemetry traces (when OTEL_ENABLED=true) across HTTP, Postgres, Redis, BullMQ. |
 | **CC7.3** | Evaluates security events                         | ✅     | Audit log records `USER_LOGIN_FAILED`, `WEBHOOK_FAILED`, `PII_ACCESSED` events. UI surfaces them at `/audit`, `/audit/pii`, `/audit/logins`.                                                    |
 | **CC7.4** | Responds to identified security incidents         | 🟡     | Incident response playbook in `SECURITY.md`. Drill cadence pending.                                                                                                                             |
-| **CC7.5** | Recovers from identified security incidents       | 🟡     | Backup strategy in `ARCHITECTURE.md` §14.10. RPO ≤ 4h, RTO ≤ 30 min designed; backup execution pending production deploy.                                                                       |
+| **CC7.5** | Recovers from identified security incidents       | 🟡     | Backup strategy designed: RPO ≤ 4h, RTO ≤ 30 min. Backup execution + DR drills pending — tracked under PLATFORM_V2 Phase 7.                                                                     |
 
 ## CC8 — Change Management
 
@@ -85,10 +85,10 @@ This document maps every relevant SOC 2 Trust Services Criterion (TSC) to a conc
 
 ## CC9 — Risk Mitigation
 
-| TSC       | Control                                                                           | Status | Evidence                                                                                         |
-| --------- | --------------------------------------------------------------------------------- | ------ | ------------------------------------------------------------------------------------------------ |
-| **CC9.1** | Identifies, selects, develops risk mitigation activities for business disruptions | 🟡     | Backup design exists. DR drill pending.                                                          |
-| **CC9.2** | Assesses and manages risk associated with vendors and business partners           | 🟡     | BuzzPay / Pixie / MiCamp / Postgres / Redis / Vercel etc. Vendor inventory + DPA review pending. |
+| TSC       | Control                                                                           | Status | Evidence                                                                                                                 |
+| --------- | --------------------------------------------------------------------------------- | ------ | ------------------------------------------------------------------------------------------------------------------------ |
+| **CC9.1** | Identifies, selects, develops risk mitigation activities for business disruptions | 🟡     | Backup design exists. DR drill pending.                                                                                  |
+| **CC9.2** | Assesses and manages risk associated with vendors and business partners           | 🟡     | HighSale / MiCamp / Pixie / third-party lenders / Postgres / Redis / Railway etc. Vendor inventory + DPA review pending. |
 
 ---
 
@@ -105,13 +105,13 @@ This document maps every relevant SOC 2 Trust Services Criterion (TSC) to a conc
 
 | Criterion                          | Control                               | Status                                                                                                                                             | Evidence |
 | ---------------------------------- | ------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- | -------- |
-| **P1** Notice and communication    | ⏳                                    | Customer-facing privacy notice required before connecting real BuzzPay tenant data.                                                                |
-| **P2** Choice and consent          | n/a (we don't collect — partner does) | Consent is collected upstream by Pixie smart-form on the partner's site.                                                                           |
-| **P3** Collection                  | ✅                                    | Only the fields enumerated in `DATA_CLASSIFICATION.md` are collected, via signed webhook from BuzzPay.                                             |
+| **P1** Notice and communication    | ⏳                                    | Customer-facing privacy notice required before live partner traffic.                                                                               |
+| **P2** Choice and consent          | n/a (we don't collect — partner does) | Consent is collected upstream by EazePay App's application form on the partner's site.                                                             |
+| **P3** Collection                  | ✅                                    | Only the fields enumerated in `DATA_CLASSIFICATION.md` are collected, via signed webhook from EazePay App + HighSale.                              |
 | **P4** Use, retention, disposal    | 🟡                                    | Use restricted by RBAC. Retention policy documented; sweep job pending.                                                                            |
 | **P5** Access                      | ✅                                    | Operators access PII only via the audit-logged `Reveal` flow on `/customers/:hash` or `/applications/:id`. Every reveal writes `PII_ACCESSED` row. |
 | **P6** Disclosure to third parties | n/a                                   | We do not share PII downstream.                                                                                                                    |
-| **P7** Quality                     | n/a                                   | Source of truth is upstream (BuzzPay). We re-receive on every application.                                                                         |
+| **P7** Quality                     | n/a                                   | Source of truth is upstream (EazePay App + HighSale). We re-receive on every application.                                                          |
 | **P8** Monitoring and enforcement  | 🟡                                    | PII access dashboard at `/audit/pii`. Anomaly detection (e.g. operator pulls 100 records in 10 min) pending.                                       |
 
 See `PRIVACY.md` for the full Australian Privacy Principles + GDPR alignment.
@@ -189,7 +189,7 @@ Every data point that backs a financial number in the platform has an explicit, 
 
 ## Appendix B — Plugging in a new data source
 
-For each source, the answer is "POST to one of seven typed endpoints or the generic `/ingestion/events`." See [INGESTION.md](../INGESTION.md) for the dev contract — Idempotency-Key requirements, Zod schemas per data point, bulk-batch shape, and replay semantics.
+For each source, the answer is "POST to one of the typed integration endpoints or the generic `/ingestion/events`." See [`docs/runbooks/portfolio-business-ingestion.md`](../runbooks/portfolio-business-ingestion.md) for the dev contract — Idempotency-Key requirements, Zod schemas per data point, bulk-batch shape, and replay semantics. EazePay App's wire envelope is locked in [`docs/integration/eazepay-app-contract.md`](../integration/eazepay-app-contract.md).
 
 ---
 

@@ -2,7 +2,7 @@
 
 The honest list of tech debt, hacks, and known gaps. **Read this before you make architectural assumptions.**
 
-For the canonical done / in-progress / not-done split, see [`STATUS.md`](../STATUS.md).
+For the canonical done / in-progress / not-done split, see [`HANDOVER.md`](../HANDOVER.md) (handover snapshot) and [`docs/PLATFORM_V2.md`](PLATFORM_V2.md) (phased roadmap).
 
 ---
 
@@ -45,11 +45,11 @@ The sidebar nav is a config table (string `href`s). With `typedRoutes: true`, TS
 
 ### OpenAPI codegen pipeline not running
 
-The plan (ADR-008) is for `@asteasolutions/zod-to-openapi` to emit `openapi.json` and `openapi-typescript` to consume it into `packages/shared-types/src/api.ts`. **Today, the frontend mirrors backend response shapes manually in `apps/web/src/lib/types.ts`.** Drift risk is real. Wiring is in `ROADMAP.md` P2.
+The plan is for `@asteasolutions/zod-to-openapi` to emit `openapi.json` and `openapi-typescript` to consume it into a shared-types package. **Today, the frontend mirrors backend response shapes manually in `apps/web/src/lib/types.ts`.** Drift risk is real. Tracked in PLATFORM_V2 Phase 11.
 
 ### Inferred webhook contracts
 
-`apps/api/src/domains/webhooks/webhook.schemas.ts` is a best-effort guess at what BuzzPay / Pixie / MiCamp will send. Rejection is loud (Zod 422) but a real partner integration may surface fields we don't expect. **The HMAC + idempotency layer is correct regardless** — we won't accept anything unsigned, replays are deduped — but the per-event Zod schemas need partner sign-off before going to production traffic. Tracked under ADR-006.
+`apps/api/src/domains/webhooks/webhook.schemas.ts` is a best-effort guess at what Pixie / MiCamp will send; the EazePay App contract is locked in [`docs/integration/eazepay-app-contract.md`](integration/eazepay-app-contract.md) and HighSale's envelope is typed against a real JSON sample. Rejection is loud (Zod 422) but live partner traffic may surface fields we don't expect. **The HMAC + idempotency layer is correct regardless** — we won't accept anything unsigned, replays are deduped — but the per-event Zod schemas need partner sign-off before going to production traffic.
 
 ### `WsEvent` typing is permissive at the publisher boundary
 
@@ -105,7 +105,7 @@ The Alert row is durable; channel kinds are defined; IN_APP and WEBHOOK delivery
 
 ### No on-call rotation
 
-Solo-maintainer phase. Production launch needs a documented rotation + runbook. `RUNBOOK.md` covers the _what_; the _who_ needs to be filled in.
+Solo-maintainer phase. Production launch needs a documented rotation + runbook. The runbooks under [`docs/runbooks/`](runbooks/) cover the _what_; the _who_ needs to be filled in.
 
 ### Aggregation worker schedule
 
@@ -163,7 +163,7 @@ Investor scope was removed from the operator UI in a design pass. The server-sid
 
 ## What is intentionally not built
 
-Listed at the bottom of `ROADMAP.md`. Headline:
+Tracked in [`docs/PLATFORM_V2.md`](PLATFORM_V2.md) under "Engineering practices (always-on)" + the "What is intentionally not on the list" footer. Headline:
 
 - **No microservices.** Modular monolith is the right shape.
 - **No customer-facing surface.** The platform is operator-only by product definition.

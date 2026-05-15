@@ -6,7 +6,7 @@ How much load this platform can absorb at the current configuration, and how to 
 
 The platform tracks data across thousands of data points daily in real time. The hot paths are:
 
-- **Vendor webhook ingress** — BuzzPay, MiCamp, Pixie. Bursty (vendor retry storms can 5× normal volume in 60s).
+- **Vendor webhook ingress** — HighSale, MiCamp, Pixie, EazePay App. Bursty (vendor retry storms can 5× normal volume in 60s).
 - **Programmatic ingestion** — internal ETL workers + dev backfills via PAT.
 - **Dashboard reads** — analytics, audit log, customer book. Read-heavy, latency-sensitive.
 - **Background workers** — outbox sweeper, webhook fan-out, delivery retries, exports.
@@ -24,7 +24,7 @@ Configured via env (`apps/api/src/config/env.ts`). Buckets are Redis-backed; key
 | Anonymous                  | 100 / min          | `req.ip`      | Floor for `/auth/login`, `/health`, etc. Tight enough to deflate brute-force attempts.                       |
 | Authenticated (default)    | 1,000 / min        | `auth.userId` | Per-user, not per-IP. A dev behind a corporate NAT shouldn't share a bucket with the rest of the office.     |
 | Ingestion                  | 6,000 / min        | `auth.userId` | Targets 100 events/sec sustained per PAT. Bulk endpoints take 500 events/request, so this is 12 batches/min. |
-| Webhook ingress            | 10,000 / min       | `req.ip`      | Vendor retry storms (BuzzPay's exponential backoff can replay 5× in 60s) shouldn't trip ingress.             |
+| Webhook ingress            | 10,000 / min       | `req.ip`      | Vendor retry storms (exponential backoff can replay 5× in 60s) shouldn't trip ingress.                       |
 | Login (per-IP + per-email) | 5/15min + 10/15min | composite     | Stricter than the global anonymous floor.                                                                    |
 
 **Failure mode**: Redis outage → rate limit fails closed (`skipOnError: false`). This is the correct SOC 2 posture — better a brief 503 than unbounded volume during a Redis outage.
@@ -37,11 +37,11 @@ Configured via env (`apps/api/src/config/env.ts`). Buckets are Redis-backed; key
 
 Per-route, configured via env. Routes that don't override get `BODY_LIMIT_DEFAULT_BYTES`.
 
-| Surface         | Default | Override env               | Reason                                                                                                        |
-| --------------- | ------- | -------------------------- | ------------------------------------------------------------------------------------------------------------- |
-| UI / default    | 1 MiB   | `BODY_LIMIT_DEFAULT_BYTES` | Most dashboard requests are tiny.                                                                             |
-| Bulk ingestion  | 8 MiB   | `BODY_LIMIT_BULK_BYTES`    | 500 events × ~16 KiB each. Caps memory pressure during backfill.                                              |
-| Webhook ingress | 2 MiB   | `BODY_LIMIT_WEBHOOK_BYTES` | BuzzPay's largest known payload (`lender-decision` with full enrichment) is ≤ 1 MiB; 2 MiB gives 2× headroom. |
+| Surface         | Default | Override env               | Reason                                                                 |
+| --------------- | ------- | -------------------------- | ---------------------------------------------------------------------- |
+| UI / default    | 1 MiB   | `BODY_LIMIT_DEFAULT_BYTES` | Most dashboard requests are tiny.                                      |
+| Bulk ingestion  | 8 MiB   | `BODY_LIMIT_BULK_BYTES`    | 500 events × ~16 KiB each. Caps memory pressure during backfill.       |
+| Webhook ingress | 2 MiB   | `BODY_LIMIT_WEBHOOK_BYTES` | HighSale's full 70-field snapshot is ≤ 1 MiB; 2 MiB gives 2× headroom. |
 
 ---
 

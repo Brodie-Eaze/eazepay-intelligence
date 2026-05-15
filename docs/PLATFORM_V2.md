@@ -150,7 +150,7 @@ To promote a staged migration:
 
 ## Phase 4 — Identity graph + consent ledger + PII vault
 
-**Why:** the actual cross-vertical moat. Same human across BuzzPay + Pixie + MiCamp + Amala + AUREAN should be one `master_person_id`, not five `Application` rows.
+**Why:** the actual cross-vertical moat. The same human applying through MedPay, TradePay, CoachPay, and the Aurean businesses should be one `master_person_id`, not four `Application` rows.
 
 **Done = true** when:
 

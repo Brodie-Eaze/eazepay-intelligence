@@ -2,9 +2,9 @@
 
 **Jurisdiction:** Australia (Australian Privacy Principles under the Privacy Act 1988). GDPR alignment maintained for forward compatibility.
 
-**Data we hold:** consumer PII received via signed webhook from BuzzPay applications — name, email, phone — plus financial enrichment (credit score, income, available credit, propensity score, pre-approval status) tied to that consumer.
+**Data we hold:** consumer PII received via signed webhook from the EazePay App (application lifecycle) and HighSale (per-application credit-data snapshots) — name, email, phone, plus the financial enrichment fields surfaced by HighSale (credit score, income, available credit, propensity score, pre-approval status, etc.).
 
-**Data we do not collect directly:** we have no consumer-facing surface. Consumers interact with Pixie's smart-form on a partner's site. BuzzPay relays the data to us.
+**Data we do not collect directly:** we have no consumer-facing surface. Consumers interact with the application form on a partner's site (operated by EazePay App). App orchestrates the submission and relays events to us. HighSale is called from inside that form and pushes its credit-data snapshot to us in parallel.
 
 ---
 
@@ -12,8 +12,8 @@
 
 | Role                       | Party                                                                                                |
 | -------------------------- | ---------------------------------------------------------------------------------------------------- |
-| **Data subject**           | The consumer applying for a BuzzPay loan via a partner                                               |
-| **Collector / Controller** | The partner business + Pixie (HighSale) at point of capture                                          |
+| **Data subject**           | The consumer applying for a BNPL loan via a partner business                                         |
+| **Collector / Controller** | The partner business + EazePay App + HighSale at point of capture                                    |
 | **Processor**              | EazePay Intelligence (us) — we receive, store, project, and display                                  |
 | **Sub-processors**         | Postgres host, Redis host, deployment platform, Resend (transactional email), Google (OAuth sign-in) |
 
@@ -33,11 +33,11 @@ We act as a **processor** under GDPR-style framing (an APP entity under AU law).
 | **APP 6**  | Use or disclosure                             | Data is used solely for: (a) operator visibility into application + decision flow, (b) financial-intelligence reporting. Not used for marketing. Not disclosed to third parties without explicit consent.                           |
 | **APP 7**  | Direct marketing                              | n/a — we do not market to consumers.                                                                                                                                                                                                |
 | **APP 8**  | Cross-border disclosure                       | If hosted outside AU, the deployment region is documented. Any cross-border transfer requires a DPA with the destination provider.                                                                                                  |
-| **APP 9**  | Government identifiers                        | We do not store TFNs, Medicare numbers, or driver's licences. If BuzzPay ever transmits one, the `webhook.service.ts` schema rejects unknown PII fields by default.                                                                 |
-| **APP 10** | Quality of personal information               | Source of truth is BuzzPay. On every application we re-receive PII; latest values overwrite. No standalone customer-edit surface.                                                                                                   |
+| **APP 9**  | Government identifiers                        | We do not store TFNs, Medicare numbers, or driver's licences. If any upstream pushes one, the relevant Zod schema rejects unknown PII fields by default.                                                                            |
+| **APP 10** | Quality of personal information               | Source of truth is upstream (EazePay App + HighSale). On every application we re-receive PII; latest values overwrite. No standalone customer-edit surface.                                                                         |
 | **APP 11** | Security of personal information              | See `SECURITY.md`. AES-256-GCM at rest; TLS in transit; RBAC; audit logging; key versioning.                                                                                                                                        |
 | **APP 12** | Access to personal information                | Data subjects can request a copy via the partner. Operator UI exposes per-customer detail at `/customers/:hash` (PII gated by reveal flow). API endpoint `GET /customers/:hash/pii` returns full plaintext to authorised operators. |
-| **APP 13** | Correction of personal information            | Corrections flow upstream — the partner re-submits the application via Pixie / BuzzPay; we re-receive and update on `externalApplicationId` upsert.                                                                                 |
+| **APP 13** | Correction of personal information            | Corrections flow upstream — the partner re-submits the application via EazePay App; we re-receive and update on `externalApplicationId` upsert.                                                                                     |
 
 ---
 
@@ -45,13 +45,13 @@ We act as a **processor** under GDPR-style framing (an APP entity under AU law).
 
 | Article | Right                                      | Implementation                                                                                                                                                                                                                                                                              |
 | ------- | ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Art. 15 | Right of access                            | API supports per-customer PII retrieval; export-to-portable-JSON pending (see `ROADMAP.md`).                                                                                                                                                                                                |
-| Art. 16 | Right to rectification                     | Upstream — re-submit to BuzzPay.                                                                                                                                                                                                                                                            |
+| Art. 15 | Right of access                            | API supports per-customer PII retrieval; export-to-portable-JSON pending (see `docs/PLATFORM_V2.md` Phase 11).                                                                                                                                                                              |
+| Art. 16 | Right to rectification                     | Upstream — re-submit via the EazePay App application flow.                                                                                                                                                                                                                                  |
 | Art. 17 | Right to erasure ("right to be forgotten") | **Implemented.** `POST /admin/rtbf` (admin + CSRF). Lifecycle worker drains PENDING requests; `RtbfService.process` overwrites encrypted PII columns on every Application carrying the email hash with zero buffers in one tx. Audit-logged: RTBF_SUBMITTED / RTBF_PROCESSED / RTBF_FAILED. |
 | Art. 18 | Right to restriction of processing         | Soft-delete on `Partner`/`User` available; per-customer restriction flag pending.                                                                                                                                                                                                           |
 | Art. 20 | Right to data portability                  | JSON export endpoint pending.                                                                                                                                                                                                                                                               |
 | Art. 21 | Right to object                            | Routed to upstream partner.                                                                                                                                                                                                                                                                 |
-| Art. 22 | Automated decision-making                  | We do not make automated decisions. The decision engine is BuzzPay; we render the outcome.                                                                                                                                                                                                  |
+| Art. 22 | Automated decision-making                  | We do not make automated decisions. Underwriting happens at the third-party lender; we render the outcome read-only.                                                                                                                                                                        |
 | Art. 25 | Data protection by design and default      | Built into the architecture (encryption, redaction, RBAC) rather than bolted on.                                                                                                                                                                                                            |
 | Art. 28 | Processor obligations                      | Documented in this file + `SOC2_CONTROLS.md`. DPA template available.                                                                                                                                                                                                                       |
 | Art. 30 | Records of processing activities           | `webhook_events` (every inbound) + `audit_logs` (every access) + `revenue_events` (every dollar). All three are durable, append-only, and queryable.                                                                                                                                        |
@@ -165,7 +165,7 @@ shared, the lawful basis, and the minimisation control we apply.
 
 **Operator data only.** Resend and Google handle exclusively operator-side
 data (the people who use this dashboard). Consumer-side PII (loan
-applicants, BuzzPay customers) never reaches either provider.
+applicants) never reaches either provider.
 
 **Withdrawal.** A deployment can disable Google OAuth at any time by
 unsetting `GOOGLE_OAUTH_CLIENT_ID`; users with stamped `google_sub` rows
