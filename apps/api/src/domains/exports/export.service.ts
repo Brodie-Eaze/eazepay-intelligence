@@ -40,8 +40,13 @@ export class ExportService {
     });
 
     try {
+      // GAP-113: every export is per-org filtered. The export row already
+      // carries orgId (Phase 1 retrofit); we thread it into every fetch so
+      // a tenant user's export cannot leak other tenants' data even if RLS
+      // is somehow disabled or bypassed on this worker.
       const { rows, columns } = await this.gatherRows(
         exp.type,
+        exp.orgId,
         exp.filters as Record<string, unknown>,
       );
       const filePath = join(STORAGE_ROOT, `${exp.id}.${this.extensionFor(exp.format)}`);
@@ -90,11 +95,13 @@ export class ExportService {
 
   private async gatherRows(
     type: ExportType,
+    orgId: string,
     filters: Record<string, unknown>,
   ): Promise<{ rows: Array<Record<string, unknown>>; columns: string[] }> {
     switch (type) {
       case ExportType.CUSTOMERS: {
         const apps = await this.reader.application.findMany({
+          where: { orgId },
           orderBy: { createdAt: 'desc' },
           take: 10_000,
           include: { partner: { select: { id: true, name: true, externalId: true } } },
@@ -124,7 +131,7 @@ export class ExportService {
       case ExportType.APPLICATIONS: {
         const partnerId = typeof filters.partnerId === 'string' ? filters.partnerId : undefined;
         const apps = await this.reader.application.findMany({
-          where: partnerId ? { partnerId } : {},
+          where: { orgId, ...(partnerId ? { partnerId } : {}) },
           orderBy: { createdAt: 'desc' },
           take: 50_000,
         });
@@ -145,6 +152,7 @@ export class ExportService {
 
       case ExportType.LENDER_DECISIONS: {
         const decisions = await this.reader.lenderDecision.findMany({
+          where: { orgId },
           orderBy: { decisionTimestamp: 'desc' },
           take: 50_000,
         });
@@ -168,6 +176,7 @@ export class ExportService {
 
       case ExportType.REVENUE_LEDGER: {
         const events = await this.reader.revenueEvent.findMany({
+          where: { orgId },
           orderBy: { effectiveAt: 'desc' },
           take: 50_000,
         });
@@ -188,7 +197,7 @@ export class ExportService {
 
       case ExportType.PARTNERS: {
         const partners = await this.reader.partner.findMany({
-          where: { deletedAt: null },
+          where: { orgId, deletedAt: null },
           orderBy: { createdAt: 'desc' },
         });
         const rows = partners.map((p) => ({
@@ -207,7 +216,11 @@ export class ExportService {
       }
 
       case ExportType.AUDIT_LOG: {
+        // GAP-113: org-scoped audit export. Platform-level rows (orgId is
+        // null) are excluded — they're cross-tenant and surfaced only via
+        // /platform/audit, not the tenant export path.
         const rows = await this.reader.auditLog.findMany({
+          where: { orgId },
           orderBy: { createdAt: 'desc' },
           take: 50_000,
           include: { user: { select: { email: true, role: true } } },
@@ -222,6 +235,42 @@ export class ExportService {
           resource_id: r.resourceId ?? '',
           ip: r.ipAddress ?? '',
           metadata: JSON.stringify(r.metadata ?? {}),
+        }));
+        return { rows: out, columns: Object.keys(out[0] ?? { id: '' }) };
+      }
+
+      case ExportType.CREDIT_ENRICHMENTS: {
+        // GAP-117: HighSale snapshot export. PII columns intentionally
+        // OMITTED from the export — the protected-class gate on the read
+        // endpoint applies here too. Operators export hashed identifiers
+        // + vertical + pulled timestamp; they can join PII via the
+        // customers/:hash surface inside the dashboard with the right role.
+        const rows = await this.reader.creditEnrichment.findMany({
+          where: { orgId, deletedAt: null },
+          orderBy: { pulledAt: 'desc' },
+          take: 50_000,
+          select: {
+            id: true,
+            highsaleTransactionId: true,
+            consumerEmailHash: true,
+            consumerPhoneHash: true,
+            applicationId: true,
+            externalApplicationId: true,
+            vertical: true,
+            pulledAt: true,
+            createdAt: true,
+          },
+        });
+        const out = rows.map((r) => ({
+          id: r.id,
+          highsale_txn_id: r.highsaleTransactionId,
+          email_hash: r.consumerEmailHash?.toString('hex') ?? '',
+          phone_hash: r.consumerPhoneHash?.toString('hex') ?? '',
+          application_id: r.applicationId ?? '',
+          external_application_id: r.externalApplicationId ?? '',
+          vertical: r.vertical,
+          pulled_at: r.pulledAt.toISOString(),
+          created_at: r.createdAt.toISOString(),
         }));
         return { rows: out, columns: Object.keys(out[0] ?? { id: '' }) };
       }

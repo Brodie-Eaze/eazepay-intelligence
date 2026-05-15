@@ -656,6 +656,8 @@ enum ExportType {
   REVENUE_LEDGER
   PARTNERS
   AUDIT_LOG
+  /// GAP-117: HighSale snapshot table. Per-org filtered like the other types.
+  CREDIT_ENRICHMENTS
 }
 
 enum ExportFormat {
