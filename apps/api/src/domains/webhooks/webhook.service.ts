@@ -12,6 +12,8 @@ import {
   PixieUsageWebhookSchema,
 } from './webhook.schemas.js';
 import { computePixieMargin } from '../pixie/pixie.algorithm.js';
+import { EazepayAppProcessor } from '../integration/eazepay-app/eazepay-app.service.js';
+import type { EazepayAppEventEnvelope } from '../integration/eazepay-app/envelope.schema.js';
 
 export interface ProcessJobInput {
   webhookEventId: string;
@@ -22,7 +24,10 @@ export interface ProcessJobInput {
 }
 
 export class WebhookProcessor {
-  constructor(private readonly prisma: PrismaClient) {}
+  private readonly eazepayApp: EazepayAppProcessor;
+  constructor(private readonly prisma: PrismaClient) {
+    this.eazepayApp = new EazepayAppProcessor(prisma);
+  }
 
   async process(job: ProcessJobInput): Promise<void> {
     try {
@@ -32,6 +37,34 @@ export class WebhookProcessor {
           break;
         case WebhookSource.MICAMP:
           await this.handleMicamp(job);
+          break;
+        case WebhookSource.EAZEPAY_APP: {
+          // GAP-100: drain handler decoded the envelope at ingest time
+          // (the route validated against EazepayAppEventEnvelopeSchema)
+          // and passed it through in the outbox payload. The processor
+          // does the per-event-type domain normalisation.
+          const payload = job.payload as { envelope?: EazepayAppEventEnvelope };
+          if (!payload.envelope) {
+            throw errors.badRequest('EazePay App job missing envelope');
+          }
+          await this.eazepayApp.process({
+            webhookEventId: job.webhookEventId,
+            envelope: payload.envelope,
+          });
+          break;
+        }
+        case WebhookSource.HIGHSALE:
+        case WebhookSource.AUREAN_AI:
+        case WebhookSource.AUREAN_RECRUITMENT:
+          // GAP-103/104/105 drain handlers are wired in their own
+          // dedicated services; this switch covers the cases so an
+          // accidentally-routed job doesn't fall to the BUZZPAY drop arm.
+          // Today these sources don't post to the outbox; they ingest via
+          // PAT-driven /ingestion/* + their own service writes.
+          getLogger().warn(
+            { source: job.source, webhookEventId: job.webhookEventId },
+            'webhook.source.unrouted_to_processor',
+          );
           break;
         case WebhookSource.BUZZPAY:
           // Retired vendor — see docs/cuts/buzzpay-removal.md. Routes are

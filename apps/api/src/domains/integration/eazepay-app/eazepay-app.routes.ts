@@ -2,23 +2,36 @@
  * POST /api/v1/integration/eazepay-app/events
  *
  * Inbound webhook from EazePay App's WebhookDispatcher. Stripe-style
- * HMAC-SHA-256 verification + idempotency + envelope validation.
+ * HMAC-SHA-256 verification + idempotency + envelope validation +
+ * durable persistence + outbox-mediated drain.
  *
- * Status: stub. Verifies the envelope + signature and returns 202 with
- * the parsed event metadata. Does NOT persist yet — that requires the
- * `WebhookSource.EAZEPAY_APP` Prisma enum migration filed for the next
- * session. The route is intentionally NOT registered in server.ts until
- * the migration + drain handlers land, so we don't ship a half-wired
- * endpoint to production.
+ * Flow per request:
+ *   1. Validate headers (sig, ts, idempotency-key, event-id, event-type).
+ *   2. Constant-time HMAC over `${ts}.${rawBody}` with the App secret.
+ *   3. Idempotency layer 1: Redis SETNX.
+ *   4. Idempotency layer 2: Postgres unique (orgId, source, key) — replay
+ *      returns the prior event id.
+ *   5. Resolve org via brand (App's `data.brand` → org slug; unmapped
+ *      brands land under the bootstrap org as QUARANTINE).
+ *   6. tx { INSERT WebhookEvent; INSERT OutboxEvent(WEBHOOK_INBOUND); }
+ *   7. Reply 202 with persisted: true + eventId.
  *
  * Contract: docs/integration/eazepay-app-contract.md
  */
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
+import { WebhookSource } from '@prisma/client';
+import { v7 as uuidv7 } from 'uuid';
 import { getEnv } from '../../../config/env.js';
+import { getPrisma } from '../../../config/database.js';
+import { getRedis } from '../../../config/redis.js';
 import { errors } from '../../../shared/errors/app-error.js';
+import { writeAuditLog } from '../../../shared/middleware/audit-log.middleware.js';
+import { appendToOutbox } from '../../../shared/utils/outbox.js';
+import { getBootstrapOrgId } from '../../../shared/tenant/bootstrap-org.js';
 import { EazepayAppEventEnvelopeSchema } from './envelope.schema.js';
 import { isKnownEazepayAppEventType } from './event-types.js';
+import { resolveBrandToOrgSlug } from './brand-org-mapping.js';
 
 const SIG_HEADERS = ['x-eazepay-signature', 'x-eazepay-signature-placeholder'] as const;
 const TS_HEADER = 'x-eazepay-timestamp';
@@ -125,20 +138,110 @@ export async function registerEazepayAppIntegrationRoutes(app: FastifyInstance):
       throw errors.invalidSignature();
     }
 
-    // ─── Stub response ─────────────────────────────────────────────────
-    // TODO(next session): once `WebhookSource.EAZEPAY_APP` migration
-    // lands, replace this with the durable persistence + drain path
-    // (mirror verifyWebhookSignature middleware in
-    // shared/middleware/webhook-signature.middleware.ts).
-    reply.status(202);
-    return {
+    // ─── Resolve org via brand mapping ─────────────────────────────────
+    // The envelope's `data.brand` field tells us which Intelligence org
+    // owns this event. Unmapped brands (e.g. `direct`) land under the
+    // bootstrap org so the WebhookEvent row is still durable + replayable.
+    const brand = String((env_.data as Record<string, unknown>).brand ?? '');
+    const prisma = getPrisma();
+    const redis = getRedis();
+    let orgId: string;
+    if (brand) {
+      const resolution = resolveBrandToOrgSlug(brand);
+      if (resolution.orgSlug) {
+        const org = await prisma.organization.findUnique({
+          where: { slug: resolution.orgSlug },
+          select: { id: true, deletedAt: true },
+        });
+        orgId = org && !org.deletedAt ? org.id : await getBootstrapOrgId(prisma);
+      } else {
+        orgId = await getBootstrapOrgId(prisma);
+      }
+    } else {
+      orgId = await getBootstrapOrgId(prisma);
+    }
+
+    // ─── Idempotency layer 1: Redis SETNX ──────────────────────────────
+    const cacheKey = `idem:EAZEPAY_APP:${idempotencyKey}`;
+    const cached = await redis.get(cacheKey);
+    if (cached) {
+      const c = JSON.parse(cached) as { status: number; body: unknown };
+      reply.status(c.status);
+      return c.body;
+    }
+
+    // ─── Idempotency layer 2: Postgres unique (orgId, source, key) ─────
+    const prior = await prisma.webhookEvent.findUnique({
+      where: {
+        orgId_source_idempotencyKey: {
+          orgId,
+          source: WebhookSource.EAZEPAY_APP,
+          idempotencyKey,
+        },
+      },
+    });
+    if (prior) {
+      const body = { accepted: true, eventId: prior.id, replayed: true, persisted: true };
+      await redis.setex(cacheKey, 86_400, JSON.stringify({ status: 202, body }));
+      reply.status(202);
+      return body;
+    }
+
+    // ─── Persist + emit outbox in ONE transaction ──────────────────────
+    const webhookEventId = uuidv7();
+    await prisma.$transaction(async (tx) => {
+      await tx.webhookEvent.create({
+        data: {
+          id: webhookEventId,
+          orgId,
+          source: WebhookSource.EAZEPAY_APP,
+          eventType: env_.eventType,
+          idempotencyKey,
+          signatureValid: true,
+          payload: req.body as object,
+        },
+      });
+      await appendToOutbox(tx, {
+        orgId,
+        kind: 'WEBHOOK_INBOUND',
+        payload: {
+          webhookEventId,
+          source: WebhookSource.EAZEPAY_APP,
+          eventType: env_.eventType,
+          idempotencyKey,
+          envelope: env_,
+        },
+        refType: 'webhook_event',
+        refId: webhookEventId,
+      });
+    });
+
+    await writeAuditLog({
+      req,
+      userId: null,
+      action: 'WEBHOOK_RECEIVED',
+      resourceType: 'webhook_event',
+      resourceId: webhookEventId,
+      orgId,
+      metadata: {
+        source: 'EAZEPAY_APP',
+        eventType: env_.eventType,
+        idempotencyKey,
+        brand: brand || null,
+      },
+    });
+
+    // Warm the Redis cache so subsequent replays inside 24h short-circuit.
+    const body = {
       accepted: true,
-      eventId: env_.eventId,
+      eventId: webhookEventId,
       eventType: env_.eventType,
       knownEventType: isKnownEazepayAppEventType(env_.eventType),
       idempotencyKey,
-      persisted: false,
-      note: 'Stub — persistence pending WebhookSource.EAZEPAY_APP migration.',
+      persisted: true,
     };
+    await redis.setex(cacheKey, 86_400, JSON.stringify({ status: 202, body }));
+    reply.status(202);
+    return body;
   });
 }

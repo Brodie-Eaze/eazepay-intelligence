@@ -99,6 +99,15 @@ enum RevenueStream {
   BUZZPAY
   PIXIE
   MICAMP
+  // GAP-100: EazePay App platform-sink revenue (medpay / tradepay /
+  // coachpay merchant fees, commissions, loan repayment-derived events).
+  EAZEPAY_APP
+  // GAP-105: HighSale business-unit revenue (snapshot fees, risk-band-
+  // assignment commercials).
+  HIGHSALE
+  // GAP-103 / GAP-104: Aurean AI + Recruitment business-unit revenue.
+  AUREAN_AI
+  AUREAN_RECRUITMENT
 }
 
 enum RevenueEventType {
@@ -109,6 +118,10 @@ enum RevenueEventType {
   PIXIE_MARGIN
   PROCESSING_FEE
   ADJUSTMENT
+  // GAP-100: EazePay App platform fee on funded contracts.
+  MERCHANT_FEE
+  // GAP-100: per-loan commission (repayment-derived).
+  COMMISSION
 }
 
 enum WebhookSource {
@@ -136,6 +149,10 @@ enum WebhookProcessingStatus {
   PROCESSED
   FAILED
   REPLAYED
+  // GAP-100: drain handler couldn't normalise the event (unmapped brand,
+  // unknown partner). Row stays raw + operator-reviewable; the worker
+  // stops retrying. Triage via /platform/orgs/:id/eazepay-app/quarantine.
+  QUARANTINED
 }
 
 // ─── Partner ────────────────────────────────────────────────────────────────
