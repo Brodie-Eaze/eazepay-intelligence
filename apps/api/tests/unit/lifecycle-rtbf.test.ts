@@ -117,6 +117,12 @@ describe('RtbfService.process', () => {
               return args;
             }),
           },
+          // GAP-111: RTBF now scrubs credit_enrichments too. Mock empty
+          // here — a separate test exercises the credit_enrichments path.
+          creditEnrichment: {
+            findMany: vi.fn(async () => []),
+            update: vi.fn(async () => undefined),
+          },
           auditLog: {
             create: vi.fn(async () => undefined),
           },

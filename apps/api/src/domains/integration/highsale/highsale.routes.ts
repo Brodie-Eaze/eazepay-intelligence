@@ -546,11 +546,45 @@ export async function registerHighsaleIntegrationRoutes(app: FastifyInstance): P
   // for the auditable reveal.
   app.get('/highsale/snapshots/:id', { preHandler: requireAuth }, async (req) => {
     const prisma = getPrisma();
+    const auth = req.auth!;
     const params = z.object({ id: z.string().uuid() }).parse(req.params);
     const row = await prisma.creditEnrichment.findUnique({
       where: { id: params.id },
     });
     if (!row || row.deletedAt) throw errors.notFound('CreditEnrichment', params.id);
+
+    // GAP-107: protected-class read gate (FCRA / fair-lending).
+    //
+    // The `demographics_protected` block carries ethnicity, gender,
+    // marital_status, language, occupation, etc. — fields HighSale sends but
+    // which MUST NOT feed underwriting / decisioning. Before this gate, every
+    // authenticated user (including VIEWER role) saw the full demographics
+    // block as part of the snapshot detail response — a direct FCRA exposure
+    // documented in HARDENING.md GAP-107 / SEC-107.
+    //
+    // Until a granular `protected_class_read` permission lands, gate on:
+    //   - User.role === 'ADMIN' (most-privileged within-org role), OR
+    //   - platformRole === 'SUPER' (cross-org god mode — Brodie today)
+    //
+    // OPERATOR is intentionally NOT enough: operators handle BNPL ops and have
+    // no underwriting / fair-lending audit need. Future: a dedicated
+    // `protected_class_read` permission expressed in the Membership /
+    // platform-staff grant model. Audit row written on every successful read.
+    const mayReadProtected = auth.role === 'ADMIN' || auth.platformRole === 'SUPER';
+    if (mayReadProtected) {
+      await writeAuditLog({
+        req,
+        userId: auth.userId,
+        action: 'PROTECTED_CLASS_READ',
+        resourceType: 'credit_enrichment',
+        resourceId: row.id,
+        metadata: {
+          orgId: row.orgId,
+          vertical: row.vertical,
+          via: 'snapshot_detail',
+        },
+      });
+    }
 
     // Re-shape into the same logical blocks the JSON spec uses. The UI
     // renders one card per block.
@@ -686,24 +720,31 @@ export async function registerHighsaleIntegrationRoutes(app: FastifyInstance): P
         ml_score: {
           sale_confidence_score: row.saleConfidenceScore.toString(),
         },
-        demographics_protected: {
-          // FCRA / fair-lending protected-class fields. Surfaced here for
-          // audit / disparate-impact monitoring only — see the
-          // protected-class governance policy in the architecture doc.
-          estimated_income: row.estimatedIncomeBand,
-          number_of_children: row.numberOfChildren,
-          marital_status: row.maritalStatus,
-          occupation_group: row.occupationGroup,
-          occupation: row.occupation,
-          education: row.education,
-          business_owner: row.businessOwner,
-          gender: row.gender,
-          net_worth: row.netWorth,
-          estimated_current_home_value: row.estimatedCurrentHomeValue,
-          ethnicity: row.ethnicity,
-          ethnic_group: row.ethnicGroup,
-          language: row.language,
-        },
+        // GAP-107: gated. Non-ADMIN/non-SUPER callers get a redaction
+        // marker so the response shape stays stable for the UI.
+        demographics_protected: mayReadProtected
+          ? {
+              // FCRA / fair-lending protected-class fields. Surfaced here for
+              // audit / disparate-impact monitoring only — see the
+              // protected-class governance policy in the architecture doc.
+              estimated_income: row.estimatedIncomeBand,
+              number_of_children: row.numberOfChildren,
+              marital_status: row.maritalStatus,
+              occupation_group: row.occupationGroup,
+              occupation: row.occupation,
+              education: row.education,
+              business_owner: row.businessOwner,
+              gender: row.gender,
+              net_worth: row.netWorth,
+              estimated_current_home_value: row.estimatedCurrentHomeValue,
+              ethnicity: row.ethnicity,
+              ethnic_group: row.ethnicGroup,
+              language: row.language,
+            }
+          : {
+              _redacted: true,
+              _reason: 'protected_class_read permission required — see HARDENING.md GAP-107',
+            },
       },
 
       rawPayload: row.rawPayload,
