@@ -113,7 +113,7 @@ export class ExportService {
     type: ExportType,
     orgId: string,
     filters: Record<string, unknown>,
-  ): Promise<{ rows: Array<Record<string, unknown>>; columns: string[] }> {
+  ): Promise<{ rows: Record<string, unknown>[]; columns: string[] }> {
     switch (type) {
       case ExportType.CUSTOMERS: {
         const apps = await this.reader.application.findMany({
@@ -123,7 +123,7 @@ export class ExportService {
           include: { partner: { select: { id: true, name: true, externalId: true } } },
         });
         const seen = new Set<string>();
-        const rows: Array<Record<string, unknown>> = [];
+        const rows: Record<string, unknown>[] = [];
         for (const a of apps) {
           const key = a.consumerEmailHash.toString('hex');
           if (seen.has(key)) continue;
@@ -293,7 +293,7 @@ export class ExportService {
     }
   }
 
-  private toCsv(columns: string[], rows: Array<Record<string, unknown>>): string {
+  private toCsv(columns: string[], rows: Record<string, unknown>[]): string {
     const escape = (v: unknown): string => {
       if (v === null || v === undefined) return '';
       const s = String(v);

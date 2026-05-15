@@ -166,7 +166,7 @@ export class LenderSubmissionService {
     const decision = await this.prisma.lenderDecision.findUnique({
       where: { id: decisionId },
     });
-    if (!decision || !decision.externalDecisionId) return;
+    if (!decision?.externalDecisionId) return;
     if (decision.decision !== 'PENDING' && decision.fundingStatus === 'FUNDED') {
       // Terminal — nothing to poll.
       return;

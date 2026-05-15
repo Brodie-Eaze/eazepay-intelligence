@@ -24,7 +24,7 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { v7 as uuidv7 } from 'uuid';
 import type { PrismaClient } from '@prisma/client';
-import { OrgRole } from '@prisma/client';
+import type { OrgRole } from '@prisma/client';
 import { errors } from '../../shared/errors/app-error.js';
 import { hashPassword } from '../../shared/utils/password.js';
 import { getEnv } from '../../config/env.js';
@@ -188,7 +188,7 @@ export class InvitationService {
   }
 
   async list(): Promise<
-    Array<{ id: string; email: string; role: OrgRole; expiresAt: Date; createdAt: Date }>
+    { id: string; email: string; role: OrgRole; expiresAt: Date; createdAt: Date }[]
   > {
     const rows = await this.prisma.userInvitation.findMany({
       where: { acceptedAt: null, revokedAt: null, expiresAt: { gt: new Date() } },

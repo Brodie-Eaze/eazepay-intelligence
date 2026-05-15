@@ -48,8 +48,8 @@ const orgRow = {
   id: '00000000-0000-0000-0000-000000000099',
   deletedAt: null as Date | null,
 };
-let webhookCreated: Array<{ id: string; eventType: string }> = [];
-let outboxCreated: Array<{ refType: string; payload: unknown }> = [];
+let webhookCreated: { id: string; eventType: string }[] = [];
+let outboxCreated: { refType: string; payload: unknown }[] = [];
 
 function makePrisma() {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -115,7 +115,7 @@ async function buildApp(
     }
   });
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  await registerBusinessWebhookIngest(app, prisma as any, redis as any, {
+  await registerBusinessWebhookIngest(app, prisma, redis as any, {
     routePath: '/integration/test/events',
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     source: 'AUREAN_AI' as any,
@@ -192,7 +192,7 @@ describe('registerBusinessWebhookIngest', () => {
       payload: body,
     });
     expect(res.statusCode).toBe(202);
-    const json = res.json() as { accepted: boolean; persisted: boolean };
+    const json = res.json();
     expect(json.accepted).toBe(true);
     expect(json.persisted).toBe(true);
     expect(webhookCreated.length).toBe(1);
@@ -279,7 +279,7 @@ describe('registerBusinessWebhookIngest', () => {
       payload: badBody,
     });
     expect(res.statusCode).toBe(400);
-    const json = res.json() as { reason: string; issues?: unknown };
+    const json = res.json();
     expect(json.reason).toBe('invalid_envelope');
     // SEC-206: server-side log, but issues must NOT leak in the response.
     expect(json.issues).toBeUndefined();

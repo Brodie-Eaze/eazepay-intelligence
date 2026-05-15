@@ -46,6 +46,9 @@ jobs:
       BUZZPAY_WEBHOOK_SECRET: ${{ secrets.CI_BUZZPAY_WEBHOOK_SECRET || 'ci-buzzpay-secret-min-16' }}
       PIXIE_WEBHOOK_SECRET: ${{ secrets.CI_PIXIE_WEBHOOK_SECRET || 'ci-pixie-secret-min-16___' }}
       MICAMP_WEBHOOK_SECRET: ${{ secrets.CI_MICAMP_WEBHOOK_SECRET || 'ci-micamp-secret-min-16__' }}
+      # Required by EnvSchema (min 32 chars). CI-only deterministic placeholders.
+      EAZEPAY_APP_WEBHOOK_SECRET: ${{ secrets.CI_EAZEPAY_APP_WEBHOOK_SECRET || 'ci-eazepay-app-secret-min-32-chars-aaaaaa' }}
+      HIGHSALE_WEBHOOK_SECRET: ${{ secrets.CI_HIGHSALE_WEBHOOK_SECRET || 'ci-highsale-secret-min-32-chars-aaaaaaaa' }}
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -99,7 +102,7 @@ jobs:
         # Prefix `|| true` removed deliberately; we want CI to fail loudly.
         run: pnpm audit --prod --audit-level high
       - name: Trivy filesystem scan
-        uses: aquasecurity/trivy-action@0.29.0
+        uses: aquasecurity/trivy-action@master
         with:
           scan-type: fs
           scan-ref: .
@@ -162,7 +165,7 @@ jobs:
       - name: Build api image
         run: docker build -t eazepay-intel-api:ci -f apps/api/Dockerfile .
       - name: Trivy image scan
-        uses: aquasecurity/trivy-action@0.29.0
+        uses: aquasecurity/trivy-action@master
         with:
           image-ref: eazepay-intel-api:ci
           severity: HIGH,CRITICAL
@@ -178,7 +181,7 @@ jobs:
           category: trivy-image
       - name: Generate SBOM (CycloneDX)
         # Trivy emits CycloneDX without an extra installer.
-        uses: aquasecurity/trivy-action@0.29.0
+        uses: aquasecurity/trivy-action@master
         with:
           image-ref: eazepay-intel-api:ci
           format: cyclonedx

@@ -148,7 +148,7 @@ export async function registerEazepayAppIntegrationRoutes(app: FastifyInstance):
       // The envelope's `data.brand` field tells us which Intelligence org
       // owns this event. Unmapped brands (e.g. `direct`) land under the
       // bootstrap org so the WebhookEvent row is still durable + replayable.
-      const brand = String((env_.data as Record<string, unknown>).brand ?? '');
+      const brand = String(env_.data.brand ?? '');
       const prisma = getPrisma();
       const redis = getRedis();
       let orgId: string;

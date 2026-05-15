@@ -1,5 +1,4 @@
 import type { FastifyRequest, FastifyReply, preHandlerHookHandler } from 'fastify';
-import type { OrgRole, PlatformRole } from '@prisma/client';
 import { errors } from '../errors/app-error.js';
 import { COOKIE, readCookie } from '../utils/cookies.js';
 import { verifyJwt } from '../utils/jwt.js';

@@ -124,7 +124,7 @@ async function checkReplica(): Promise<DependencyStatus & { lagMs?: number }> {
     await getPrismaReader().$queryRaw`SELECT 1`;
     // pg_last_xact_replay_timestamp() returns NULL on the primary and the
     // last replayed-tx timestamp on a standby. Lag = now() - that ts.
-    const rows = await getPrismaReader().$queryRaw<Array<{ lag_ms: number | null }>>`
+    const rows = await getPrismaReader().$queryRaw<{ lag_ms: number | null }[]>`
       SELECT EXTRACT(EPOCH FROM (now() - pg_last_xact_replay_timestamp())) * 1000 AS lag_ms
     `;
     const lagMs = rows[0]?.lag_ms != null ? Math.round(Number(rows[0].lag_ms)) : undefined;

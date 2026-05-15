@@ -40,9 +40,9 @@ function buildStubPrisma(initialKey?: {
   kekKeyId: string;
 }): {
   prisma: any;
-  rows: Array<typeof initialKey & { isActive: boolean }>;
+  rows: (typeof initialKey & { isActive: boolean })[];
 } {
-  const rows: Array<NonNullable<typeof initialKey> & { isActive: boolean }> = initialKey
+  const rows: (NonNullable<typeof initialKey> & { isActive: boolean })[] = initialKey
     ? [{ ...initialKey, isActive: true }]
     : [];
   const prisma = {
@@ -219,7 +219,7 @@ describe('rotateDek', () => {
   // The rotate flow uses prisma.$transaction. We need a richer stub that
   // returns a tx client with the same nested method shape.
   function buildTxStubPrisma(
-    rows: Array<{
+    rows: {
       id: string;
       orgId: string;
       purpose: string;
@@ -227,7 +227,7 @@ describe('rotateDek', () => {
       wrappedDek: Buffer;
       kekKeyId: string;
       isActive: boolean;
-    }>,
+    }[],
   ): any {
     const txMethods = {
       tenantEncryptionKey: {
@@ -352,14 +352,14 @@ describe('rotateDek', () => {
 
 describe('cryptoshredOrg', () => {
   function buildShredStubPrisma(
-    rows: Array<{
+    rows: {
       id: string;
       orgId: string;
       purpose: string;
       kekKeyId: string;
       isActive: boolean;
       retiredAt: Date | null;
-    }>,
+    }[],
   ): { prisma: any; updateManyCalls: number } {
     let updateManyCalls = 0;
     const prisma: any = {
@@ -392,7 +392,7 @@ describe('cryptoshredOrg', () => {
   // Tracking KMS calls — wrap LocalKmsClient to record disable/delete
   function trackingKms() {
     const disabled: string[] = [];
-    const scheduled: Array<{ kekKeyId: string; pendingDays: number }> = [];
+    const scheduled: { kekKeyId: string; pendingDays: number }[] = [];
     setKmsClient({
       // Test mock simulates a production-grade KMS so cryptoshredOrg's
       // guard (refuses LocalKmsClient) is satisfied. See SF-004.

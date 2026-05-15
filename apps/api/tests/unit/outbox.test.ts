@@ -18,7 +18,7 @@ beforeAll(() => {
 describe('outbox append', () => {
   it('writes a row with the supplied kind, payload, and ref hints', async () => {
     const { appendToOutbox } = await import('../../src/shared/utils/outbox.js');
-    const created: Array<{ data: unknown }> = [];
+    const created: { data: unknown }[] = [];
     const fakeTx = {
       outboxEvent: {
         create: vi.fn(async (args: { data: unknown }) => {

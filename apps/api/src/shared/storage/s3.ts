@@ -36,7 +36,9 @@ interface S3StorageConfig {
 }
 
 // Dynamic-typed handle — module shape varies across AWS SDK minor versions.
-type S3Client = { send: (cmd: unknown) => Promise<unknown> };
+interface S3Client {
+  send: (cmd: unknown) => Promise<unknown>;
+}
 
 interface AwsModules {
   client: S3Client;

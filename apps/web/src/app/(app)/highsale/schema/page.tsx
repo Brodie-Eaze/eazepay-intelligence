@@ -890,9 +890,9 @@ export default function HighsaleSchemaPage(): JSX.Element {
           </p>
           <p>
             When HighSale adds a new field to the JSON: extend the Zod schema, run a Prisma
-            migration to add the column, then add a row above. Forward-compat is preserved by Zod's{' '}
-            <code className="kbd">.passthrough()</code> on the outer object — new fields land in{' '}
-            <code className="kbd">raw_payload</code> until promoted.
+            migration to add the column, then add a row above. Forward-compat is preserved by
+            Zod&apos;s <code className="kbd">.passthrough()</code> on the outer object — new fields
+            land in <code className="kbd">raw_payload</code> until promoted.
           </p>
         </div>
       </SectionCard>

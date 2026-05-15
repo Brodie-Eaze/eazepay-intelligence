@@ -151,7 +151,6 @@ export class EazepayAppProcessor {
 
   async process(job: EazepayAppJob): Promise<void> {
     const log = getLogger();
-    const env = job.envelope;
     // Phase 1.6 (RLS): under the eazepay_app runtime role, every Prisma
     // query needs app.org_id set or RLS returns zero rows / refuses writes.
     // The WebhookEvent row already carries the orgId resolved at ingest;

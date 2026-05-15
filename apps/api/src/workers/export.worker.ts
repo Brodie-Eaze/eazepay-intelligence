@@ -35,12 +35,22 @@ async function main(): Promise<void> {
     log.error({ jobId: job?.id, err: err.message }, 'export.failed');
   });
 
-  const shutdown = async (): Promise<void> => {
-    await worker.close();
-    process.exit(0);
+  const shutdown = async (signal: NodeJS.Signals): Promise<void> => {
+    try {
+      log.info({ signal }, 'export.worker.shutdown.begin');
+      await worker.close();
+      process.exit(0);
+    } catch (err) {
+      // BullMQ's worker.close() can reject during a Redis disconnect; if we
+      // swallowed that, process.exit(0) would never run and the pod would
+      // hang in a half-shut state. Force a non-zero exit so the orchestrator
+      // restarts us cleanly.
+      log.error({ err, signal }, 'export.worker.shutdown.failed');
+      process.exit(1);
+    }
   };
-  process.on('SIGTERM', () => void shutdown());
-  process.on('SIGINT', () => void shutdown());
+  process.on('SIGTERM', () => void shutdown('SIGTERM'));
+  process.on('SIGINT', () => void shutdown('SIGINT'));
 }
 
 void main();

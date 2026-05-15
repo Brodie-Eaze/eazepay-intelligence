@@ -30,7 +30,7 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { v7 as uuidv7 } from 'uuid';
-import { Prisma } from '@prisma/client';
+import type { Prisma } from '@prisma/client';
 import { getPrisma } from '../../config/database.js';
 import { requireAuth } from '../../shared/middleware/auth.middleware.js';
 import { csrfGuard } from '../../shared/middleware/csrf.middleware.js';
@@ -875,7 +875,7 @@ export async function registerPlatformRoutes(app: FastifyInstance): Promise<void
     async (req) => {
       const params = z.object({ id: z.string().uuid() }).parse(req.params);
       const row = await prisma.outboxEvent.findUnique({ where: { id: params.id } });
-      if (!row || !row.dlqedAt) {
+      if (!row?.dlqedAt) {
         throw errors.notFound('Outbox row not in DLQ');
       }
       await prisma.outboxEvent.update({

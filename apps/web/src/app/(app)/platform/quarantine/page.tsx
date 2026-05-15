@@ -211,7 +211,7 @@ function DlqTable(props: {
             <th className="text-left">Ref</th>
             <th className="text-left">Attempts</th>
             <th className="text-left">Last error</th>
-            <th className="text-left">DLQ'd</th>
+            <th className="text-left">DLQ&apos;d</th>
             <th className="text-right">Action</th>
           </tr>
         </thead>

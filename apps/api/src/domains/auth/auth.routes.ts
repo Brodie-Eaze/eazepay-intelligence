@@ -1,6 +1,5 @@
 import type { FastifyInstance } from 'fastify';
 import { authenticator } from 'otplib';
-import { v7 as uuidv7 } from 'uuid';
 import { getEnv } from '../../config/env.js';
 import { getPrisma } from '../../config/database.js';
 import { getRedis } from '../../config/redis.js';

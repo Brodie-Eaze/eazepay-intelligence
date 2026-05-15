@@ -27,7 +27,15 @@
  *   We persist email + sub + name (in audit log only). No tokens stored.
  *   Google's own logs are out of our scope; see docs/governance/PRIVACY.md.
  */
-import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
+import {
+  createHash,
+  createHmac,
+  createPublicKey,
+  createVerify,
+  randomBytes,
+  timingSafeEqual,
+} from 'node:crypto';
+import type { JsonWebKey, KeyObject } from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { getEnv } from '../../config/env.js';
@@ -376,12 +384,10 @@ async function getGoogleJwks(): Promise<Map<string, JwkRsa>> {
 }
 
 /** Convert a JWK RSA public key to PEM via node:crypto's KeyObject helpers. */
-function jwkToPem(jwk: JwkRsa): import('node:crypto').KeyObject {
+function jwkToPem(jwk: JwkRsa): KeyObject {
   // Node 16+ supports createPublicKey({ key, format: 'jwk' }) directly.
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const { createPublicKey } = require('node:crypto') as typeof import('node:crypto');
   return createPublicKey({
-    key: jwk as unknown as import('node:crypto').JsonWebKey,
+    key: jwk as unknown as JsonWebKey,
     format: 'jwk',
   });
 }
@@ -421,8 +427,6 @@ async function verifyIdToken(idToken: string, expectedAud: string): Promise<Goog
   if (!jwk) throw errors.unauthorized(`id_token kid ${header.kid} not in JWKS`);
 
   // Verify signature locally.
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const { createVerify } = require('node:crypto') as typeof import('node:crypto');
   const verifier = createVerify('RSA-SHA256');
   verifier.update(`${headerB64}.${payloadB64}`);
   verifier.end();

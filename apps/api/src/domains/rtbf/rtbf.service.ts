@@ -36,6 +36,7 @@
  */
 import { v7 as uuidv7 } from 'uuid';
 import type { PrismaClient, RtbfRequest, RtbfRequestStatus } from '@prisma/client';
+import type { Span } from '@opentelemetry/api';
 import { writeAuditLog } from '../../shared/middleware/audit-log.middleware.js';
 import { errors } from '../../shared/errors/app-error.js';
 import { withSpan } from '../../shared/utils/tracing.js';
@@ -98,10 +99,7 @@ export class RtbfService {
     });
   }
 
-  private async processInner(
-    requestId: string,
-    span: import('@opentelemetry/api').Span,
-  ): Promise<RtbfRequest> {
+  private async processInner(requestId: string, span: Span): Promise<RtbfRequest> {
     const initial = await this.prisma.rtbfRequest.findUnique({ where: { id: requestId } });
     if (!initial) throw errors.notFound('RtbfRequest', requestId);
     if (initial.status === 'COMPLETED') return initial;

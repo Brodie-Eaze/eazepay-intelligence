@@ -275,7 +275,7 @@ export default function UsersPage(): JSX.Element {
                         <Monogram label={u.email} />
                         <div>
                           <div className="text-ink font-medium tracking-tight">{u.email}</div>
-                          {isMe && <div className="text-[11px] text-accent">that's you</div>}
+                          {isMe && <div className="text-[11px] text-accent">that&apos;s you</div>}
                         </div>
                       </div>
                     </td>

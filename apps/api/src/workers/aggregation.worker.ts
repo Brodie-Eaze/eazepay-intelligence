@@ -139,12 +139,21 @@ async function main(): Promise<void> {
     log.error({ jobId: job?.id, err: err.message }, 'aggregation.failed');
   });
 
-  const shutdown = async (): Promise<void> => {
-    await worker.close();
-    process.exit(0);
+  const shutdown = async (signal: NodeJS.Signals): Promise<void> => {
+    try {
+      log.info({ signal }, 'aggregation.worker.shutdown.begin');
+      await worker.close();
+      process.exit(0);
+    } catch (err) {
+      // worker.close() rejection would otherwise hang shutdown — force a
+      // non-zero exit so the orchestrator restarts us instead of leaving
+      // the pod in an indeterminate state.
+      log.error({ err, signal }, 'aggregation.worker.shutdown.failed');
+      process.exit(1);
+    }
   };
-  process.on('SIGTERM', () => void shutdown());
-  process.on('SIGINT', () => void shutdown());
+  process.on('SIGTERM', () => void shutdown('SIGTERM'));
+  process.on('SIGINT', () => void shutdown('SIGINT'));
 }
 
 function boundaries(period: AggregationJob['period'], anchor: Date): { from: Date; to: Date } {

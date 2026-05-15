@@ -25,8 +25,8 @@ startTelemetry({ serviceName: 'eazepay-intelligence-worker-alert' });
  *   - CC7.3 — every fire/resolve writes an ALERT_FIRED / ALERT_RESOLVED row
  */
 import { v7 as uuidv7 } from 'uuid';
-import { Prisma } from '@prisma/client';
-import type { Alert, AlertRule, NotificationChannel } from '@prisma/client';
+import type { Prisma } from '@prisma/client';
+import type { AlertRule } from '@prisma/client';
 import { getPrismaWriter, getPrismaReader } from '../config/database.js';
 import { getRedis } from '../config/redis.js';
 import { getLogger } from '../config/logger.js';
@@ -120,7 +120,7 @@ export async function runEvaluationCycle(opts: {
             } as Prisma.InputJsonValue,
           },
         });
-        await opts.dispatcher.dispatch(created, rule.channel as NotificationChannel | null);
+        await opts.dispatcher.dispatch(created, rule.channel);
         summary.fired += 1;
       } else if (!result.hit && open) {
         // Auto-resolve: rule went cool, clear the open alert.

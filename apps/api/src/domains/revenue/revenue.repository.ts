@@ -99,7 +99,7 @@ export class RevenueRepository implements IRevenueRepository {
     const fromCond = args.from ? Prisma.sql`AND effective_at >= ${args.from}` : Prisma.empty;
     const toCond = args.to ? Prisma.sql`AND effective_at <= ${args.to}` : Prisma.empty;
     const rows = await this.prisma.$queryRaw<
-      Array<{ bucket: Date; stream: RevenueStream; amount: string }>
+      { bucket: Date; stream: RevenueStream; amount: string }[]
     >(
       Prisma.sql`
         SELECT date_trunc(${trunc}, effective_at) AS bucket,
@@ -127,7 +127,7 @@ export class RevenueRepository implements IRevenueRepository {
     const fromCond = args.from ? Prisma.sql`AND r.effective_at >= ${args.from}` : Prisma.empty;
     const toCond = args.to ? Prisma.sql`AND r.effective_at <= ${args.to}` : Prisma.empty;
     const rows = await this.prisma.$queryRaw<
-      Array<{ partner_id: string; partner_name: string; total: string }>
+      { partner_id: string; partner_name: string; total: string }[]
     >(
       Prisma.sql`
         SELECT r.partner_id, p.name AS partner_name, COALESCE(SUM(r.amount), 0)::text AS total

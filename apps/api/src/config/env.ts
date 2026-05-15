@@ -242,7 +242,7 @@ export function getEnv(): Env {
     // top-tier secrets to NOT contain the literal substring 'local-dev' (the
     // shape used in .env.example) and to have at least 24 distinct characters
     // (a basic entropy floor — Shannon ≥ ~4.5 bits/char on a 32-char string).
-    const sensitiveSecrets: Array<[string, string]> = [
+    const sensitiveSecrets: [string, string][] = [
       ['JWT_ACCESS_SECRET', parsed.data.JWT_ACCESS_SECRET],
       ['JWT_REFRESH_SECRET', parsed.data.JWT_REFRESH_SECRET],
       ['PII_HASH_SECRET', parsed.data.PII_HASH_SECRET],
@@ -273,7 +273,7 @@ export function getEnv(): Env {
     // P0 fix (CR-102 + SEC-115): per-kind JWT/CSRF/OAuth secrets must all
     // be set in production. The Zod schema makes them optional for dev
     // back-compat; here we promote to required.
-    const requiredPerKind: Array<[string, string | undefined]> = [
+    const requiredPerKind: [string, string | undefined][] = [
       ['JWT_WS_TICKET_SECRET', parsed.data.JWT_WS_TICKET_SECRET],
       ['JWT_INVESTOR_SCOPE_SECRET', parsed.data.JWT_INVESTOR_SCOPE_SECRET],
       ['CSRF_SIGNING_SECRET', parsed.data.CSRF_SIGNING_SECRET],
