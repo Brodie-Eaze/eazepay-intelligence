@@ -126,7 +126,8 @@ export async function registerOAuthRoutes(app: FastifyInstance): Promise<void> {
     }
     setCookie(reply, STATE_COOKIE, '', { maxAgeSeconds: 0, httpOnly: true });
 
-    // Exchange code → tokens.
+    // Exchange code → tokens. Phase 7 (SF-011): bounded fetch — without a
+    // timeout a Google outage dangles the connection pool indefinitely.
     const tokenRes = await fetch('https://oauth2.googleapis.com/token', {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -137,6 +138,7 @@ export async function registerOAuthRoutes(app: FastifyInstance): Promise<void> {
         redirect_uri: env.GOOGLE_OAUTH_REDIRECT_URI!,
         grant_type: 'authorization_code',
       }),
+      signal: AbortSignal.timeout(10_000),
     });
     if (!tokenRes.ok) {
       const detail = await tokenRes.text().catch(() => '<unreadable>');
@@ -146,9 +148,10 @@ export async function registerOAuthRoutes(app: FastifyInstance): Promise<void> {
     const tokenJson = (await tokenRes.json()) as { id_token?: string };
     if (!tokenJson.id_token) throw errors.unauthorized('OAuth response missing id_token');
 
-    // Verify id_token via Google's tokeninfo endpoint. Cheaper + correct
-    // than maintaining our own JWKS verifier; we still cross-check claims
-    // (aud, iss, exp, email_verified) before trusting the response.
+    // Verify id_token via local JWKS-based RS256 signature verification.
+    // Replaces Google's deprecated /tokeninfo HTTP endpoint (SEC-121). Keys
+    // are cached for an hour; on kid miss we force-refresh once before
+    // failing. Claims (aud, iss, exp, email_verified) are re-checked below.
     const claims = await verifyIdToken(tokenJson.id_token, env.GOOGLE_OAUTH_CLIENT_ID!);
     if (!claims.email_verified) throw errors.unauthorized('Google email not verified');
 
@@ -236,18 +239,131 @@ function readStateCookie(req: { headers: { cookie?: string } }): string | null {
   return match ? decodeURIComponent(match.slice(STATE_COOKIE.length + 1)) : null;
 }
 
-async function verifyIdToken(idToken: string, expectedAud: string): Promise<GoogleIdTokenClaims> {
-  // tokeninfo validates signature + expiry; we still re-check aud + iss to
-  // defend against a misconfigured key returning a stale-but-valid token.
-  const res = await fetch(
-    `https://oauth2.googleapis.com/tokeninfo?id_token=${encodeURIComponent(idToken)}`,
-  );
-  if (!res.ok) throw errors.unauthorized('id_token verification failed');
-  const claims = (await res.json()) as GoogleIdTokenClaims;
-  if (claims.aud !== expectedAud) throw errors.unauthorized('id_token aud mismatch');
-  if (claims.iss !== 'https://accounts.google.com' && claims.iss !== 'accounts.google.com') {
-    throw errors.unauthorized('id_token iss mismatch');
+// Phase 4b (SEC-121): JWKS-based id_token verification.
+//
+// Previous implementation hit Google's deprecated /tokeninfo HTTP endpoint
+// to verify each id_token. That endpoint is rate-limited, deprecated, and
+// a network MITM (DNS / cert compromise) returning crafted claims would
+// be trusted verbatim — we never actually validated the signature
+// ourselves. SEC-121 in HARDENING.md flagged this as a P1 hardening item.
+//
+// JWKS verification: pull Google's signing certs once per JWK_CACHE_TTL,
+// verify the id_token's RS256 signature against the matching kid locally,
+// then re-check aud + iss + exp + email_verified claims. Pure local crypto
+// after the first JWKS pull — no per-login network dependency.
+//
+// We avoid bringing in a heavy JWT library (jose, jsonwebtoken,
+// google-auth-library) and do verification with Node's built-in
+// node:crypto. The id_token JWT is HEADER.PAYLOAD.SIGNATURE base64url
+// with header.alg = 'RS256' and header.kid pointing into the JWKS.
+
+const GOOGLE_JWKS_URL = 'https://www.googleapis.com/oauth2/v3/certs';
+const GOOGLE_ISSUERS = new Set(['https://accounts.google.com', 'accounts.google.com']);
+const JWK_CACHE_TTL_MS = 60 * 60 * 1000; // 1h — matches Google's published cache-control
+
+interface JwkRsa {
+  kty: 'RSA';
+  use?: string;
+  alg?: string;
+  kid: string;
+  n: string;
+  e: string;
+}
+
+interface JwksResponse {
+  keys: JwkRsa[];
+}
+
+let jwksCache: { fetchedAt: number; keys: Map<string, JwkRsa> } | undefined;
+
+async function getGoogleJwks(): Promise<Map<string, JwkRsa>> {
+  if (jwksCache && Date.now() - jwksCache.fetchedAt < JWK_CACHE_TTL_MS) {
+    return jwksCache.keys;
   }
+  // Phase 7: bounded fetch — Google JWKS outage should not dangle the worker.
+  const res = await fetch(GOOGLE_JWKS_URL, {
+    signal: AbortSignal.timeout(5_000),
+  });
+  if (!res.ok) {
+    throw errors.unauthorized('Google JWKS unavailable');
+  }
+  const body = (await res.json()) as JwksResponse;
+  const keys = new Map<string, JwkRsa>();
+  for (const k of body.keys ?? []) {
+    if (k.kty === 'RSA' && k.kid) keys.set(k.kid, k);
+  }
+  jwksCache = { fetchedAt: Date.now(), keys };
+  return keys;
+}
+
+/** Convert a JWK RSA public key to PEM via node:crypto's KeyObject helpers. */
+function jwkToPem(jwk: JwkRsa): import('node:crypto').KeyObject {
+  // Node 16+ supports createPublicKey({ key, format: 'jwk' }) directly.
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { createPublicKey } = require('node:crypto') as typeof import('node:crypto');
+  return createPublicKey({
+    key: jwk as unknown as import('node:crypto').JsonWebKey,
+    format: 'jwk',
+  });
+}
+
+function b64urlDecode(input: string): Buffer {
+  return Buffer.from(input, 'base64url');
+}
+
+async function verifyIdToken(idToken: string, expectedAud: string): Promise<GoogleIdTokenClaims> {
+  const parts = idToken.split('.');
+  if (parts.length !== 3) throw errors.unauthorized('Malformed id_token');
+  const [headerB64, payloadB64, sigB64] = parts as [string, string, string];
+
+  // Parse header to find kid + verify alg pin.
+  let header: { alg?: string; kid?: string };
+  try {
+    header = JSON.parse(b64urlDecode(headerB64).toString('utf8'));
+  } catch {
+    throw errors.unauthorized('id_token header unparseable');
+  }
+  if (header.alg !== 'RS256') {
+    // Alg pinning: refuse anything else (especially HS256 — that confusion
+    // attack would let an attacker sign with the public key as a secret).
+    throw errors.unauthorized('id_token alg must be RS256');
+  }
+  if (!header.kid) throw errors.unauthorized('id_token missing kid');
+
+  // Look up the JWK; refresh once if not present (key rotation case).
+  let jwks = await getGoogleJwks();
+  let jwk = jwks.get(header.kid);
+  if (!jwk) {
+    // Force-refresh in case Google rotated keys; cache may be stale.
+    jwksCache = undefined;
+    jwks = await getGoogleJwks();
+    jwk = jwks.get(header.kid);
+  }
+  if (!jwk) throw errors.unauthorized(`id_token kid ${header.kid} not in JWKS`);
+
+  // Verify signature locally.
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { createVerify } = require('node:crypto') as typeof import('node:crypto');
+  const verifier = createVerify('RSA-SHA256');
+  verifier.update(`${headerB64}.${payloadB64}`);
+  verifier.end();
+  const ok = verifier.verify(jwkToPem(jwk), b64urlDecode(sigB64));
+  if (!ok) throw errors.unauthorized('id_token signature invalid');
+
+  // Decode + re-check claims.
+  let claims: GoogleIdTokenClaims;
+  try {
+    claims = JSON.parse(b64urlDecode(payloadB64).toString('utf8')) as GoogleIdTokenClaims;
+  } catch {
+    throw errors.unauthorized('id_token payload unparseable');
+  }
+  if (claims.aud !== expectedAud) throw errors.unauthorized('id_token aud mismatch');
+  if (!GOOGLE_ISSUERS.has(claims.iss)) throw errors.unauthorized('id_token iss mismatch');
   if (claims.exp * 1000 <= Date.now()) throw errors.unauthorized('id_token expired');
   return claims;
+}
+
+/** Test-only reset hook for the JWKS cache. Never call from production code. */
+export function __resetJwksCacheForTests(): void {
+  jwksCache = undefined;
 }
