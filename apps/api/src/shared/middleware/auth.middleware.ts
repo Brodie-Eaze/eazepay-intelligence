@@ -105,12 +105,54 @@ export async function requireAuth(req: FastifyRequest, _reply: FastifyReply): Pr
   // Mismatch (revoked platform role) → trust the DB.
   const platformRole = user.platformRole;
 
+  // SEC-004: Membership re-check.
+  //
+  // Prior to 2026-05-17 we trusted `payload.org` + `payload.orgRole`
+  // directly from the JWT. If a user was removed from an org after the
+  // JWT was minted, the access token kept working against routes that
+  // didn't call `resolveTenantFromPath` — for up to JWT_ACCESS_TTL
+  // (15 min). Effectively, "remove user from org" had a 15-minute
+  // soak before isolation kicked in.
+  //
+  // Now we re-verify the Membership row on every request for non-platform
+  // users. The cost is one indexed lookup; the same `findUnique` shape
+  // `resolveTenantFromPath` uses already, so the index is hot. If the
+  // membership is gone, we strip orgId/orgRole from the request (rather
+  // than 401) so:
+  //   - cross-org routes (e.g. /me) keep working,
+  //   - tenant-scoped routes fall through to their own orgId check (which
+  //     is now ALWAYS present per SEC-002 + SEC-014) and return 400/403,
+  //   - the JWT itself remains otherwise valid for fresh org-switch flows.
+  //
+  // Platform staff (SUPER/STAFF) bypass the check — they have implicit
+  // membership in every org by design.
+  let effectiveOrgId: string | null = payload.org ?? null;
+  let effectiveOrgRole = payload.orgRole;
+  const isPlatformStaff = platformRole === 'SUPER' || platformRole === 'STAFF';
+  if (!isPlatformStaff && effectiveOrgId) {
+    const membership = await getPrisma().membership.findUnique({
+      where: { userId_orgId: { userId: user.id, orgId: effectiveOrgId } },
+      select: { role: true },
+    });
+    if (!membership) {
+      // Membership revoked since token minted. Strip the org claim from
+      // the request so tenant-scoped routes correctly reject with 400
+      // "active organisation required" rather than serve cross-tenant
+      // data using a stale claim.
+      effectiveOrgId = null;
+      effectiveOrgRole = undefined;
+    } else if (membership.role !== effectiveOrgRole) {
+      // Role changed in DB since token minted — trust the DB.
+      effectiveOrgRole = membership.role;
+    }
+  }
+
   req.auth = {
     userId: user.id,
     email: user.email,
     role: user.role,
-    orgId: payload.org,
-    orgRole: payload.orgRole,
+    orgId: effectiveOrgId ?? undefined,
+    orgRole: effectiveOrgRole,
     platformRole,
     scope: payload.scope ?? 'standard',
     jti: payload.jti,

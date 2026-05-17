@@ -7,10 +7,35 @@ import { getEnv } from '../../config/env.js';
  * - refresh: long-lived rotation token, httpOnly, never readable by JS
  * - csrf:    double-submit token, NOT httpOnly so the SPA can mirror it in X-CSRF-Token
  */
+/**
+ * SEC-009 (CWE-1004 Sensitive Cookie Without 'HttpOnly' / OWASP A05:2021):
+ * use the `__Host-` cookie prefix on every session cookie.
+ *
+ * Without the prefix, a compromised sibling subdomain on `*.up.railway.app`
+ * (any other Railway-hosted app, an XSS in a staging deploy, etc.) can
+ * pin a victim's session cookie by writing
+ *   document.cookie = 'epi_access=...; Domain=.up.railway.app; Path=/'
+ * which silently overshadows the legitimate cookie at the browser's
+ * preference order. The `__Host-` prefix forbids the Domain attribute
+ * (RFC 6265bis §4.1.3.2) so the browser rejects the cross-subdomain
+ * write — only the exact origin can set the cookie.
+ *
+ * Constraints the prefix enforces (browsers reject the cookie on violation):
+ *   - Secure attribute MUST be set
+ *   - Domain attribute MUST be omitted
+ *   - Path MUST be exactly `/`
+ *
+ * `baseCookieAttrs` already meets all three when the cookie name carries
+ * the prefix (see hasHostPrefix branch below).
+ *
+ * Rollout: changing the cookie name invalidates every active session at
+ * cutover. Operators should drain traffic and warn users (the dashboard
+ * surfaces a re-login prompt on the next 401).
+ */
 export const COOKIE = {
-  ACCESS: 'epi_access',
-  REFRESH: 'epi_refresh',
-  CSRF: 'epi_csrf',
+  ACCESS: '__Host-epi_access',
+  REFRESH: '__Host-epi_refresh',
+  CSRF: '__Host-epi_csrf',
 } as const;
 
 interface SetCookieOpts {

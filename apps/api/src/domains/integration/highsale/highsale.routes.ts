@@ -24,6 +24,7 @@ import { Prisma } from '@prisma/client';
 import { z } from 'zod';
 import { getEnv } from '../../../config/env.js';
 import { getPrisma } from '../../../config/database.js';
+import { getRedis } from '../../../config/redis.js';
 import { errors } from '../../../shared/errors/app-error.js';
 import { hashPII, decryptPII } from '../../../shared/utils/encryption.js';
 import { encryptForOrg, decryptEnvelopeAuto } from '../../../shared/kms/tenant-dek.js';
@@ -36,6 +37,22 @@ const SIG_HEADER = 'x-highsale-signature';
 const TS_HEADER = 'x-highsale-timestamp';
 const KEY_HEADER = 'idempotency-key';
 const TOLERANCE_SECONDS = 300;
+
+/**
+ * SEC-008 / SEC-016: idempotency-key shape gate. Without this a signed
+ * sender could SETNX multi-MB keys to balloon Redis memory + pollute the
+ * DB unique index. CWE-799 Improper Control of Interaction Frequency.
+ */
+const IDEMPOTENCY_KEY_RE = /^[A-Za-z0-9_-]{16,128}$/;
+
+/**
+ * SEC-008: Redis SETNX hot-path dedup TTL. The DB `highsaleTransactionId`
+ * unique still backs us; Redis is the fast first-line that prevents two
+ * concurrent identical requests from both clearing the `findUnique` check
+ * before either insert lands. 24h matches the source-of-truth window the
+ * other webhook receivers use.
+ */
+const DEDUP_TTL_SECONDS = 86_400;
 
 function firstHeader(req: FastifyRequest, name: string): string | null {
   const h = req.headers[name];
@@ -92,6 +109,12 @@ export async function registerHighsaleIntegrationRoutes(app: FastifyInstance): P
     const sigRaw = firstHeader(req, SIG_HEADER);
     if (!ts || !idempotencyKey || !sigRaw) throw errors.invalidSignature();
 
+    // SEC-008 / SEC-016: idempotency-key shape gate. Run BEFORE Redis or
+    // DB touch so a malformed key can't allocate any backing resource.
+    if (!IDEMPOTENCY_KEY_RE.test(idempotencyKey)) {
+      throw errors.badRequest('Malformed idempotency-key (16–128 chars, [A-Za-z0-9_-])');
+    }
+
     const sig = stripSha256Prefix(sigRaw);
     const tsNum = Number.parseInt(ts, 10);
     if (!Number.isFinite(tsNum)) throw errors.invalidSignature();
@@ -117,7 +140,42 @@ export async function registerHighsaleIntegrationRoutes(app: FastifyInstance): P
     const env_ = parsed.data;
     const snap = env_.snapshot;
 
-    // ─── Idempotency check ──────────────────────────────────────────────
+    // ─── Idempotency check (two-layer: Redis SETNX → DB unique) ─────────
+    //
+    // SEC-008: prior to 2026-05-17 we relied solely on the DB unique on
+    // `highsaleTransactionId`. Two concurrent identical requests both
+    // passed `findUnique` before either INSERT landed; the second hit
+    // P2002 deep inside Prisma. The Redis SETNX layer here serialises
+    // the hot path so only one request proceeds to the DB write; the
+    // DB unique remains as the source-of-truth backstop on Redis miss
+    // (e.g. cache eviction, Redis restart).
+    const redis = getRedis();
+    const dedupKey = `idem:HIGHSALE:${snap.transaction_id}`;
+    const acquired = await redis.set(dedupKey, '1', 'EX', DEDUP_TTL_SECONDS, 'NX');
+    if (acquired !== 'OK') {
+      // Another in-flight worker is processing this transaction. Treat
+      // as replay — return 202 with replayed:true so the sender doesn't
+      // retry. The DB row is either being written right now or already
+      // written; either way the caller's intent is satisfied.
+      const prior = await prisma.creditEnrichment.findUnique({
+        where: { highsaleTransactionId: snap.transaction_id },
+        select: { id: true, vertical: true },
+      });
+      if (prior) {
+        reply.status(202);
+        return {
+          accepted: true,
+          snapshotId: prior.id,
+          replayed: true,
+          vertical: prior.vertical,
+        };
+      }
+      // Redis says taken but DB not yet written → tell sender we're
+      // processing concurrently; they should retry briefly.
+      reply.status(409);
+      return { accepted: false, reason: 'concurrent_in_flight' };
+    }
+
     const prior = await prisma.creditEnrichment.findUnique({
       where: { highsaleTransactionId: snap.transaction_id },
       select: { id: true, vertical: true },
