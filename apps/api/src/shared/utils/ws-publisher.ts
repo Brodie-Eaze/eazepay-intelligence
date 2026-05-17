@@ -130,7 +130,14 @@ function getOutbound(): OutboundWebhookService {
  */
 export async function publishWsEvent(orgId: string, event: object, redis?: Redis): Promise<void> {
   const r = redis ?? getRedisPublisher();
-  await r.publish(WS_CHANNEL, JSON.stringify(event));
+  // SEC-003: wrap the event in a tenant-aware envelope so the gateway
+  // can filter outbound sends by orgId. Prior to 2026-05-17 we published
+  // just `JSON.stringify(event)` and the gateway broadcast to every
+  // connected client — a cross-tenant data leak (CWE-200 / OWASP A01).
+  // Old subscribers that decode the envelope at the wire boundary keep
+  // working because the gateway unwraps before sending to clients; only
+  // the on-wire Redis frame format changed.
+  await r.publish(WS_CHANNEL, JSON.stringify({ orgId, event }));
 
   // Outbound webhook fanout. Errors here are LOGGED and RETHROWN — the calling
   // webhook worker is responsible for retry semantics (BullMQ exponential

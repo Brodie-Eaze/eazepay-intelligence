@@ -99,7 +99,10 @@ export function decryptPII(envelope: Buffer): string {
   const ct = envelope.subarray(1 + IV_LEN + TAG_LEN);
   try {
     // Non-null assertion safe — fail() above is `never`-returning. TS narrows.
-    const decipher = createDecipheriv('aes-256-gcm', kv!.key, iv);
+    // SEC: authTagLength enforces our 16-byte invariant. Without it Node
+    // accepts tags as short as 4 bytes, weakening AEAD forgery resistance
+    // from 2^128 to 2^32. CWE-310 / OWASP A02:2021 Cryptographic Failures.
+    const decipher = createDecipheriv('aes-256-gcm', kv!.key, iv, { authTagLength: TAG_LEN });
     decipher.setAuthTag(tag);
     const plain = Buffer.concat([decipher.update(ct), decipher.final()]);
     return plain.toString('utf8');

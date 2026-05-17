@@ -362,7 +362,11 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
   // ─── WS Ticket ────────────────────────────────────────────────────────────
   app.post('/auth/ws/ticket', { preHandler: [requireAuth, csrfGuard] }, async (req) => {
     const auth = req.auth!;
-    const issued = await service.issueWsTicket(auth.userId, auth.scope);
+    // SEC-003: pin the WS ticket to the caller's active org. The gateway
+    // uses this to filter outbound broadcasts so cross-tenant events
+    // never reach the client. Platform staff with a null orgId see
+    // everything by design (cross-tenant operator view).
+    const issued = await service.issueWsTicket(auth.userId, auth.scope, auth.orgId ?? null);
     await writeAuditLog({
       req,
       userId: auth.userId,
