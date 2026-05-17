@@ -11,6 +11,13 @@ const EnvSchema = z.object({
   PORT: z.coerce.number().int().positive().default(3010),
 
   DATABASE_URL: z.string().url(),
+  // Optional runtime URL. When set, the API connects as the NOBYPASSRLS
+  // `eazepay_app` role (see migration 20260517100000_phase1_6_eazepay_app_role)
+  // instead of the owner role from DATABASE_URL. The owner URL is only used
+  // for Prisma migrate. PRODUCTION MUST set this — startup self-check
+  // refuses to boot if NODE_ENV=production AND the connected role has
+  // BYPASSRLS=true. SOC 2 CC6.1 / OWASP A01:2021 Broken Access Control.
+  DATABASE_RUNTIME_URL: z.string().url().optional(),
   // Optional read replica. Analytics + dashboard reads route here when set.
   // Falls back to primary if the replica is unreachable at boot.
   DATABASE_REPLICA_URL: z.string().url().optional(),

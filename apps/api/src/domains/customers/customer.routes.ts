@@ -14,7 +14,31 @@ import { errors } from '../../shared/errors/app-error.js';
  * see one financial profile per real person, not one per application.
  *
  * Hash is hex-encoded for URL-safety.
+ *
+ * SEC-002 (CWE-639 Authorization Bypass Through User-Controlled Key /
+ *           OWASP A01:2021 Broken Access Control):
+ *   Prior to 2026-05-17 these routes had no tenant filter at all — any
+ *   authenticated user from any org could enumerate every consumer hash
+ *   across every tenant and decrypt their PII via /customers/:hash/pii.
+ *   The fix here pins every query (raw SQL + Prisma) to `org_id = auth.orgId`
+ *   AND keeps the RLS layer as defence-in-depth.
+ *
+ * SEC-014:
+ *   The PII reveal previously gated on legacy `auth.role` (a per-user
+ *   global role), so an OPERATOR in their own small org satisfied the
+ *   gate. Switched to `auth.orgRole` so the role check is scoped to the
+ *   org being queried.
  */
+
+/**
+ * Resolve the active org from `req.auth`. Every route in this file is
+ * tenant-scoped; calls without an active org are rejected before any DB
+ * query runs.
+ */
+function requireOrgScope(orgId: string | undefined): string {
+  if (!orgId) throw errors.badRequest('Customer queries require an active organisation');
+  return orgId;
+}
 
 const ListQuery = z.object({
   q: z.string().optional(),
@@ -53,7 +77,13 @@ export async function registerCustomerRoutes(app: FastifyInstance): Promise<void
   // ─── Customer book ───────────────────────────────────────────────────────
   app.get('/customers', { preHandler: requireAuth }, async (req) => {
     const q = ListQuery.parse(req.query);
-    const conds: Prisma.Sql[] = [];
+    const orgId = requireOrgScope(req.auth?.orgId);
+    // SEC-002: tenant predicate is the FIRST condition in the WHERE so it
+    // applies to every code path through this CTE. Both the inner `apps`
+    // CTE and the `funded` CTE are scoped — funded.email_hash joins
+    // applications a, which we re-scope by org_id again rather than rely
+    // on transitive scope through the join.
+    const conds: Prisma.Sql[] = [Prisma.sql`a.org_id = ${orgId}::uuid`];
     if (q.partnerId) conds.push(Prisma.sql`a.partner_id = ${q.partnerId}::uuid`);
     if (q.hasFunded === 'true')
       conds.push(
@@ -64,8 +94,7 @@ export async function registerCustomerRoutes(app: FastifyInstance): Promise<void
         Prisma.sql`NOT EXISTS (SELECT 1 FROM lender_decisions ld WHERE ld.application_id = a.id AND ld.funding_status = 'FUNDED')`,
       );
 
-    const where =
-      conds.length === 0 ? Prisma.sql`` : Prisma.sql`WHERE ${Prisma.join(conds, ' AND ')}`;
+    const where = Prisma.sql`WHERE ${Prisma.join(conds, ' AND ')}`;
 
     const rows = await prisma.$queryRaw<
       {
@@ -106,7 +135,8 @@ export async function registerCustomerRoutes(app: FastifyInstance): Promise<void
                COALESCE(SUM(ld.funding_amount), 0) AS total_funded
         FROM applications a
         JOIN lender_decisions ld ON ld.application_id = a.id
-        WHERE ld.funding_status = 'FUNDED'
+        WHERE a.org_id = ${orgId}::uuid
+          AND ld.funding_status = 'FUNDED'
         GROUP BY a.consumer_email_hash
       )
       SELECT apps.email_hash,
@@ -151,11 +181,15 @@ export async function registerCustomerRoutes(app: FastifyInstance): Promise<void
 
   // ─── Customer detail ─────────────────────────────────────────────────────
   app.get('/customers/:hash', { preHandler: requireAuth }, async (req) => {
+    const orgId = requireOrgScope(req.auth?.orgId);
     const params = z.object({ hash: z.string().regex(/^[a-f0-9]{64}$/) }).parse(req.params);
     const hashBuf = Buffer.from(params.hash, 'hex');
 
+    // SEC-002: pin to active org. A customer that exists in a sibling org
+    // with the same email hash must return 404 here, not their cross-tenant
+    // application history.
     const apps = await prisma.application.findMany({
-      where: { consumerEmailHash: hashBuf },
+      where: { consumerEmailHash: hashBuf, orgId },
       orderBy: { createdAt: 'desc' },
       include: {
         partner: { select: { id: true, name: true, externalId: true, industry: true } },
@@ -169,7 +203,10 @@ export async function registerCustomerRoutes(app: FastifyInstance): Promise<void
       decisionIds.length === 0
         ? []
         : await prisma.revenueEvent.findMany({
-            where: { lenderDecisionId: { in: decisionIds } },
+            // SEC-002: revenue events are transitively tenant-scoped via
+            // lender_decisions → applications.org_id which we filtered
+            // above, but pin explicitly here too as belt-and-braces.
+            where: { lenderDecisionId: { in: decisionIds }, orgId },
             orderBy: { effectiveAt: 'asc' },
           });
 
@@ -256,13 +293,27 @@ export async function registerCustomerRoutes(app: FastifyInstance): Promise<void
   // ─── PII reveal for a customer (across their applications) ───────────────
   app.get('/customers/:hash/pii', { preHandler: requireAuth }, async (req) => {
     const auth = req.auth!;
-    if (auth.role !== 'ADMIN' && auth.role !== 'OPERATOR') {
-      throw errors.forbidden('PII reveal requires ADMIN or OPERATOR role');
+    const orgId = requireOrgScope(auth.orgId);
+    // SEC-014 (was CWE-639): gate on PER-ORG role, not legacy global role.
+    // Prior to 2026-05-17 this checked `auth.role` (a user-level role),
+    // which any OPERATOR in their own tiny tenant satisfied — so it
+    // didn't actually block cross-tenant PII reveals in combination with
+    // the missing org filter (SEC-002). Now scoped to the org being
+    // queried via `auth.orgRole`, with platform staff still allowed via
+    // a separate check below for cross-tenant operator workflows.
+    const isPlatformStaff = auth.platformRole === 'SUPER' || auth.platformRole === 'STAFF';
+    if (!isPlatformStaff && auth.orgRole !== 'ADMIN' && auth.orgRole !== 'OPERATOR') {
+      throw errors.forbidden(
+        'PII reveal requires the ADMIN or OPERATOR role in the active organisation',
+      );
     }
     const params = z.object({ hash: z.string().regex(/^[a-f0-9]{64}$/) }).parse(req.params);
     const hashBuf = Buffer.from(params.hash, 'hex');
     const app = await prisma.application.findFirst({
-      where: { consumerEmailHash: hashBuf },
+      // SEC-002: pin to active org. Even if a sibling org has an
+      // application for the same email hash, this route only reveals
+      // PII rows owned by the caller's org.
+      where: { consumerEmailHash: hashBuf, orgId },
       orderBy: { createdAt: 'desc' },
     });
     if (!app) throw errors.notFound('Customer', params.hash);
@@ -295,10 +346,12 @@ export async function registerCustomerRoutes(app: FastifyInstance): Promise<void
   // demographics block by design — surfacing those requires the
   // `protected_class_read` permission via a separate endpoint.
   app.get('/customers/:hash/credit-enrichments', { preHandler: requireAuth }, async (req) => {
+    const orgId = requireOrgScope(req.auth?.orgId);
     const params = z.object({ hash: z.string().regex(/^[a-f0-9]{64}$/) }).parse(req.params);
     const hashBuf = Buffer.from(params.hash, 'hex');
+    // SEC-002: pin to active org. HighSale enrichments are tenant-scoped.
     const rows = await prisma.creditEnrichment.findMany({
-      where: { consumerEmailHash: hashBuf, deletedAt: null },
+      where: { consumerEmailHash: hashBuf, orgId, deletedAt: null },
       orderBy: { pulledAt: 'desc' },
       take: 10,
       select: {
@@ -444,7 +497,11 @@ export async function registerCustomerRoutes(app: FastifyInstance): Promise<void
   });
 
   // ─── Risk distribution ───────────────────────────────────────────────────
-  app.get('/analytics/risk-distribution', { preHandler: requireAuth }, async () => {
+  app.get('/analytics/risk-distribution', { preHandler: requireAuth }, async (req) => {
+    const orgId = requireOrgScope(req.auth?.orgId);
+    // SEC-002: aggregate per-tenant. Without the org_id filter this
+    // returned global cross-tenant credit-band distributions to any
+    // authenticated user — a form of consumer-profile aggregation leakage.
     const buckets = await prisma.$queryRaw<
       { bucket: number; n: bigint; avg_income: string | null; avg_propensity: string | null }[]
     >(Prisma.sql`
@@ -460,6 +517,7 @@ export async function registerCustomerRoutes(app: FastifyInstance): Promise<void
              AVG(noted_annual_income)::text AS avg_income,
              AVG(propensity_score)::text AS avg_propensity
       FROM applications
+      WHERE org_id = ${orgId}::uuid
       GROUP BY bucket
       ORDER BY bucket
     `);
@@ -499,7 +557,9 @@ export async function registerCustomerRoutes(app: FastifyInstance): Promise<void
   });
 
   // ─── Income / affordability distribution ─────────────────────────────────
-  app.get('/analytics/income-distribution', { preHandler: requireAuth }, async () => {
+  app.get('/analytics/income-distribution', { preHandler: requireAuth }, async (req) => {
+    const orgId = requireOrgScope(req.auth?.orgId);
+    // SEC-002: aggregate per-tenant — see /analytics/risk-distribution.
     const buckets = await prisma.$queryRaw<
       { bucket: number; n: bigint; avg_credit: number | null; avg_funded: string | null }[]
     >(Prisma.sql`
@@ -515,6 +575,7 @@ export async function registerCustomerRoutes(app: FastifyInstance): Promise<void
              AVG(credit_score) AS avg_credit,
              AVG(funding_estimate)::text AS avg_funded
       FROM applications
+      WHERE org_id = ${orgId}::uuid
       GROUP BY bucket
       ORDER BY bucket
     `);
@@ -544,7 +605,9 @@ export async function registerCustomerRoutes(app: FastifyInstance): Promise<void
 
   // ─── Propensity calibration ──────────────────────────────────────────────
   // How well does HighSale's propensity score predict actual approval / funding?
-  app.get('/analytics/propensity-calibration', { preHandler: requireAuth }, async () => {
+  app.get('/analytics/propensity-calibration', { preHandler: requireAuth }, async (req) => {
+    const orgId = requireOrgScope(req.auth?.orgId);
+    // SEC-002: aggregate per-tenant.
     const rows = await prisma.$queryRaw<
       { bucket: number; n: bigint; approved: bigint; funded: bigint }[]
     >(Prisma.sql`
@@ -553,7 +616,8 @@ export async function registerCustomerRoutes(app: FastifyInstance): Promise<void
              COUNT(*) FILTER (WHERE EXISTS (SELECT 1 FROM lender_decisions ld WHERE ld.application_id = applications.id AND ld.decision='APPROVED'))::bigint AS approved,
              COUNT(*) FILTER (WHERE EXISTS (SELECT 1 FROM lender_decisions ld WHERE ld.application_id = applications.id AND ld.funding_status='FUNDED'))::bigint AS funded
       FROM applications
-      WHERE propensity_score IS NOT NULL
+      WHERE org_id = ${orgId}::uuid
+        AND propensity_score IS NOT NULL
       GROUP BY bucket
       ORDER BY bucket
     `);
