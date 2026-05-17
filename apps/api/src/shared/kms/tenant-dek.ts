@@ -447,7 +447,12 @@ export async function decryptEnvelopeV2(prisma: PrismaClient, envelope: Buffer):
   const ct = envelope.subarray(V2_HEADER_LEN, envelope.length - TAG_LEN);
   const tag = envelope.subarray(envelope.length - TAG_LEN);
 
-  const decipher = createDecipheriv('aes-256-gcm', dek, iv);
+  // SEC: authTagLength enforces our 16-byte invariant. Without it Node's
+  // AES-GCM accepts truncated tags down to 4 bytes (RFC 5116 §5.2 minimum),
+  // weakening AEAD forgery resistance from 2^128 to 2^32 — an attacker who
+  // controls the ciphertext envelope could submit a short tag and slip past
+  // auth. CWE-310 / OWASP A02:2021 Cryptographic Failures.
+  const decipher = createDecipheriv('aes-256-gcm', dek, iv, { authTagLength: TAG_LEN });
   decipher.setAuthTag(tag);
   const plain = Buffer.concat([decipher.update(ct), decipher.final()]);
   return plain.toString('utf8');
