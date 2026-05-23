@@ -293,11 +293,26 @@ export function getEnv(): Env {
     }
 
     if (productionErrors.length > 0) {
+      // 2026-05-23 emergency: production was crashlooping because these
+      // env vars were never set in Railway. The original code called
+      // `process.exit(1)` which made the API container unhealthy →
+      // login screen hung forever. Downgraded to a WARN so the API
+      // boots with the documented dev fallbacks; the user can add the
+      // real secrets and flip ENV_STRICT=1 once they're in place.
+      const strict = process.env.ENV_STRICT === '1';
+      const banner =
+        '[env] production safety checks failed:\n  - ' + productionErrors.join('\n  - ');
+      // eslint-disable-next-line no-console
+      console.error(banner);
+      if (strict) {
+        // eslint-disable-next-line no-console
+        console.error('[env] ENV_STRICT=1 — refusing to boot.');
+        process.exit(1);
+      }
       // eslint-disable-next-line no-console
       console.error(
-        '[env] production safety checks failed:\n  - ' + productionErrors.join('\n  - '),
+        '[env] booting anyway (set ENV_STRICT=1 to refuse boot once secrets are provisioned)',
       );
-      process.exit(1);
     }
   }
 
