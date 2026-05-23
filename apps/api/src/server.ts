@@ -73,50 +73,87 @@ import { registerFxRoutes } from './domains/fx/fx.routes.js';
 import { registerAnalyticsWebSocket } from './websocket/analytics.gateway.js';
 
 /**
- * SEC-001 (CC6.1 / OWASP A01:2021): assert the runtime DB role does NOT
- * have BYPASSRLS. Called at the top of `buildServer` in production. Fail
- * fast and loud rather than serve traffic with RLS silently bypassed.
+ * SEC-001 (CC6.1 / OWASP A01:2021): check that the runtime DB role does
+ * NOT have BYPASSRLS. Called at the top of `buildServer` in production.
  *
- * The check is two layered:
+ * Behaviour is controlled by the `RLS_GUARD_MODE` env var:
+ *
+ *   warn  (DEFAULT, post-hotfix) — log an error and keep serving traffic.
+ *                                  Use during the migration window while
+ *                                  ops provisions the eazepay_app role +
+ *                                  DATABASE_RUNTIME_URL.
+ *   strict                       — refuse to boot. Switch to this AFTER
+ *                                  the runtime role is fully provisioned
+ *                                  to make the security guarantee a
+ *                                  build-time contract.
+ *   off                          — skip the check entirely. Local dev only.
+ *
+ * The hotfix on 2026-05-17 changed the default from a hard `throw` to
+ * `warn` because shipping a hard-fail startup guard without coordinating
+ * the ops cutover took production down. The check still surfaces the
+ * problem loudly in logs so it can't be silently forgotten.
+ *
+ * The check itself is two layered:
  *   1. `current_setting('is_superuser')` — Postgres superusers bypass
  *      every RLS policy unconditionally.
  *   2. `rolbypassrls` on `pg_roles WHERE rolname = current_user` — covers
  *      non-superuser roles that were created with `BYPASSRLS` explicitly.
- *
- * Either being true is a deploy-blocking misconfiguration: the operator
- * forgot to set `DATABASE_RUNTIME_URL` to the `eazepay_app` role, or
- * created that role with the wrong attributes.
  */
 async function assertRuntimeDbRoleNotBypassRls(log: ReturnType<typeof getLogger>): Promise<void> {
+  const mode = (process.env.RLS_GUARD_MODE ?? 'warn').toLowerCase();
+  if (mode === 'off') {
+    log.warn('rls.self_check.skipped — RLS_GUARD_MODE=off');
+    return;
+  }
   const prisma = getPrisma();
   type Row = { current_user: string; is_superuser: string; bypassrls: boolean };
-  const rows = await prisma.$queryRaw<Row[]>`
-    SELECT
-      current_user::text                              AS current_user,
-      current_setting('is_superuser')                 AS is_superuser,
-      (SELECT rolbypassrls FROM pg_roles WHERE rolname = current_user) AS bypassrls
-  `;
+  let rows: Row[] = [];
+  try {
+    rows = await prisma.$queryRaw<Row[]>`
+      SELECT
+        current_user::text                              AS current_user,
+        current_setting('is_superuser')                 AS is_superuser,
+        (SELECT rolbypassrls FROM pg_roles WHERE rolname = current_user) AS bypassrls
+    `;
+  } catch (err) {
+    // DB unreachable at boot — surface but don't crash. The next request
+    // through the auth path will produce a clearer error than "RLS check
+    // failed" if the DB is genuinely down.
+    log.error({ err }, 'rls.self_check.query_failed');
+    return;
+  }
   const row = rows[0];
   if (!row) {
     log.error('rls.self_check.no_row');
-    throw new Error('RLS self-check returned no row');
+    return;
   }
   const isSuperuser = row.is_superuser === 'on';
   const bypassesRls = row.bypassrls === true;
   if (isSuperuser || bypassesRls) {
+    const payload = {
+      currentUser: row.current_user,
+      isSuperuser,
+      bypassesRls,
+      mode,
+      remediation:
+        'Set DATABASE_RUNTIME_URL to the eazepay_app role and ALTER ROLE eazepay_app WITH LOGIN PASSWORD ...; see docs/RUNBOOK.md',
+    };
+    if (mode === 'strict') {
+      log.error(
+        payload,
+        'rls.self_check.bypass_detected — refusing to boot (RLS_GUARD_MODE=strict)',
+      );
+      throw new Error(
+        `Runtime DB role "${row.current_user}" bypasses RLS (superuser=${isSuperuser}, bypassrls=${bypassesRls}). RLS_GUARD_MODE=strict; refusing to boot.`,
+      );
+    }
     log.error(
-      {
-        currentUser: row.current_user,
-        isSuperuser,
-        bypassesRls,
-      },
-      'rls.self_check.bypass_detected — refusing to boot. Set DATABASE_RUNTIME_URL to the eazepay_app role; see docs/RUNBOOK.md.',
+      payload,
+      'rls.self_check.bypass_detected — serving traffic anyway because RLS_GUARD_MODE=warn (default). Flip to strict once runtime role is provisioned.',
     );
-    throw new Error(
-      `Runtime DB role "${row.current_user}" bypasses RLS (superuser=${isSuperuser}, bypassrls=${bypassesRls}). Refusing to boot in production.`,
-    );
+    return;
   }
-  log.info({ currentUser: row.current_user }, 'rls.self_check.ok');
+  log.info({ currentUser: row.current_user, mode }, 'rls.self_check.ok');
 }
 
 /**
