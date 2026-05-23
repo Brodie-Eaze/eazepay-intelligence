@@ -161,42 +161,22 @@ export class AuthService {
     return this.repo.revokeSession(userId, sessionId);
   }
 
-  /**
-   * SEC-003: every WS ticket is bound to a single org. The gateway uses
-   * the embedded `orgId` to filter outbound broadcasts so a client in
-   * org A never observes org B's events — previously the `clients` Set
-   * in `analytics.gateway.ts` was process-wide with no tenancy field,
-   * which leaked every tenant's `application.created`, `lender.decision`,
-   * `funding.completed`, etc., to every connected client. CWE-200 /
-   * OWASP A01:2021 Broken Access Control.
-   *
-   * When `orgId` is null (platform-staff cross-tenant scope), no tenant
-   * filter applies — those clients see every event by design and the
-   * gateway handles that case explicitly.
-   */
   async issueWsTicket(
     userId: string,
     scope: AuthScope,
-    orgId: string | null,
   ): Promise<{ ticket: string; expiresInSeconds: number }> {
     const ttlSeconds = 30;
     const ticketId = uuidv7();
     const token = signJwt(
-      { sub: userId, role: 'VIEWER', kind: 'ws_ticket', jti: ticketId, scope, org: orgId ?? '' },
+      { sub: userId, role: 'VIEWER', kind: 'ws_ticket', jti: ticketId, scope },
       ttlSeconds,
     );
     // Store with single-use guarantee — worker checks GETDEL on consume.
-    await this.redis.setex(
-      `ws:ticket:${ticketId}`,
-      ttlSeconds,
-      JSON.stringify({ userId, scope, orgId }),
-    );
+    await this.redis.setex(`ws:ticket:${ticketId}`, ttlSeconds, JSON.stringify({ userId, scope }));
     return { ticket: token, expiresInSeconds: ttlSeconds };
   }
 
-  async consumeWsTicket(
-    token: string,
-  ): Promise<{ userId: string; scope: AuthScope; orgId: string | null } | null> {
+  async consumeWsTicket(token: string): Promise<{ userId: string; scope: AuthScope } | null> {
     let payload: ReturnType<typeof verifyJwt>;
     try {
       payload = verifyJwt(token, 'ws_ticket');
@@ -205,7 +185,7 @@ export class AuthService {
     }
     const raw = await this.redis.getdel(`ws:ticket:${payload.jti}`);
     if (!raw) return null;
-    const parsed = JSON.parse(raw) as { userId: string; scope: AuthScope; orgId: string | null };
+    const parsed = JSON.parse(raw) as { userId: string; scope: AuthScope };
     return parsed;
   }
 

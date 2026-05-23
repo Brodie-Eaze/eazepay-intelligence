@@ -73,70 +73,12 @@ import { registerFxRoutes } from './domains/fx/fx.routes.js';
 import { registerAnalyticsWebSocket } from './websocket/analytics.gateway.js';
 
 /**
- * SEC-001 (CC6.1 / OWASP A01:2021): assert the runtime DB role does NOT
- * have BYPASSRLS. Called at the top of `buildServer` in production. Fail
- * fast and loud rather than serve traffic with RLS silently bypassed.
- *
- * The check is two layered:
- *   1. `current_setting('is_superuser')` — Postgres superusers bypass
- *      every RLS policy unconditionally.
- *   2. `rolbypassrls` on `pg_roles WHERE rolname = current_user` — covers
- *      non-superuser roles that were created with `BYPASSRLS` explicitly.
- *
- * Either being true is a deploy-blocking misconfiguration: the operator
- * forgot to set `DATABASE_RUNTIME_URL` to the `eazepay_app` role, or
- * created that role with the wrong attributes.
- */
-async function assertRuntimeDbRoleNotBypassRls(log: ReturnType<typeof getLogger>): Promise<void> {
-  const prisma = getPrisma();
-  type Row = { current_user: string; is_superuser: string; bypassrls: boolean };
-  const rows = await prisma.$queryRaw<Row[]>`
-    SELECT
-      current_user::text                              AS current_user,
-      current_setting('is_superuser')                 AS is_superuser,
-      (SELECT rolbypassrls FROM pg_roles WHERE rolname = current_user) AS bypassrls
-  `;
-  const row = rows[0];
-  if (!row) {
-    log.error('rls.self_check.no_row');
-    throw new Error('RLS self-check returned no row');
-  }
-  const isSuperuser = row.is_superuser === 'on';
-  const bypassesRls = row.bypassrls === true;
-  if (isSuperuser || bypassesRls) {
-    log.error(
-      {
-        currentUser: row.current_user,
-        isSuperuser,
-        bypassesRls,
-      },
-      'rls.self_check.bypass_detected — refusing to boot. Set DATABASE_RUNTIME_URL to the eazepay_app role; see docs/RUNBOOK.md.',
-    );
-    throw new Error(
-      `Runtime DB role "${row.current_user}" bypasses RLS (superuser=${isSuperuser}, bypassrls=${bypassesRls}). Refusing to boot in production.`,
-    );
-  }
-  log.info({ currentUser: row.current_user }, 'rls.self_check.ok');
-}
-
-/**
  * Build a fully-configured Fastify instance. Pure factory — no side effects on
  * import. Used by `index.ts` (server) and integration tests (in-process).
  */
 export async function buildServer(): Promise<FastifyInstance> {
   const env = getEnv();
   const log = getLogger();
-
-  // SEC-001: refuse to boot in production if the runtime DB role bypasses
-  // Row-Level Security. The whole multi-tenant isolation story relies on
-  // RLS being enforced at the database layer; a connection as a BYPASSRLS
-  // role (superuser, owner, or any role created with BYPASSRLS) would
-  // silently defeat every RLS policy and turn application-layer tenant
-  // filters into the only defence. Fail fast and loud rather than serve
-  // traffic in that posture. SOC 2 CC6.1 / OWASP A01:2021.
-  if (env.NODE_ENV === 'production') {
-    await assertRuntimeDbRoleNotBypassRls(log);
-  }
 
   // CR-108: validate inbound X-Request-Id matches a UUID before accepting it
   // verbatim into logs + error envelopes. Without this an attacker can

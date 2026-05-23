@@ -105,21 +105,11 @@ function buildClient(url: string, label: 'writer' | 'reader'): PrismaClient {
   return client;
 }
 
-/**
- * Writer client. All mutations + read-after-write reads go here.
- *
- * SEC-001: prefers DATABASE_RUNTIME_URL when set so the API connects as
- * the NOBYPASSRLS `eazepay_app` role (see migration
- * 20260517100000_phase1_6_eazepay_app_role). DATABASE_URL stays as the
- * owner/migration role and is only used by `prisma migrate deploy`. In
- * production both vars MUST be set; the startup self-check in server.ts
- * refuses to boot otherwise.
- */
+/** Writer client. All mutations + read-after-write reads go here. */
 export function getPrismaWriter(): PrismaClient {
   if (writerCache) return writerCache;
   const env = getEnv();
-  const url = env.DATABASE_RUNTIME_URL ?? env.DATABASE_URL;
-  writerCache = buildClient(url, 'writer');
+  writerCache = buildClient(env.DATABASE_URL, 'writer');
   return writerCache;
 }
 

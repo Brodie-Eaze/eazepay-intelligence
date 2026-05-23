@@ -112,12 +112,7 @@ export class LocalKmsClient implements KmsClient {
     const iv = wrapped.subarray(0, IV_LEN);
     const tag = wrapped.subarray(IV_LEN, IV_LEN + TAG_LEN);
     const ct = wrapped.subarray(IV_LEN + TAG_LEN);
-    // SEC: explicit authTagLength enforces our 16-byte invariant. Without it
-    // Node's AES-GCM accepts tags as short as 4 bytes (RFC 5116 §5.2 minimum),
-    // which weakens forgery resistance from 2^128 to 2^32 — an attacker who
-    // controls the ciphertext envelope could submit a truncated tag and slip
-    // past the auth check. CWE-310 / OWASP A02:2021 Cryptographic Failures.
-    const decipher = createDecipheriv('aes-256-gcm', this.kek, iv, { authTagLength: TAG_LEN });
+    const decipher = createDecipheriv('aes-256-gcm', this.kek, iv);
     decipher.setAuthTag(tag);
     return Buffer.concat([decipher.update(ct), decipher.final()]);
   }

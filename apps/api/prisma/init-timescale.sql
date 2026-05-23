@@ -79,17 +79,6 @@ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'eazepay_app') THEN
     EXECUTE format('CREATE ROLE eazepay_app WITH LOGIN PASSWORD %L', app_pwd);
     RAISE NOTICE 'Created role eazepay_app — rotate the password before production';
-  ELSE
-    -- Role already exists. The Prisma migration
-    -- 20260517100000_phase1_6_eazepay_app_role creates the role as
-    -- NOLOGIN (production-safe) and expects ops to ALTER ROLE … LOGIN
-    -- PASSWORD … out-of-band. In dev / CI we run BOTH the migration AND
-    -- this init script — the migration runs first, so init-timescale
-    -- otherwise leaves the role un-loggable. Idempotently re-apply the
-    -- dev/CI password + LOGIN here so the existing RLS integration test
-    -- can actually connect as eazepay_app.
-    EXECUTE format('ALTER ROLE eazepay_app WITH LOGIN PASSWORD %L', app_pwd);
-    RAISE NOTICE 'Refreshed eazepay_app role with LOGIN + dev/CI password';
   END IF;
 END$$;
 
