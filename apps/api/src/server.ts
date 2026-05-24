@@ -109,6 +109,14 @@ export async function buildServer(): Promise<FastifyInstance> {
     // is the platform's job; here we ensure no individual request can stall.
     connectionTimeout: 60_000,
     keepAliveTimeout: 65_000,
+    // 2026-05-24 emergency: Railway's internal Redis was returning ECONNRESET
+    // on cold-start subscribe → registerAnalyticsWebSocket exceeded the
+    // default 10s plugin timeout → AVV_ERR_PLUGIN_EXEC_TIMEOUT crashed
+    // boot. 60s gives the network the chance to settle. Once we're
+    // confident Redis is responsive at boot we can dial this back; the
+    // tradeoff is "slower fail on a genuinely-broken plugin" vs "wedged
+    // prod on a transient Redis stutter."
+    pluginTimeout: 60_000,
   });
 
   // ─── Raw-body capture for HMAC ───────────────────────────────────────────

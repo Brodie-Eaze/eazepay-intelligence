@@ -79,7 +79,18 @@ export async function registerAnalyticsWebSocket(app: FastifyInstance): Promise<
 
   if (!subscriberWired) {
     const sub = getRedisSubscriber();
-    await sub.subscribe(WS_CHANNEL);
+    // 2026-05-24 emergency: don't BLOCK plugin boot on Redis subscribe.
+    // A cold-start ECONNRESET was timing out Fastify's plugin loader and
+    // crashing the whole API on a transient network stutter. Now we
+    // schedule subscribe in the background; if it eventually succeeds
+    // the WS pubsub feed becomes live, if it fails we log loudly but
+    // the API itself stays up.
+    sub.subscribe(WS_CHANNEL).catch((err: unknown) => {
+      app.log.error(
+        { err },
+        'ws.redis_subscribe_failed_at_boot — WS feed will not deliver until manual restart',
+      );
+    });
     sub.on('message', (channel, raw) => {
       if (channel !== WS_CHANNEL) return;
       try {
