@@ -38,7 +38,10 @@ export function compositeRateLimit(args: {
     // unset to restore fail-closed posture). Original throws preserved
     // behind the env gate. Independent throttle still works via the
     // global @fastify/rate-limit plugin.
-    const failOpen = process.env.RATE_LIMIT_FAIL_OPEN === '1';
+    // 2026-05-24 emergency: forced fail-open (was env-gated, but the env var
+    // wasn't taking effect on Railway). Login can't be blocked by an infra
+    // outage. Revert this to env-gated once Redis is stable.
+    const failOpen = true || process.env.RATE_LIMIT_FAIL_OPEN === '1';
     const redis = getRedis();
     const buckets = args.keys(req).map((k) => `rl:${args.prefix}:${k}`);
     const pipe = redis.multi();
