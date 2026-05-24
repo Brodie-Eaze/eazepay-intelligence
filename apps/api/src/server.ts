@@ -208,11 +208,17 @@ export async function buildServer(): Promise<FastifyInstance> {
     global: true,
     max: env.RATE_LIMIT_PER_USER_PER_MIN,
     timeWindow: '1 minute',
-    redis: getRedis(),
+    // 2026-05-24 emergency: removed Redis backend (was `redis: getRedis()`).
+    // Railway's Redis was flapping with sustained ECONNRESET and the
+    // plugin with `skipOnError: false` was returning 500 on every request
+    // because the Redis-backed counter store kept timing out. In-memory
+    // store works per-pod which is acceptable for our single-replica
+    // deployment. Re-add Redis backend after Redis is stable.
     keyGenerator: (req) => req.auth?.userId ?? `ip:${req.ip}`,
-    // skipOnError=false means a Redis outage fails closed. That's correct
-    // for SOC 2 — we'd rather a brief outage than unbounded request volume.
-    skipOnError: false,
+    // skipOnError flipped from false → true during the incident. Fail
+    // OPEN on rate-limit errors so a transient backing-store hiccup
+    // doesn't 500 the entire API. Re-flip after Redis is stable.
+    skipOnError: true,
     addHeadersOnExceeding: {
       'x-ratelimit-limit': true,
       'x-ratelimit-remaining': true,
