@@ -11,6 +11,16 @@ function buildOptions(): RedisOptions {
     maxRetriesPerRequest: null, // BullMQ requires null
     enableReadyCheck: true,
     lazyConnect: false,
+    // 2026-05-24 emergency: bound Redis hot path so a flapping Railway
+    // Redis service can't hang every request 10+ seconds. With these
+    // bounds a stuttering connection produces fast errors that callers
+    // can degrade-gracefully around, instead of wedging Fastify.
+    //
+    // connectTimeout: cap initial TCP+auth handshake
+    // commandTimeout: cap each individual GET/SET/etc. ioredis cancels
+    //                 the in-flight command and reconnects in background.
+    connectTimeout: 5_000,
+    commandTimeout: 1_500,
   };
 }
 

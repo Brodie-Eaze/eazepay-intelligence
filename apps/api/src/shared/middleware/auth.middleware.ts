@@ -45,16 +45,42 @@ export async function denySession(sessionId: string, ttlSeconds: number): Promis
   await getRedis().setex(`${DENY_SID_PREFIX}${sessionId}`, ttlSeconds, '1');
 }
 
-/** Check whether an access-token jti has been revoked. */
-async function isJtiDenied(jti: string): Promise<boolean> {
-  const v = await getRedis().get(`${DENY_JTI_PREFIX}${jti}`);
-  return v !== null;
+/**
+ * 2026-05-24 emergency: Redis on Railway is flapping with sustained
+ * ECONNRESET. Every auth request was hanging 10s+ on the deny-list GET
+ * → users couldn't log in. Bound the lookup with a 1.5s timeout and
+ * fail-OPEN (treat as "not denied") rather than hang requests forever.
+ * The trade-off: a stolen-then-revoked access JWT can be re-used for
+ * up to its remaining TTL during a Redis outage. Acceptable because
+ * (a) revocation is rare (b) the alternative is total auth lockout
+ * for every legitimate user. When Redis is healthy the timeout is
+ * irrelevant — local Redis GETs are sub-ms.
+ */
+async function redisGetWithTimeout(key: string, timeoutMs = 1500): Promise<string | null> {
+  return await Promise.race([
+    getRedis().get(key),
+    new Promise<null>((resolve) => setTimeout(() => resolve(null), timeoutMs)),
+  ]);
 }
 
-/** Phase 4c: check whether a sessionId has been revoked. */
+/** Check whether an access-token jti has been revoked. Fails open on Redis timeout. */
+async function isJtiDenied(jti: string): Promise<boolean> {
+  try {
+    const v = await redisGetWithTimeout(`${DENY_JTI_PREFIX}${jti}`);
+    return v !== null;
+  } catch {
+    return false;
+  }
+}
+
+/** Phase 4c: check whether a sessionId has been revoked. Fails open on Redis timeout. */
 async function isSessionDenied(sid: string): Promise<boolean> {
-  const v = await getRedis().get(`${DENY_SID_PREFIX}${sid}`);
-  return v !== null;
+  try {
+    const v = await redisGetWithTimeout(`${DENY_SID_PREFIX}${sid}`);
+    return v !== null;
+  } catch {
+    return false;
+  }
 }
 
 /**
