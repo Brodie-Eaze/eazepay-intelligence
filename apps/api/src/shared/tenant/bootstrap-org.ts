@@ -19,6 +19,7 @@
  * pre-tenant-context code paths.
  */
 import type { PrismaClient } from '@prisma/client';
+import { v7 as uuidv7 } from 'uuid';
 
 let cached: string | undefined;
 
@@ -28,14 +29,35 @@ export async function getBootstrapOrgId(prisma: PrismaClient): Promise<string> {
     where: { slug: 'default' },
     select: { id: true },
   });
-  if (!row) {
-    throw new Error(
-      "Bootstrap org with slug='default' not found. The Phase 1.2a/1.2b/1.2c " +
-        'migrations and the bootstrap-org seed both depend on it existing.',
-    );
+  if (row) {
+    cached = row.id;
+    return cached;
   }
-  cached = row.id;
-  return cached;
+  // 2026-05-24 emergency: Railway prod DB was never seeded with the
+  // bootstrap org, so every login attempt hit this helper (via
+  // issueSession when a user has no Membership row), threw, and returned
+  // 500. Self-heal: create the row on first call. Idempotent under
+  // concurrent boots — the unique slug means at most one duplicate-create
+  // attempt that surfaces as Prisma P2002, which we recover from by
+  // re-reading.
+  // eslint-disable-next-line no-console
+  console.warn('[bootstrap-org] default org not found — seeding on-the-fly');
+  try {
+    const created = await prisma.organization.create({
+      data: { id: uuidv7(), slug: 'default', name: 'Default' },
+      select: { id: true },
+    });
+    cached = created.id;
+    return cached;
+  } catch (err) {
+    const retry = await prisma.organization.findUnique({
+      where: { slug: 'default' },
+      select: { id: true },
+    });
+    if (!retry) throw err;
+    cached = retry.id;
+    return cached;
+  }
 }
 
 /** Test-only reset. Never call from production code. */
