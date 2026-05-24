@@ -34,11 +34,24 @@ export { getExportStorage, setExportStorage, __resetExportStorageForTests };
 export async function registerExportStorageFromEnv(): Promise<void> {
   const explicit = process.env.EXPORT_STORAGE_DRIVER;
   if (process.env.NODE_ENV === 'production' && !explicit) {
-    throw new Error(
-      'export-storage: EXPORT_STORAGE_DRIVER must be explicitly set in production ' +
-        '(local on Railway loses exports across redeploys). Set to "s3" with the ' +
-        'EXPORT_S3_BUCKET / AWS_REGION / EXPORT_PRESIGN_TTL_SEC env vars.',
+    // 2026-05-23 emergency: was throw → crashed prod boot. Downgraded to
+    // a loud warning + fall back to local disk so the API actually starts.
+    // Local on Railway loses exports across redeploys but the rest of the
+    // platform (login, ingestion, dashboards) is more important than the
+    // export feature right now. Set EXPORT_STORAGE_DRIVER=s3 with the
+    // EXPORT_S3_BUCKET / AWS_REGION / EXPORT_PRESIGN_TTL_SEC env vars,
+    // then ENV_STRICT=1 to restore the hard-fail.
+    // eslint-disable-next-line no-console
+    console.error(
+      '[export-storage] EXPORT_STORAGE_DRIVER unset in production — falling back to local disk. ' +
+        'Exports will NOT survive a Railway redeploy. Set EXPORT_STORAGE_DRIVER=s3 to fix.',
     );
+    if (process.env.ENV_STRICT === '1') {
+      throw new Error(
+        'export-storage: EXPORT_STORAGE_DRIVER must be explicitly set in production ' +
+          '(ENV_STRICT=1 — refusing to boot).',
+      );
+    }
   }
   const driver = (explicit ?? 'local').toLowerCase();
   switch (driver) {
