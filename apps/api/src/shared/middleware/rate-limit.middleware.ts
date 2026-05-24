@@ -31,6 +31,14 @@ export function compositeRateLimit(args: {
   keys: (req: FastifyRequest) => string[];
 }): preHandlerHookHandler {
   return async (req) => {
+    // 2026-05-24 emergency: was fail-CLOSED on every Redis error, which
+    // returned 503 "Rate-limit infrastructure unavailable" to every login
+    // attempt while Railway's Redis was flapping. Flipped to fail-OPEN
+    // when RATE_LIMIT_FAIL_OPEN=1 (set on Railway during the incident,
+    // unset to restore fail-closed posture). Original throws preserved
+    // behind the env gate. Independent throttle still works via the
+    // global @fastify/rate-limit plugin.
+    const failOpen = process.env.RATE_LIMIT_FAIL_OPEN === '1';
     const redis = getRedis();
     const buckets = args.keys(req).map((k) => `rl:${args.prefix}:${k}`);
     const pipe = redis.multi();
@@ -44,16 +52,22 @@ export function compositeRateLimit(args: {
       results = await pipe.exec();
     } catch (err) {
       getLogger().warn(
-        { err, errorId: 'rate_limit_redis_down', prefix: args.prefix },
-        'rate-limit pipe rejected — failing closed',
+        { err, errorId: 'rate_limit_redis_down', prefix: args.prefix, failOpen },
+        failOpen
+          ? 'rate-limit pipe rejected — failing OPEN per RATE_LIMIT_FAIL_OPEN=1'
+          : 'rate-limit pipe rejected — failing closed',
       );
+      if (failOpen) return;
       throw errors.serviceUnavailable('Rate-limit infrastructure unavailable');
     }
     if (!results) {
       getLogger().warn(
-        { errorId: 'rate_limit_multi_rollback', prefix: args.prefix },
-        'rate-limit MULTI returned null — failing closed',
+        { errorId: 'rate_limit_multi_rollback', prefix: args.prefix, failOpen },
+        failOpen
+          ? 'rate-limit MULTI null — failing OPEN per RATE_LIMIT_FAIL_OPEN=1'
+          : 'rate-limit MULTI returned null — failing closed',
       );
+      if (failOpen) return;
       throw errors.serviceUnavailable('Rate-limit infrastructure unavailable');
     }
 
@@ -61,17 +75,19 @@ export function compositeRateLimit(args: {
       const incrResult = results[i * 2];
       if (!incrResult) {
         getLogger().warn(
-          { errorId: 'rate_limit_pipe_corrupt', prefix: args.prefix, bucketIndex: i },
-          'rate-limit incr missing from pipe result — failing closed',
+          { errorId: 'rate_limit_pipe_corrupt', prefix: args.prefix, bucketIndex: i, failOpen },
+          'rate-limit incr missing from pipe result',
         );
+        if (failOpen) return;
         throw errors.serviceUnavailable('Rate-limit infrastructure unavailable');
       }
       const [err, count] = incrResult;
       if (err) {
         getLogger().warn(
-          { err, errorId: 'rate_limit_incr_failed', prefix: args.prefix, bucketIndex: i },
-          'rate-limit incr errored — failing closed',
+          { err, errorId: 'rate_limit_incr_failed', prefix: args.prefix, bucketIndex: i, failOpen },
+          'rate-limit incr errored',
         );
+        if (failOpen) return;
         throw errors.serviceUnavailable('Rate-limit infrastructure unavailable');
       }
       if (typeof count === 'number' && count > args.max) {
