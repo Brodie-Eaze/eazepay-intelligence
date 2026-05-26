@@ -145,6 +145,7 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA public
 
 REVOKE UPDATE, DELETE ON audit_logs     FROM eazepay_worker_long;
 REVOKE UPDATE, DELETE ON revenue_events FROM eazepay_worker_long;
+REVOKE UPDATE, DELETE ON outbox_events  FROM eazepay_worker_long;
 
 ALTER ROLE eazepay_worker_long SET statement_timeout = '5min';
 ALTER ROLE eazepay_worker_long SET idle_in_transaction_session_timeout = '30s';
@@ -153,5 +154,5 @@ ALTER ROLE eazepay_worker_long SET lock_timeout = '10s';
 -- Sanity check the policy.
 DO $$
 BEGIN
-  RAISE NOTICE 'eazepay_app: stmt=30s idle=10s lock=5s; eazepay_worker_long: stmt=5min idle=30s lock=10s; UPDATE/DELETE REVOKED on audit_logs + revenue_events for both';
+  RAISE NOTICE 'eazepay_app: stmt=30s idle=10s lock=5s; eazepay_worker_long: stmt=5min idle=30s lock=10s; UPDATE/DELETE REVOKED on audit_logs + revenue_events + outbox_events for both';
 END$$;
