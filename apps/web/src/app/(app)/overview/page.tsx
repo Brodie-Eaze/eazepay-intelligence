@@ -8,6 +8,7 @@ import { formatMoney, formatNumber, formatPct } from '@/lib/format';
 import type { OverviewResponse } from '@/lib/types';
 import { useUser } from '@/lib/auth';
 import { CountUp } from '@/components/CountUp';
+import { MetricNumber } from '@/components/motion';
 import { WarehouseLandscape } from '@/components/WarehouseLandscape';
 import { DataFlowDiagram } from '@/components/DataFlowDiagram';
 import { LiveTickerContext } from '@/components/LiveTickerContext';
@@ -202,18 +203,15 @@ function HeroStat({
   format?: 'money' | 'pct' | 'pct-delta' | 'number';
 }): JSX.Element {
   const fmt = format ?? 'number';
-  const display =
-    value == null
-      ? '…'
-      : fmt === 'money'
-        ? formatMoney(value)
-        : fmt === 'pct'
-          ? formatPct(value)
-          : fmt === 'pct-delta'
-            ? `${value >= 0 ? '+' : ''}${formatPct(value)}`
-            : formatNumber(value);
   const positiveTrend = fmt === 'pct-delta' && value != null && value >= 0;
   const negativeTrend = fmt === 'pct-delta' && value != null && value < 0;
+
+  const formatter = (n: number): string => {
+    if (fmt === 'money') return formatMoney(n);
+    if (fmt === 'pct') return formatPct(n);
+    if (fmt === 'pct-delta') return `${n >= 0 ? '+' : ''}${formatPct(n)}`;
+    return formatNumber(n);
+  };
 
   return (
     <div>
@@ -223,7 +221,7 @@ function HeroStat({
           positiveTrend ? 'text-emerald-300' : negativeTrend ? 'text-rose-300' : 'text-surface'
         }`}
       >
-        {display}
+        {value == null ? '…' : <MetricNumber value={value} formatter={formatter} />}
       </div>
       {hint && <div className="text-[10px] text-blue-200/50 mt-0.5">{hint}</div>}
     </div>

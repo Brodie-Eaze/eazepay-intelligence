@@ -18,12 +18,20 @@ const TONE = {
 
 export function KpiCard({ label, value, delta, spark, hint }: Props): JSX.Element {
   return (
-    <div className="card px-4 py-3 flex flex-col gap-1.5">
+    <div className="card hover-lift px-4 py-3 flex flex-col gap-1.5">
       <div className="flex items-baseline justify-between">
-        <span className="text-[10px] uppercase tracking-[0.10em] text-muted font-medium">{label}</span>
-        {delta && <span className={`text-[11px] numeric font-medium ${TONE[delta.tone]}`}>{delta.text}</span>}
+        <span className="text-[10px] uppercase tracking-[0.10em] text-muted font-medium">
+          {label}
+        </span>
+        {delta && (
+          <span className={`text-[11px] numeric font-medium ${TONE[delta.tone]}`}>
+            {delta.text}
+          </span>
+        )}
       </div>
-      <div className="numeric text-[20px] leading-tight font-semibold text-ink tracking-tight">{value}</div>
+      <div className="numeric text-[20px] leading-tight font-semibold text-ink tracking-tight">
+        {value}
+      </div>
       {hint && <div className="text-[11px] text-muted leading-tight">{hint}</div>}
       {spark && spark.length > 0 && (
         <div className="h-7 -mx-1 mt-0.5">
