@@ -4,6 +4,8 @@ import { COOKIE, readCookie } from '../utils/cookies.js';
 import { verifyJwt } from '../utils/jwt.js';
 import { getPrisma } from '../../config/database.js';
 import { getRedis } from '../../config/redis.js';
+import { getLogger } from '../../config/logger.js';
+import { authDenylistFailopenTotal } from '../metrics/metrics.js';
 
 /**
  * Phase 4 (SEC-113): access-token deny-list. /auth/logout marks the access
@@ -56,18 +58,42 @@ export async function denySession(sessionId: string, ttlSeconds: number): Promis
  * for every legitimate user. When Redis is healthy the timeout is
  * irrelevant — local Redis GETs are sub-ms.
  */
-async function redisGetWithTimeout(key: string, timeoutMs = 1500): Promise<string | null> {
-  return await Promise.race([
-    getRedis().get(key),
-    new Promise<null>((resolve) => setTimeout(() => resolve(null), timeoutMs)),
-  ]);
+async function redisGetWithTimeout(
+  key: string,
+  timeoutMs = 1500,
+): Promise<{ value: string | null; timedOut: boolean }> {
+  // Track the timer so we can clear it once the GET resolves first —
+  // previously the setTimeout kept the Node event loop pinned alive for
+  // up to `timeoutMs` after the answer was already in hand, and under
+  // high RPS the unreferenced handles piled up into a measurable leak.
+  let timer: NodeJS.Timeout | undefined;
+  let timedOut = false;
+  const timeout = new Promise<null>((resolve) => {
+    timer = setTimeout(() => {
+      timedOut = true;
+      resolve(null);
+    }, timeoutMs);
+  });
+  try {
+    const value = await Promise.race([getRedis().get(key), timeout]);
+    return { value, timedOut };
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
 
 /** Check whether an access-token jti has been revoked. Fails open on Redis timeout. */
 async function isJtiDenied(jti: string): Promise<boolean> {
   try {
-    const v = await redisGetWithTimeout(`${DENY_JTI_PREFIX}${jti}`);
-    return v !== null;
+    const { value, timedOut } = await redisGetWithTimeout(`${DENY_JTI_PREFIX}${jti}`);
+    if (timedOut) {
+      getLogger().warn(
+        { errorId: 'auth_denylist_failopen', keyType: 'jti' },
+        'auth deny-list jti lookup timed out — failing open',
+      );
+      authDenylistFailopenTotal.inc({ key_type: 'jti' });
+    }
+    return value !== null;
   } catch {
     return false;
   }
@@ -76,8 +102,15 @@ async function isJtiDenied(jti: string): Promise<boolean> {
 /** Phase 4c: check whether a sessionId has been revoked. Fails open on Redis timeout. */
 async function isSessionDenied(sid: string): Promise<boolean> {
   try {
-    const v = await redisGetWithTimeout(`${DENY_SID_PREFIX}${sid}`);
-    return v !== null;
+    const { value, timedOut } = await redisGetWithTimeout(`${DENY_SID_PREFIX}${sid}`);
+    if (timedOut) {
+      getLogger().warn(
+        { errorId: 'auth_denylist_failopen', keyType: 'sid' },
+        'auth deny-list sid lookup timed out — failing open',
+      );
+      authDenylistFailopenTotal.inc({ key_type: 'sid' });
+    }
+    return value !== null;
   } catch {
     return false;
   }
