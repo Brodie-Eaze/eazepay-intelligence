@@ -1,7 +1,7 @@
 'use client';
 
-import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import { useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { api } from '@/lib/api';
 import { formatDateTime, formatMoney, formatNumber } from '@/lib/format';
@@ -12,6 +12,8 @@ import { RiskBand } from '@/components/RiskBand';
 import { Monogram } from '@/components/Monogram';
 import { KpiCard } from '@/components/KpiCard';
 import { StaggerList } from '@/components/motion';
+import { FilterBar, type FilterDef } from '@/components/ui/FilterBar';
+import { listOptions } from '@/lib/taxonomy';
 
 interface CustomerRow {
   emailHash: string;
@@ -28,21 +30,37 @@ interface CustomerRow {
   riskBand: string;
 }
 
-const BANDS = ['', 'PRIME', 'NEAR_PRIME', 'SUBPRIME', 'DEEP_SUBPRIME', 'UNSCORED'] as const;
-const FUNDED = ['', 'true', 'false'] as const;
+const FILTERS: FilterDef[] = [
+  {
+    key: 'risk-band',
+    label: 'Risk',
+    type: 'select',
+    options: listOptions('riskBand'),
+  },
+  {
+    key: 'funded',
+    label: 'Funded?',
+    type: 'select',
+    options: [
+      { value: 'true', label: 'Funded' },
+      { value: 'false', label: 'Not funded' },
+    ],
+  },
+];
 
 export default function CustomerBook(): JSX.Element {
-  const [riskBand, setRiskBand] = useState<(typeof BANDS)[number]>('');
-  const [hasFunded, setHasFunded] = useState<(typeof FUNDED)[number]>('');
+  const params = useSearchParams();
+  const riskBand = params.get('risk-band') ?? '';
+  const hasFunded = params.get('funded') ?? '';
 
   const q = useQuery({
     queryKey: ['customers.book', riskBand, hasFunded],
     queryFn: () => {
-      const params = new URLSearchParams();
-      if (riskBand) params.set('riskBand', riskBand);
-      if (hasFunded) params.set('hasFunded', hasFunded);
-      params.set('limit', '200');
-      return api<CustomerRow[]>(`/customers?${params.toString()}`);
+      const qp = new URLSearchParams();
+      if (riskBand) qp.set('riskBand', riskBand);
+      if (hasFunded) qp.set('hasFunded', hasFunded);
+      qp.set('limit', '200');
+      return api<CustomerRow[]>(`/customers?${qp.toString()}`);
     },
   });
 
@@ -60,23 +78,7 @@ export default function CustomerBook(): JSX.Element {
       <PageHeader
         title="Customer book"
         subtitle="Every individual who has flowed through the platform · deduped by encrypted email hash"
-        action={
-          <div className="flex items-center gap-2">
-            <Select
-              label="Risk"
-              value={riskBand}
-              onChange={setRiskBand as (v: string) => void}
-              options={BANDS}
-            />
-            <Select
-              label="Funded?"
-              value={hasFunded}
-              onChange={setHasFunded as (v: string) => void}
-              options={FUNDED}
-              display={(v) => (v === '' ? 'all' : v === 'true' ? 'Funded' : 'Not funded')}
-            />
-          </div>
-        }
+        action={<FilterBar filters={FILTERS} />}
       />
 
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
@@ -145,7 +147,7 @@ export default function CustomerBook(): JSX.Element {
                   </td>
                   <td className="numeric text-right text-ink">{c.applications}</td>
                   <td>
-                    <StatusPill>{c.latestStatus}</StatusPill>
+                    <StatusPill domain="application">{c.latestStatus}</StatusPill>
                   </td>
                   <td className="numeric text-right text-success font-medium">
                     {Number(c.totalFunded) > 0 ? formatMoney(c.totalFunded) : '—'}
@@ -167,43 +169,5 @@ export default function CustomerBook(): JSX.Element {
         </div>
       </SectionCard>
     </div>
-  );
-}
-
-function Select({
-  label,
-  value,
-  onChange,
-  options,
-  display,
-}: {
-  label: string;
-  value: string;
-  onChange: (v: string) => void;
-  options: readonly string[];
-  display?: (v: string) => string;
-}): JSX.Element {
-  return (
-    <label className="flex items-center gap-2 text-xs">
-      <span className="text-muted">{label}</span>
-      <select
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        className="bg-surface border border-line rounded-md px-2.5 py-1.5 text-ink2 outline-none focus:border-accent text-xs"
-      >
-        {options.map((o) => (
-          <option key={o} value={o}>
-            {display
-              ? display(o)
-              : o
-                ? o
-                    .replace(/_/g, ' ')
-                    .toLowerCase()
-                    .replace(/\b\w/g, (c) => c.toUpperCase())
-                : 'all'}
-          </option>
-        ))}
-      </select>
-    </label>
   );
 }

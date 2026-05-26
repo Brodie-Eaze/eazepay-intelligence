@@ -298,11 +298,7 @@ export default function UsersPage(): JSX.Element {
                       )}
                     </td>
                     <td>
-                      {u.mfaEnabled ? (
-                        <span className="pill pill-success">On</span>
-                      ) : (
-                        <span className="pill pill-muted">Off</span>
-                      )}
+                      <StatusPill domain="genericActive">{u.mfaEnabled ? 'ON' : 'OFF'}</StatusPill>
                     </td>
                     <td className="numeric text-right text-ink2">{u.activeSessions}</td>
                     <td className="numeric text-muted text-xs">

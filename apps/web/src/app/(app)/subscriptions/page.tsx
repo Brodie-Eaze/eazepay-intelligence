@@ -227,7 +227,9 @@ export default function OutboundWebhooksPage(): JSX.Element {
                   <td className="font-mono text-xs text-muted truncate max-w-[280px]">{s.url}</td>
                   <td className="text-xs text-ink2">{s.eventTypes.join(', ')}</td>
                   <td>
-                    <StatusPill>{s.isActive ? 'ACTIVE' : 'INACTIVE'}</StatusPill>
+                    <StatusPill domain="genericActive">
+                      {s.isActive ? 'ACTIVE' : 'INACTIVE'}
+                    </StatusPill>
                   </td>
                   <td className="text-right space-x-3">
                     <button
@@ -285,7 +287,7 @@ export default function OutboundWebhooksPage(): JSX.Element {
                     <span className="tag">{d.eventType}</span>
                   </td>
                   <td>
-                    <StatusPill>{d.status}</StatusPill>
+                    <StatusPill domain="webhook">{d.status}</StatusPill>
                   </td>
                   <td className="numeric text-ink2 text-xs">{d.attemptCount}</td>
                   <td className="numeric text-xs text-ink2">{d.lastResponseCode ?? '—'}</td>
