@@ -18,49 +18,83 @@
  * MUST source `orgId` from `req.auth.orgId`. This is only for genuinely
  * pre-tenant-context code paths.
  */
-import type { PrismaClient } from '@prisma/client';
+import { Prisma, type PrismaClient } from '@prisma/client';
 import { v7 as uuidv7 } from 'uuid';
+import { getLogger } from '../../config/logger.js';
 
 let cached: string | undefined;
+let inflight: Promise<string> | undefined;
 
 export async function getBootstrapOrgId(prisma: PrismaClient): Promise<string> {
   if (cached) return cached;
-  const row = await prisma.organization.findUnique({
-    where: { slug: 'default' },
-    select: { id: true },
-  });
-  if (row) {
-    cached = row.id;
-    return cached;
-  }
-  // 2026-05-24 emergency: Railway prod DB was never seeded with the
-  // bootstrap org, so every login attempt hit this helper (via
-  // issueSession when a user has no Membership row), threw, and returned
-  // 500. Self-heal: create the row on first call. Idempotent under
-  // concurrent boots — the unique slug means at most one duplicate-create
-  // attempt that surfaces as Prisma P2002, which we recover from by
-  // re-reading.
-  // eslint-disable-next-line no-console
-  console.warn('[bootstrap-org] default org not found — seeding on-the-fly');
-  try {
-    const created = await prisma.organization.create({
-      data: { id: uuidv7(), slug: 'default', name: 'Default' },
-      select: { id: true },
-    });
-    cached = created.id;
-    return cached;
-  } catch (err) {
-    const retry = await prisma.organization.findUnique({
-      where: { slug: 'default' },
-      select: { id: true },
-    });
-    if (!retry) throw err;
-    cached = retry.id;
-    return cached;
-  }
+  // Serialise concurrent callers. Without this, every parallel request at
+  // boot (e.g. burst of logins) racing through the read-miss path would
+  // each attempt an INSERT; all but one would hit P2002, recover, and
+  // re-read — wasted DB round-trips and noisy logs. One inflight at a
+  // time, every other caller awaits the same Promise.
+  if (inflight) return inflight;
+
+  inflight = (async (): Promise<string> => {
+    try {
+      const row = await prisma.organization.findUnique({
+        where: { slug: 'default' },
+        select: { id: true },
+      });
+      if (row) {
+        cached = row.id;
+        return cached;
+      }
+      // 2026-05-24 emergency: Railway prod DB was never seeded with the
+      // bootstrap org, so every login attempt hit this helper (via
+      // issueSession when a user has no Membership row), threw, and
+      // returned 500. Self-heal: create the row on first call.
+      // Idempotent under concurrent boots — the unique slug means at most
+      // one duplicate-create attempt across replicas that surfaces as
+      // Prisma P2002, which we recover from by re-reading. The inflight
+      // gate above prevents this *within* a process; P2002 catches
+      // cross-process races.
+      getLogger().warn(
+        { errorId: 'bootstrap_org_self_seed' },
+        'bootstrap-org default org not found — seeding on-the-fly',
+      );
+      try {
+        const created = await prisma.organization.create({
+          data: { id: uuidv7(), slug: 'default', name: 'Default' },
+          select: { id: true },
+        });
+        // Forensic trail: every auto-seed is recorded with the resulting
+        // orgId so an operator investigating mystery orgs can correlate.
+        getLogger().warn(
+          { errorId: 'bootstrap_org_auto_seeded', orgId: created.id },
+          'bootstrap-org default org auto-seeded',
+        );
+        cached = created.id;
+        return cached;
+      } catch (err) {
+        // Only recover from the unique-violation race; any other failure
+        // (connection, permission, schema drift) is a real bug and must
+        // surface, not be swallowed as "self-heal succeeded".
+        if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
+          const retry = await prisma.organization.findUnique({
+            where: { slug: 'default' },
+            select: { id: true },
+          });
+          if (!retry) throw err;
+          cached = retry.id;
+          return cached;
+        }
+        throw err;
+      }
+    } finally {
+      inflight = undefined;
+    }
+  })();
+
+  return inflight;
 }
 
 /** Test-only reset. Never call from production code. */
 export function __resetBootstrapOrgCacheForTests(): void {
   cached = undefined;
+  inflight = undefined;
 }
