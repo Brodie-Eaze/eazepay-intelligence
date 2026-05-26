@@ -28,6 +28,8 @@ import {
   type SidebarItem,
 } from '@/components/ui/EngineeringReferenceSidebar';
 import { ScrollProgress } from '@/components/ui/ScrollProgress';
+import { AnchorLink } from '@/components/ui/AnchorLink';
+import { CopyButton } from '@/components/ui/CopyButton';
 
 export const metadata: Metadata = {
   title: 'Eaze Intelligence · engineering reference + data flow',
@@ -98,6 +100,14 @@ function slugify(s: string): string {
     .replace(/(^-|-$)/g, '');
 }
 
+function stepAnchorId(step: FlowStep): string {
+  return `flow-${step.index.replace(/\./g, '-')}`;
+}
+
+function cardAnchorId(card: ReferenceCard): string {
+  return `ref-${card.index.toLowerCase().replace(/\./g, '-')}`;
+}
+
 // ─── primitives ─────────────────────────────────────────────────────────────
 
 function ActorBadge({ actor }: { actor: Actor }): JSX.Element {
@@ -152,13 +162,17 @@ function TableRow({ t }: { t: TableRef }): JSX.Element {
 // ─── flow step ──────────────────────────────────────────────────────────────
 
 function StepCard({ step }: { step: FlowStep }): JSX.Element {
+  const id = stepAnchorId(step);
   return (
-    <div className="border border-slate-200 rounded-xl p-6 bg-white">
+    <div id={id} className="group border border-slate-200 rounded-xl p-6 bg-white scroll-mt-12">
       <div className="flex items-center gap-3 mb-3">
         <span className="text-xs font-mono text-slate-400">{step.index}</span>
         <ActorBadge actor={step.actor} />
       </div>
-      <h3 className="text-lg font-semibold text-slate-900 mb-2 tracking-tight">{step.title}</h3>
+      <div className="flex items-start gap-2 mb-2">
+        <h3 className="text-lg font-semibold text-slate-900 tracking-tight">{step.title}</h3>
+        <AnchorLink targetId={id} className="mt-1.5" />
+      </div>
       <p className="text-sm text-slate-600 leading-relaxed">{step.description}</p>
 
       {step.tags && step.tags.length > 0 && (
@@ -198,9 +212,16 @@ function StepCard({ step }: { step: FlowStep }): JSX.Element {
               {step.code.title}
             </div>
           )}
-          <pre className="bg-slate-900 text-slate-100 text-[12px] leading-relaxed p-4 rounded-lg overflow-x-auto font-mono">
-            {step.code.body}
-          </pre>
+          <div className="relative">
+            <CopyButton
+              value={step.code.body}
+              label="Copy code"
+              className="absolute top-2 right-2 z-10"
+            />
+            <pre className="bg-slate-900 text-slate-100 text-[12px] leading-relaxed p-4 pr-12 rounded-lg overflow-x-auto font-mono">
+              {step.code.body}
+            </pre>
+          </div>
         </div>
       )}
     </div>
@@ -233,13 +254,17 @@ function PhaseSection({ phase }: { phase: FlowPhase }): JSX.Element {
 // ─── reference surface ─────────────────────────────────────────────────────
 
 function SurfaceCard({ card }: { card: ReferenceCard }): JSX.Element {
+  const id = cardAnchorId(card);
   return (
-    <div className="border border-slate-200 rounded-xl p-6 bg-white">
+    <div id={id} className="group border border-slate-200 rounded-xl p-6 bg-white scroll-mt-12">
       <div className="flex items-center gap-3 mb-3">
         <span className="text-xs font-mono text-slate-400">{card.index}</span>
         <ActorBadge actor={card.actor} />
       </div>
-      <h3 className="text-lg font-semibold text-slate-900 mb-3 tracking-tight">{card.title}</h3>
+      <div className="flex items-start gap-2 mb-3">
+        <h3 className="text-lg font-semibold text-slate-900 tracking-tight">{card.title}</h3>
+        <AnchorLink targetId={id} className="mt-1.5" />
+      </div>
 
       <div className="space-y-2">
         <div>
