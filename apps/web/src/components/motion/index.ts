@@ -12,4 +12,5 @@
  */
 export { PageTransition } from './PageTransition';
 export { StaggerList } from './StaggerList';
+export { RevealOnScroll } from './RevealOnScroll';
 export { usePrefersReducedMotion } from './usePrefersReducedMotion';
