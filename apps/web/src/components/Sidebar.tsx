@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useUser } from '@/lib/auth';
+import { StaggerList } from '@/components/motion';
 import {
   LayoutDashboard,
   Radio,
@@ -228,7 +229,7 @@ export function Sidebar(): JSX.Element {
           <div className="px-3 text-[10px] font-semibold uppercase tracking-[0.16em] text-soft mb-2">
             {group.label}
           </div>
-          <nav className="space-y-0.5">
+          <StaggerList as="nav" className="space-y-0.5" stagger={25} maxAnimated={12}>
             {group.items.map((item) => {
               const active = item.href === activeHref;
               const Icon = item.icon;
@@ -251,7 +252,7 @@ export function Sidebar(): JSX.Element {
                 </Link>
               );
             })}
-          </nav>
+          </StaggerList>
         </div>
       ))}
 
