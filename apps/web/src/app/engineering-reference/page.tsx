@@ -39,55 +39,29 @@ export const metadata: Metadata = {
 
 // ─── helpers ────────────────────────────────────────────────────────────────
 
+// Palette is locked to ink + accent + slate. Only the OPERATOR actor — the
+// audience for this doc — is highlighted in accent. Everything else is slate;
+// the actor label text itself does the distinguishing work.
 function actorColor(actor: Actor): string {
-  switch (actor) {
-    case 'OPERATOR':
-      return 'bg-indigo-50 text-indigo-700 ring-indigo-200';
-    case 'EAZEPAY':
-      return 'bg-emerald-50 text-emerald-700 ring-emerald-200';
-    case 'VENDOR':
-      return 'bg-violet-50 text-violet-700 ring-violet-200';
-    case 'LENDER':
-      return 'bg-amber-50 text-amber-700 ring-amber-200';
-    case 'EXTERNAL':
-      return 'bg-rose-50 text-rose-700 ring-rose-200';
-    case 'SYSTEM':
-    default:
-      return 'bg-slate-100 text-slate-700 ring-slate-200';
+  if (actor === 'OPERATOR') {
+    return 'bg-accentSoft text-accent ring-accent/30';
   }
+  return 'bg-slate-100 text-slate-700 ring-slate-200';
 }
 
 function tagColor(kind: CardKind): string {
-  switch (kind) {
-    case 'HTTP':
-      return 'bg-slate-900 text-white';
-    case 'SYSTEM':
-      return 'bg-slate-100 text-slate-700 ring-slate-200';
-    case 'DATA':
-      return 'bg-blue-50 text-blue-700 ring-blue-200';
-    case 'EXTERNAL':
-      return 'bg-rose-50 text-rose-700 ring-rose-200';
-    case 'NOTIFY':
-      return 'bg-amber-50 text-amber-700 ring-amber-200';
-    case 'WORKER':
-      return 'bg-violet-50 text-violet-700 ring-violet-200';
-    case 'PAGE':
-      return 'bg-indigo-50 text-indigo-700 ring-indigo-200';
-    default:
-      return 'bg-slate-100 text-slate-700 ring-slate-200';
+  if (kind === 'HTTP') {
+    return 'bg-ink text-white';
   }
+  return 'bg-line2 text-slate-700 ring-line';
 }
 
 function methodColor(method: Endpoint['method']): string {
   switch (method) {
     case 'GET':
-      return 'bg-emerald-600 text-white';
+      return 'bg-accent text-white';
     case 'POST':
-      return 'bg-indigo-600 text-white';
-    case 'PATCH':
-      return 'bg-amber-600 text-white';
-    case 'DELETE':
-      return 'bg-rose-600 text-white';
+      return 'bg-ink text-white';
     default:
       return 'bg-slate-600 text-white';
   }
@@ -121,16 +95,17 @@ function ActorBadge({ actor }: { actor: Actor }): JSX.Element {
 }
 
 function TagBadge({ tag }: { tag: SurfaceTag }): JSX.Element {
+  const isHttp = tag.kind === 'HTTP';
   return (
     <div className="flex items-center gap-2">
       <span
-        className={`inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold tracking-wider ring-1 ring-inset ${tagColor(tag.kind)}`}
+        className={`inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold tracking-wider ${isHttp ? '' : 'ring-1 ring-inset'} ${tagColor(tag.kind)}`}
       >
         {tag.kind}
       </span>
       <div className="text-sm">
         <span className="font-medium text-slate-900">{tag.label}</span>
-        {tag.sub && <span className="text-slate-500 ml-2">{tag.sub}</span>}
+        {tag.sub && <span className="text-slate-600 ml-2">{tag.sub}</span>}
       </div>
     </div>
   );
@@ -145,7 +120,7 @@ function EndpointRow({ endpoint }: { endpoint: Endpoint }): JSX.Element {
         {endpoint.method}
       </span>
       <code className="font-mono text-xs text-slate-800">{endpoint.path}</code>
-      {endpoint.note && <span className="text-xs text-slate-500">· {endpoint.note}</span>}
+      {endpoint.note && <span className="text-xs text-slate-600">· {endpoint.note}</span>}
     </div>
   );
 }
@@ -164,7 +139,7 @@ function TableRow({ t }: { t: TableRef }): JSX.Element {
 function StepCard({ step }: { step: FlowStep }): JSX.Element {
   const id = stepAnchorId(step);
   return (
-    <div id={id} className="group border border-slate-200 rounded-xl p-6 bg-white scroll-mt-12">
+    <div id={id} className="group border border-line rounded-2xl p-6 bg-white scroll-mt-12">
       <div className="flex items-center gap-3 mb-3">
         <span className="text-xs font-mono text-slate-400">{step.index}</span>
         <ActorBadge actor={step.actor} />
@@ -184,8 +159,8 @@ function StepCard({ step }: { step: FlowStep }): JSX.Element {
       )}
 
       {step.endpoints && step.endpoints.length > 0 && (
-        <div className="mt-4 pt-4 border-t border-slate-100">
-          <div className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold mb-1">
+        <div className="mt-4 pt-4 border-t border-line2">
+          <div className="text-[10px] uppercase tracking-wider text-slate-600 font-semibold mb-1">
             HTTP Endpoints
           </div>
           {step.endpoints.map((e, i) => (
@@ -195,8 +170,8 @@ function StepCard({ step }: { step: FlowStep }): JSX.Element {
       )}
 
       {step.tables && step.tables.length > 0 && (
-        <div className="mt-4 pt-4 border-t border-slate-100">
-          <div className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold mb-1">
+        <div className="mt-4 pt-4 border-t border-line2">
+          <div className="text-[10px] uppercase tracking-wider text-slate-600 font-semibold mb-1">
             Database Tables
           </div>
           {step.tables.map((t, i) => (
@@ -206,9 +181,9 @@ function StepCard({ step }: { step: FlowStep }): JSX.Element {
       )}
 
       {step.code && (
-        <div className="mt-4 pt-4 border-t border-slate-100">
+        <div className="mt-4 pt-4 border-t border-line2">
           {step.code.title && (
-            <div className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold mb-1">
+            <div className="text-[10px] uppercase tracking-wider text-slate-600 font-semibold mb-1">
               {step.code.title}
             </div>
           )}
@@ -218,7 +193,7 @@ function StepCard({ step }: { step: FlowStep }): JSX.Element {
               label="Copy code"
               className="absolute top-2 right-2 z-10"
             />
-            <pre className="bg-slate-900 text-slate-100 text-[12px] leading-relaxed p-4 pr-12 rounded-lg overflow-x-auto font-mono">
+            <pre className="bg-ink text-slate-100 text-[12px] leading-relaxed p-4 pr-12 rounded-lg overflow-x-auto font-mono">
               {step.code.body}
             </pre>
           </div>
@@ -233,7 +208,7 @@ function PhaseSection({ phase }: { phase: FlowPhase }): JSX.Element {
   return (
     <section id={phaseId} className="scroll-mt-12">
       <div className="flex items-start gap-4 mb-4">
-        <span className="inline-flex items-center justify-center min-w-[2.5rem] h-10 rounded-lg bg-slate-900 text-white text-sm font-mono">
+        <span className="inline-flex items-center justify-center min-w-[2.5rem] h-10 rounded-lg bg-ink text-white text-sm font-mono">
           {String(phase.index).padStart(2, '0')}
         </span>
         <div>
@@ -256,7 +231,7 @@ function PhaseSection({ phase }: { phase: FlowPhase }): JSX.Element {
 function SurfaceCard({ card }: { card: ReferenceCard }): JSX.Element {
   const id = cardAnchorId(card);
   return (
-    <div id={id} className="group border border-slate-200 rounded-xl p-6 bg-white scroll-mt-12">
+    <div id={id} className="group border border-line rounded-2xl p-6 bg-white scroll-mt-12">
       <div className="flex items-center gap-3 mb-3">
         <span className="text-xs font-mono text-slate-400">{card.index}</span>
         <ActorBadge actor={card.actor} />
@@ -268,13 +243,13 @@ function SurfaceCard({ card }: { card: ReferenceCard }): JSX.Element {
 
       <div className="space-y-2">
         <div>
-          <span className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold">
+          <span className="text-[10px] uppercase tracking-wider text-slate-600 font-semibold">
             What it does:
           </span>
           <p className="text-sm text-slate-600 leading-relaxed mt-0.5">{card.whatItDoes}</p>
         </div>
         <div>
-          <span className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold">
+          <span className="text-[10px] uppercase tracking-wider text-slate-600 font-semibold">
             What it&apos;s for:
           </span>
           <p className="text-sm text-slate-600 leading-relaxed mt-0.5">{card.whatItsFor}</p>
@@ -290,15 +265,15 @@ function SurfaceCard({ card }: { card: ReferenceCard }): JSX.Element {
       )}
 
       {card.appearsIn && card.appearsIn.length > 0 && (
-        <div className="mt-4 pt-4 border-t border-slate-100">
-          <div className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold mb-2">
+        <div className="mt-4 pt-4 border-t border-line2">
+          <div className="text-[10px] uppercase tracking-wider text-slate-600 font-semibold mb-2">
             Appears in flow:
           </div>
           <div className="flex flex-wrap gap-1.5">
             {card.appearsIn.map((flow, i) => (
               <span
                 key={i}
-                className="inline-flex items-center px-2 py-0.5 rounded text-[11px] bg-slate-50 text-slate-700 ring-1 ring-slate-200"
+                className="inline-flex items-center px-2 py-0.5 rounded text-[11px] bg-line2 text-slate-700 ring-1 ring-line"
               >
                 {flow}
               </span>
@@ -308,8 +283,8 @@ function SurfaceCard({ card }: { card: ReferenceCard }): JSX.Element {
       )}
 
       {card.endpoints && card.endpoints.length > 0 && (
-        <div className="mt-4 pt-4 border-t border-slate-100">
-          <div className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold mb-1">
+        <div className="mt-4 pt-4 border-t border-line2">
+          <div className="text-[10px] uppercase tracking-wider text-slate-600 font-semibold mb-1">
             HTTP Endpoints
           </div>
           {card.endpoints.map((e, i) => (
@@ -319,8 +294,8 @@ function SurfaceCard({ card }: { card: ReferenceCard }): JSX.Element {
       )}
 
       {card.tables && card.tables.length > 0 && (
-        <div className="mt-4 pt-4 border-t border-slate-100">
-          <div className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold mb-1">
+        <div className="mt-4 pt-4 border-t border-line2">
+          <div className="text-[10px] uppercase tracking-wider text-slate-600 font-semibold mb-1">
             Database Tables
           </div>
           {card.tables.map((t, i) => (
@@ -337,7 +312,7 @@ function ReferenceSectionBlock({ section }: { section: ReferenceSection }): JSX.
   return (
     <section id={sectionId} className="scroll-mt-12">
       <div className="flex items-start gap-4 mb-4">
-        <span className="inline-flex items-center justify-center min-w-[2.5rem] h-10 rounded-lg bg-slate-900 text-white text-sm font-mono">
+        <span className="inline-flex items-center justify-center min-w-[2.5rem] h-10 rounded-lg bg-ink text-white text-sm font-mono">
           {section.index}
         </span>
         <div>
@@ -361,16 +336,16 @@ function StatsRow(): JSX.Element {
   const flowSteps = FLOW.reduce((n, p) => n + p.steps.length, 0);
   const refSurfaces = REFERENCE.reduce((n, s) => n + s.cards.length, 0);
   return (
-    <div className="mt-10 grid grid-cols-4 gap-x-8 gap-y-4 py-8 border-y border-slate-200">
+    <div className="mt-10 grid grid-cols-4 gap-x-8 gap-y-4 py-8 border-y border-line">
       <div>
         <div className="text-4xl font-semibold text-slate-900 tracking-tight">{FLOW.length}</div>
-        <div className="text-[10px] uppercase tracking-wider text-slate-500 mt-1 font-semibold">
+        <div className="text-[10px] uppercase tracking-wider text-slate-600 mt-1 font-semibold">
           Flow phases
         </div>
       </div>
       <div>
         <div className="text-4xl font-semibold text-slate-900 tracking-tight">{flowSteps}</div>
-        <div className="text-[10px] uppercase tracking-wider text-slate-500 mt-1 font-semibold">
+        <div className="text-[10px] uppercase tracking-wider text-slate-600 mt-1 font-semibold">
           Flow steps
         </div>
       </div>
@@ -378,13 +353,13 @@ function StatsRow(): JSX.Element {
         <div className="text-4xl font-semibold text-slate-900 tracking-tight">
           {REFERENCE.length}
         </div>
-        <div className="text-[10px] uppercase tracking-wider text-slate-500 mt-1 font-semibold">
+        <div className="text-[10px] uppercase tracking-wider text-slate-600 mt-1 font-semibold">
           Reference parts
         </div>
       </div>
       <div>
         <div className="text-4xl font-semibold text-slate-900 tracking-tight">{refSurfaces}</div>
-        <div className="text-[10px] uppercase tracking-wider text-slate-500 mt-1 font-semibold">
+        <div className="text-[10px] uppercase tracking-wider text-slate-600 mt-1 font-semibold">
           Surfaces documented
         </div>
       </div>
@@ -406,20 +381,22 @@ export default function EngineeringReferencePage(): JSX.Element {
     numeral: section.index,
   }));
 
+  const buildSha = process.env.NEXT_PUBLIC_BUILD_SHA?.slice(0, 7) ?? 'dev';
+
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-900 antialiased">
+    <div className="min-h-screen bg-paper text-slate-900 antialiased">
       <ScrollProgress />
       <div className="flex">
         <EngineeringReferenceSidebar
           flowItems={flowItems}
           referenceItems={referenceItems}
-          buildSha="v1"
+          buildSha={buildSha}
         />
 
         <main className="flex-1 max-w-4xl mx-auto px-10 py-12">
           {/* Header */}
           <div className="mb-2">
-            <span className="inline-flex items-center px-2.5 py-1 rounded-full bg-slate-900 text-white text-[10px] font-semibold tracking-wider">
+            <span className="inline-flex items-center px-2.5 py-1 rounded-full bg-ink text-white text-[10px] font-semibold tracking-wider">
               ● ENGINEERING REFERENCE + DATA FLOW
             </span>
           </div>
@@ -439,7 +416,7 @@ export default function EngineeringReferencePage(): JSX.Element {
           <StatsRow />
 
           {/* Part A banner */}
-          <div className="mt-12 rounded-2xl bg-slate-900 text-white p-8">
+          <div className="mt-12 rounded-2xl bg-ink text-white p-8">
             <div className="text-[10px] uppercase tracking-wider text-slate-400 font-semibold">
               Part A
             </div>
@@ -458,7 +435,7 @@ export default function EngineeringReferencePage(): JSX.Element {
           </div>
 
           {/* Part B banner */}
-          <div className="mt-16 rounded-2xl bg-slate-900 text-white p-8">
+          <div className="mt-16 rounded-2xl bg-ink text-white p-8">
             <div className="text-[10px] uppercase tracking-wider text-slate-400 font-semibold">
               Part B
             </div>
@@ -477,12 +454,12 @@ export default function EngineeringReferencePage(): JSX.Element {
           </div>
 
           {/* Footer */}
-          <div className="mt-20 pt-8 border-t border-slate-200 text-sm text-slate-600 space-y-2">
+          <div className="mt-20 pt-8 border-t border-line text-sm text-slate-600 space-y-2">
             <div>
               <strong className="text-slate-900">Repo:</strong>{' '}
               <a
                 href="https://github.com/Brodie-Eaze/eazepay-intelligence"
-                className="text-indigo-700 hover:underline"
+                className="text-accent hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 rounded"
               >
                 github.com/Brodie-Eaze/eazepay-intelligence
               </a>
@@ -494,8 +471,8 @@ export default function EngineeringReferencePage(): JSX.Element {
                 apps/web/src/lib/engineering-reference-data.ts
               </code>
             </div>
-            <div className="text-xs text-slate-500 mt-4">
-              Format-matched to the EazePay platform engineering reference. Generated 2026-05-24.
+            <div className="text-xs text-slate-600 mt-4">
+              Format-matched to the EazePay platform engineering reference. Build {buildSha}.
             </div>
           </div>
         </main>
