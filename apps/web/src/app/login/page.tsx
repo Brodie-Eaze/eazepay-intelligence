@@ -79,7 +79,7 @@ export default function LoginPage(): JSX.Element {
       setSession(session);
       router.replace('/overview');
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'Login failed');
+      setError(err instanceof ApiError ? err.message : 'Couldn’t sign in. Try again.');
     } finally {
       setBusy(false);
     }
@@ -140,8 +140,8 @@ export default function LoginPage(): JSX.Element {
             </div>
           </div>
 
-          <h2 className="text-ink text-[28px] font-semibold tracking-tight">Welcome back</h2>
-          <p className="text-muted text-sm mt-1.5">Sign in to continue to the dashboard.</p>
+          <h2 className="text-ink text-[28px] font-semibold tracking-tight">Sign in</h2>
+          <p className="text-muted text-sm mt-1.5">Continue to the Eaze Intelligence dashboard.</p>
 
           <form onSubmit={submit} className="mt-8 space-y-5">
             <Field label="Email">

@@ -130,7 +130,7 @@ export default function UsersPage(): JSX.Element {
       {showForm && (
         <SectionCard
           title="Invite a user"
-          subtitle="they'll receive an email with a one-time link to set their password"
+          subtitle="They receive an email with a one-time link to set their password."
         >
           <div className="grid grid-cols-1 md:grid-cols-3 gap-3 items-end">
             <Field label="Email">
@@ -175,8 +175,8 @@ export default function UsersPage(): JSX.Element {
           title={`Invitation sent to ${lastInvite.email}`}
           subtitle={
             lastInvite.emailDelivered
-              ? 'expires in 7 days · the user will receive an email shortly'
-              : 'no email provider configured · share this link with the user'
+              ? 'Expires in 7 days. The user receives an email shortly.'
+              : 'No email provider configured. Share this link with the user.'
           }
         >
           <div className="flex items-center gap-2">
@@ -205,7 +205,7 @@ export default function UsersPage(): JSX.Element {
       {pendingInvites.length > 0 && (
         <SectionCard
           title={`${pendingInvites.length} pending invitation${pendingInvites.length === 1 ? '' : 's'}`}
-          subtitle="awaiting acceptance · revoke to invalidate the link"
+          subtitle="Awaiting acceptance. Revoke to invalidate the link."
           bodyClassName="p-0"
         >
           <div className="overflow-x-auto">
@@ -231,7 +231,7 @@ export default function UsersPage(): JSX.Element {
                     <td className="text-right">
                       <button
                         onClick={() => {
-                          if (confirm(`Revoke invitation for ${i.email}?`))
+                          if (confirm(`Revoke invitation for ${i.email}. The link stops working.`))
                             revokeInvite.mutate(i.id);
                         }}
                         className="text-[11px] text-danger hover:underline"
@@ -249,7 +249,7 @@ export default function UsersPage(): JSX.Element {
 
       <SectionCard
         title={`${rows.length} users`}
-        subtitle="active accounts · soft-delete preserves audit trail"
+        subtitle="Active accounts. Soft-delete preserves the audit trail."
         bodyClassName="p-0"
       >
         <div className="overflow-x-auto">
@@ -315,7 +315,7 @@ export default function UsersPage(): JSX.Element {
                           onClick={() => {
                             if (
                               confirm(
-                                `Soft-delete ${u.email}? Sessions revoked. Audit log preserved.`,
+                                `Soft-delete ${u.email}. Sessions revoked. Audit log preserved.`,
                               )
                             )
                               remove.mutate(u.id);

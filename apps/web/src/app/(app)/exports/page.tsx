@@ -58,7 +58,7 @@ export default function ExportsPage(): JSX.Element {
     <div className="space-y-6">
       <PageHeader
         title="Data exports"
-        subtitle="Async dump of any resource — CSV / JSON · 24-hour download window"
+        subtitle="Async dump of any resource. CSV or JSON. 24-hour download window."
       />
 
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
@@ -106,14 +106,14 @@ export default function ExportsPage(): JSX.Element {
             {create.isPending ? 'Queueing…' : 'Start export'}
           </button>
           <span className="text-[11px] text-muted">
-            runs asynchronously · poll this page or use the API
+            Runs asynchronously. Poll this page or use the API.
           </span>
         </div>
       </SectionCard>
 
       <SectionCard
         title={`${rows.length} export${rows.length === 1 ? '' : 's'}`}
-        subtitle="auto-refreshes every 5s"
+        subtitle="Auto-refreshes every 5s."
         bodyClassName="p-0"
       >
         <div className="overflow-x-auto">

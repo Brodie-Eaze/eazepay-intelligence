@@ -54,7 +54,7 @@ export function BusinessKpiPanel<T extends object>({
         {q.isLoading ? (
           <p className="text-sm text-zinc-500">Loading…</p>
         ) : q.isError ? (
-          <p className="text-sm text-red-600">Failed to load KPIs.</p>
+          <p className="text-sm text-red-600">Couldn’t load KPIs. Retry.</p>
         ) : !q.data ? (
           <p className="text-sm text-zinc-500">No data.</p>
         ) : (

@@ -76,7 +76,7 @@ export default function ApplicationDetail({ params }: { params: { id: string } }
       const r = await api<PiiResp>(`/applications/${params.id}/pii`, { method: 'GET' });
       setPii(r);
     } catch (err) {
-      setPiiError(err instanceof ApiError ? err.message : 'Failed to reveal');
+      setPiiError(err instanceof ApiError ? err.message : 'Couldn’t reveal PII. Try again.');
     } finally {
       setPiiBusy(false);
     }

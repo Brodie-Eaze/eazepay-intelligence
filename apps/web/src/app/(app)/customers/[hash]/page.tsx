@@ -471,7 +471,7 @@ export default function CustomerDetail({ params }: { params: { hash: string } })
         {lenderData.isLoading ? (
           <p className="text-sm text-zinc-500">Loading…</p>
         ) : lenderData.isError ? (
-          <p className="text-sm text-red-600">Failed to load lender data.</p>
+          <p className="text-sm text-red-600">Couldn’t load lender data. Retry.</p>
         ) : !lenderData.data || lenderData.data.applications.length === 0 ? (
           <p className="text-sm text-zinc-500">No lender decisions for this customer yet.</p>
         ) : (

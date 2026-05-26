@@ -53,7 +53,7 @@ export default function SessionsPage(): JSX.Element {
     <div className="space-y-6 p-6">
       <PageHeader
         title="Active sessions"
-        subtitle="Every device + browser currently signed in to your account. Revoking a session forces that device to log in again."
+        subtitle="Every device currently signed in to your account. Revoking a session forces that device to sign in again."
       />
 
       <SectionCard title="Sessions">
@@ -88,8 +88,8 @@ export default function SessionsPage(): JSX.Element {
                   <td>{formatDateTime(s.expiresAt)}</td>
                   <td className="text-right">
                     <ConfirmDialog
-                      title="Revoke this session?"
-                      body="The device using this session will be signed out the next time it makes a request."
+                      title="Revoke this session"
+                      body="The device using this session is signed out on its next request."
                       danger
                       confirmLabel="Revoke"
                       onConfirm={() => revoke.mutate(s.sessionId)}
@@ -114,7 +114,7 @@ export default function SessionsPage(): JSX.Element {
 
       {revoke.isError && (
         <p className="text-sm text-red-600">
-          {revoke.error instanceof ApiError ? revoke.error.message : 'Failed to revoke session.'}
+          {revoke.error instanceof ApiError ? revoke.error.message : 'Couldn’t revoke that session. Try again.'}
         </p>
       )}
     </div>
