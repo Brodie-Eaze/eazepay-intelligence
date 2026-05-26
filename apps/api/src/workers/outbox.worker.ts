@@ -149,23 +149,28 @@ async function dispatch(row: OutboxRow): Promise<void> {
       // F-001 (2026-05-26): the outbox previously published `row.payload`
       // raw, bypassing the WS envelope and (after the gateway's fail-closed
       // change) getting dropped on the floor. Wrap the bare event in a
-      // proper `WsEnvelope` using the row's tenant scope. Drop + log on
-      // malformed payload — the OutboxEvent row stays unpublished so an
-      // operator can inspect it.
+      // proper `WsEnvelope` using the row's tenant scope.
+      //
+      // CR-7 (2026-05-26): malformed-payload and missing-orgId paths MUST
+      // throw, not return. A `return` here lets `processOnce` stamp
+      // `publishedAt = now()` on a row that was never actually published —
+      // silent data loss. Throwing routes through the existing catch which
+      // bumps attemptCount, records publishError, and stamps dlqedAt at
+      // MAX_ATTEMPTS so on-call sees the quarantine.
       const event = row.payload;
       if (!event || typeof event !== 'object' || typeof (event as WsEvent).type !== 'string') {
         getLogger().error(
           { rowId: row.id, errorId: 'outbox.ws_event.malformed' },
-          'outbox WS_EVENT payload is not a valid event — dropped',
+          'outbox WS_EVENT payload is not a valid event — failing row',
         );
-        return;
+        throw new Error('outbox.ws_event.malformed_payload');
       }
       if (typeof row.org_id !== 'string' || row.org_id.length === 0) {
         getLogger().error(
           { rowId: row.id, errorId: 'outbox.ws_event.missing_orgid' },
-          'outbox WS_EVENT row missing org_id — dropped',
+          'outbox WS_EVENT row missing org_id — failing row',
         );
-        return;
+        throw new Error('outbox.ws_event.missing_orgid');
       }
       const envelope: WsEnvelope = { orgId: row.org_id, event: event as WsEvent };
       await getRedisPublisher().publish(WS_CHANNEL, JSON.stringify(envelope));
