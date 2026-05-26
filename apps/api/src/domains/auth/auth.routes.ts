@@ -365,8 +365,21 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
     // Platform staff (STAFF/SUPER) get a null orgId — they see all tenants
     // in the WS feed. Standard users get their resolved org's id; the WS
     // gateway uses this to filter events per-tenant.
+    // F-003 (2026-05-26): the `auth.orgId ?? null` fallback previously
+    // coerced an unprivileged user with no resolved orgId into a
+    // platform-staff-equivalent ticket (orgId=null means "see all" in the
+    // gateway). An OAuth-fresh user, a user mid-provisioning, or anyone
+    // whose JWT lacks `org` would get cross-tenant visibility. Reject
+    // explicitly: only true STAFF/SUPER are allowed a null-orgId ticket.
     const isPlatformStaff = auth.platformRole === 'STAFF' || auth.platformRole === 'SUPER';
-    const ticketOrgId = isPlatformStaff ? null : (auth.orgId ?? null);
+    let ticketOrgId: string | null;
+    if (isPlatformStaff) {
+      ticketOrgId = null;
+    } else if (typeof auth.orgId === 'string' && auth.orgId.length > 0) {
+      ticketOrgId = auth.orgId;
+    } else {
+      throw errors.forbidden('Cannot issue WS ticket without an active organization');
+    }
     const issued = await service.issueWsTicket(auth.userId, auth.scope, ticketOrgId);
     await writeAuditLog({
       req,
