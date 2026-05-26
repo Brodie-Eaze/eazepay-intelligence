@@ -7,6 +7,7 @@ import { api } from '@/lib/api';
 import { PageHeader } from '@/components/PageHeader';
 import { SectionCard } from '@/components/SectionCard';
 import { StatusPill } from '@/components/StatusPill';
+import { EmptyState } from '@/components/EmptyState';
 
 interface Hit {
   kind: 'customer' | 'partner' | 'application' | 'lender';
@@ -56,9 +57,16 @@ export default function SearchPage(): JSX.Element {
       {q.trim().length >= 2 && search.isLoading && <div className="text-muted">Searching…</div>}
 
       {q.trim().length >= 2 && hits.length === 0 && !search.isLoading && (
-        <div className="card card-pad text-sm text-muted">
-          No results for <code className="tag">{q}</code>
-        </div>
+        <EmptyState
+          variant="searchEmpty"
+          title="No matches"
+          description={
+            <>
+              Nothing indexed under <code className="tag">{q}</code>. Try a partner name, an
+              application external ID, a lender, or the first hex of a customer hash.
+            </>
+          }
+        />
       )}
 
       {(['partner', 'application', 'lender', 'customer'] as const).map((kind) => {

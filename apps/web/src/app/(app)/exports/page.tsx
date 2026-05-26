@@ -8,6 +8,7 @@ import { PageHeader } from '@/components/PageHeader';
 import { SectionCard } from '@/components/SectionCard';
 import { StatusPill } from '@/components/StatusPill';
 import { KpiCard } from '@/components/KpiCard';
+import { EmptyState } from '@/components/EmptyState';
 
 interface ExportRow {
   id: string;
@@ -169,8 +170,13 @@ export default function ExportsPage(): JSX.Element {
               ))}
               {rows.length === 0 && (
                 <tr>
-                  <td colSpan={8} className="text-muted py-8 text-center">
-                    No exports yet.
+                  <td colSpan={8} className="p-0">
+                    <EmptyState
+                      variant="firstRun"
+                      title="No exports yet"
+                      description="Generate a CSV or Parquet snapshot of customers, applications, decisions or the commission ledger. Files are signed and expire after 7 days."
+                      inline
+                    />
                   </td>
                 </tr>
               )}

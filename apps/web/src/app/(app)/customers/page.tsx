@@ -12,6 +12,7 @@ import { RiskBand } from '@/components/RiskBand';
 import { Monogram } from '@/components/Monogram';
 import { KpiCard } from '@/components/KpiCard';
 import { StaggerList } from '@/components/motion';
+import { EmptyState } from '@/components/EmptyState';
 
 interface CustomerRow {
   emailHash: string;
@@ -157,8 +158,13 @@ export default function CustomerBook(): JSX.Element {
               ))}
               {rows.length === 0 && (
                 <tr>
-                  <td colSpan={9} className="text-muted py-8 text-center">
-                    No customers match the filters.
+                  <td colSpan={9} className="p-0">
+                    <EmptyState
+                      variant="filterEmpty"
+                      title="No customers match the filters"
+                      description="Try widening the date range or clearing a status filter. The data is there — the lens is just too narrow."
+                      inline
+                    />
                   </td>
                 </tr>
               )}

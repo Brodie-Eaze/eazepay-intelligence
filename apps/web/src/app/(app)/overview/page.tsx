@@ -13,6 +13,7 @@ import { WarehouseLandscape } from '@/components/WarehouseLandscape';
 import { DataFlowDiagram } from '@/components/DataFlowDiagram';
 import { LiveTickerContext } from '@/components/LiveTickerContext';
 import { LiveTicker } from '@/components/LiveTicker';
+import { FirstRunBanner } from '@/components/FirstRunBanner';
 
 interface FunnelResp {
   submitted: number;
@@ -73,6 +74,10 @@ export default function OverviewPage(): JSX.Element {
 
   return (
     <div className="space-y-7">
+      <FirstRunBanner
+        title="Welcome to EazePay Intelligence"
+        description="This is mission-control for the warehouse. The hero shows live revenue; the landscape below shows every table at a glance with freshness; the flow diagram traces sources to marts; and the ticker streams events as they post. Dismiss when you're oriented — it'll come back next session."
+      />
       {/* ── HERO ─────────────────────────────────────────────────────────── */}
       <section className="relative overflow-hidden rounded-xl border border-line2 bg-gradient-to-br from-[#0B1220] via-[#111d34] to-[#0F172A] text-surface px-6 lg:px-8 py-5 lg:py-6">
         {/* ambient grid overlay */}
