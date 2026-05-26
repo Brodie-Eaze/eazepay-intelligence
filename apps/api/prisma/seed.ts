@@ -5,14 +5,37 @@ import { encryptPII } from '../src/shared/utils/encryption.js';
 import { computePixieMargin } from '../src/domains/pixie/pixie.algorithm.js';
 
 /**
- * Deterministic seed: 2 users, 12 partners, ~600 applications, ~1800 decisions,
- * 30 days of pixie metrics, ~3000 revenue events with realistic clawback ratio.
+ * Deterministic seed: 4 demo users, 12 partners (mixed AU/US merchants),
+ * ~900 applications spread over 90 days, ~2700 decisions, 90 days of pixie
+ * metrics, ~4500 revenue events with realistic clawback ratio.
+ *
+ * Density is tuned so every operator-facing screen feels like a production
+ * deployment with months of trading history (Sprint B target: ≥60 customer
+ * rows, 90 daily revenue points, ≥30 activity events).
  *
  * Idempotent — re-running upserts and skips existing rows.
  */
 const prisma = new PrismaClient();
 
 const INDUSTRIES = ['Auto Repair', 'Dental', 'Furniture', 'HVAC', 'Roofing', 'Veterinary'];
+
+// Mixed AU/US merchant brand names. Plausible regional flavour for the
+// customer book — Sprint B wants screens to feel like a real BNPL platform
+// servicing both markets, not the placeholder "Apex / Bright / Cozy" alphabet.
+const PARTNER_NAMES = [
+  'Bondi Auto Works', // AU – Sydney
+  'Harborline Dental', // AU – Sydney
+  'Northshore Furniture', // AU – NSW
+  'Outback HVAC Co', // AU – QLD
+  'Federation Roofing', // AU – VIC
+  'Tasman Veterinary', // AU – TAS
+  'Sundown Auto Repair', // US – AZ
+  'Lakeside Family Dental', // US – MN
+  'Crescent Home Furniture', // US – LA
+  'Cascade HVAC Group', // US – WA
+  'Summit Ridge Roofing', // US – CO
+  'Riverbend Animal Hospital', // US – TN
+];
 const TIERS = ['BRONZE', 'SILVER', 'GOLD'] as const;
 const LENDERS: {
   name: string;
@@ -110,20 +133,7 @@ async function main(): Promise<void> {
         id: uuidv7(),
         orgId,
         externalId,
-        name: [
-          'Apex Auto',
-          'Bright Dental',
-          'Cozy Couches',
-          'Delta HVAC',
-          'Eagle Roofing',
-          'Furry Friends Vet',
-          'Gold Coast Auto',
-          'Harbor Dental',
-          'Inland Furniture',
-          'Jet Stream HVAC',
-          'Keystone Roofing',
-          'Loyal Companions Vet',
-        ][i]!,
+        name: PARTNER_NAMES[i]!,
         industry: INDUSTRIES[i % INDUSTRIES.length]!,
         onboardingDate: new Date(Date.now() - (365 - i * 25) * 86_400_000),
         status: 'ACTIVE',
@@ -140,7 +150,10 @@ async function main(): Promise<void> {
   }
 
   // ─── Applications + Decisions + Funding + Revenue ─────────────────────────
-  for (let i = 0; i < 600; i += 1) {
+  // 900 apps over a 90d window ≈ 10/day average — comfortably above the
+  // Sprint B density floor (≥60 deduped customers, ≥30 activity events,
+  // 90 daily revenue points once the per-day pixie loop below runs).
+  for (let i = 0; i < 900; i += 1) {
     const partner = rand(partners);
     const externalApplicationId = `APP-${String(i + 1).padStart(6, '0')}`;
     const existing = await prisma.application.findUnique({
@@ -254,8 +267,11 @@ async function main(): Promise<void> {
     }
   }
 
-  // ─── Pixie metrics (30 days) ──────────────────────────────────────────────
-  for (let day = 0; day < 30; day += 1) {
+  // ─── Pixie metrics (90 days) ──────────────────────────────────────────────
+  // Sprint B density target: revenue chart must show 90 daily data points so
+  // the chart looks like a real trading history, not a 2-week pilot.
+  const PIXIE_DAYS = 90;
+  for (let day = 0; day < PIXIE_DAYS; day += 1) {
     const periodStart = new Date(Date.now() - day * 86_400_000);
     periodStart.setUTCHours(0, 0, 0, 0);
     const periodEnd = new Date(periodStart.getTime() + 86_399_999);
@@ -279,7 +295,7 @@ async function main(): Promise<void> {
           periodStart,
           periodEnd,
           dataPullsThisPeriod: partnerPulls,
-          dataPullsCumulative: partnerPulls * (30 - day),
+          dataPullsCumulative: partnerPulls * (PIXIE_DAYS - day),
           costPerPull: new Prisma.Decimal(margin.costPerPull),
           chargePerPull: new Prisma.Decimal(margin.chargePerPull),
           profitPerPull: new Prisma.Decimal(margin.marginPerPull),
