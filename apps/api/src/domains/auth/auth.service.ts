@@ -5,6 +5,7 @@ import type { Redis } from 'ioredis';
 import type { User } from '@prisma/client';
 
 import { getEnv } from '../../config/env.js';
+import { getLogger } from '../../config/logger.js';
 import { getPrisma } from '../../config/database.js';
 import { errors } from '../../shared/errors/app-error.js';
 import { verifyPassword } from '../../shared/utils/password.js';
@@ -164,6 +165,7 @@ export class AuthService {
   async issueWsTicket(
     userId: string,
     scope: AuthScope,
+    orgId: string | null,
   ): Promise<{ ticket: string; expiresInSeconds: number }> {
     const ttlSeconds = 30;
     const ticketId = uuidv7();
@@ -172,11 +174,20 @@ export class AuthService {
       ttlSeconds,
     );
     // Store with single-use guarantee — worker checks GETDEL on consume.
-    await this.redis.setex(`ws:ticket:${ticketId}`, ttlSeconds, JSON.stringify({ userId, scope }));
+    // `orgId` is captured here (from the issuing request's auth context) so
+    // the WS gateway can filter pub/sub events per-tenant. Platform staff
+    // tickets carry `orgId: null` and receive all events.
+    await this.redis.setex(
+      `ws:ticket:${ticketId}`,
+      ttlSeconds,
+      JSON.stringify({ userId, scope, orgId }),
+    );
     return { ticket: token, expiresInSeconds: ttlSeconds };
   }
 
-  async consumeWsTicket(token: string): Promise<{ userId: string; scope: AuthScope } | null> {
+  async consumeWsTicket(
+    token: string,
+  ): Promise<{ userId: string; scope: AuthScope; orgId: string | null } | null> {
     let payload: ReturnType<typeof verifyJwt>;
     try {
       payload = verifyJwt(token, 'ws_ticket');
@@ -185,8 +196,26 @@ export class AuthService {
     }
     const raw = await this.redis.getdel(`ws:ticket:${payload.jti}`);
     if (!raw) return null;
-    const parsed = JSON.parse(raw) as { userId: string; scope: AuthScope };
-    return parsed;
+    const parsed = JSON.parse(raw) as { userId: string; scope: AuthScope; orgId?: unknown };
+    // CR-8 (2026-05-26): reject malformed orgId rather than coercing to
+    // `null` (platform-staff). The previous F-007 fix collapsed empty
+    // strings + non-string values to `null`, but the gateway treats
+    // `null` as see-all-orgs (STAFF/SUPER). A ticket accidentally minted
+    // with `orgId: ""` would therefore PROMOTE the session to
+    // platform-staff visibility — exactly backwards. Fail closed by
+    // returning `null` from this method, which the gateway treats as a
+    // 1008 ticket-invalid close (see analytics.gateway.ts:46).
+    //
+    // Valid shapes: explicit `null` (platform staff) OR non-empty string.
+    if (parsed.orgId !== null && (typeof parsed.orgId !== 'string' || parsed.orgId.length === 0)) {
+      getLogger().warn(
+        { errorId: 'ws_ticket_invalid_orgid', userId: parsed.userId },
+        'rejecting WS ticket with malformed orgId',
+      );
+      return null;
+    }
+    const orgId: string | null = parsed.orgId;
+    return { userId: parsed.userId, scope: parsed.scope, orgId };
   }
 
   /**

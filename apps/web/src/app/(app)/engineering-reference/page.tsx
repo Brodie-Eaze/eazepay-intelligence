@@ -1,15 +1,22 @@
 /**
- * Public engineering reference page for Eaze Intelligence.
+ * Engineering reference page for Eaze Intelligence (authenticated).
  *
  * Mirrors the EazePay platform reference design — left sidebar nav,
  * numbered cards for every flow step + reference surface. Content
  * source: `apps/web/src/lib/engineering-reference-data.ts` (mirrored
  * from `docs/ENGINEERING_REFERENCE.md` in the repo root).
  *
- * This route is intentionally public (lives outside the (app) auth group)
- * so it can be linked directly without a session. No data fetched at
- * runtime; everything is statically rendered from the data module.
+ * SSR auth gate (council Finding 2, 2026-05-26): this page lives in the
+ * `(app)` route group but the group's layout only does a CLIENT-SIDE
+ * redirect — a direct HTTP GET would SSR the full platform topology to
+ * anonymous requesters before client JS loaded. We now verify the
+ * `epi_access` cookie against `/auth/me` server-side and `redirect()`
+ * BEFORE returning JSX. TODO(SF-???): hoist this into a Next middleware
+ * covering the entire `(app)` group so every page is protected at the
+ * edge instead of opting in individually.
  */
+import { cookies } from 'next/headers';
+import { redirect } from 'next/navigation';
 import type { Metadata } from 'next';
 import type {
   Actor,
@@ -420,7 +427,30 @@ function StatsRow(): JSX.Element {
 
 // ─── page ───────────────────────────────────────────────────────────────────
 
-export default function EngineeringReferencePage(): JSX.Element {
+async function requireServerSession(): Promise<void> {
+  // Server-side gate. Read the access cookie and validate against the API's
+  // /auth/me — if absent or invalid, redirect to /login before any JSX is
+  // rendered. The client-side AppShell redirect runs AFTER SSR, which is
+  // too late: the HTML body would already contain the platform topology.
+  const access = cookies().get('epi_access')?.value;
+  if (!access) redirect('/login');
+  const apiBase = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3010';
+  let res: Response;
+  try {
+    res = await fetch(`${apiBase}/api/v1/auth/me`, {
+      headers: { cookie: `epi_access=${access}` },
+      cache: 'no-store',
+    });
+  } catch {
+    // Fail closed — if the API is unreachable we cannot prove the caller is
+    // authenticated, so we redirect rather than SSR the platform docs.
+    redirect('/login');
+  }
+  if (!res.ok) redirect('/login');
+}
+
+export default async function EngineeringReferencePage(): Promise<JSX.Element> {
+  await requireServerSession();
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900 antialiased">
       <div className="flex">

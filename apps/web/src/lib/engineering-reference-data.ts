@@ -1,8 +1,8 @@
 /**
  * Engineering reference data for Eaze Intelligence.
  *
- * Source of truth for the public `/engineering-reference` page. Mirrors
- * `docs/ENGINEERING_REFERENCE.md`. Edit both in lockstep.
+ * Source of truth for the authenticated `/engineering-reference` page.
+ * Mirrors `docs/ENGINEERING_REFERENCE.md`. Edit both in lockstep.
  */
 
 export type Actor = 'OPERATOR' | 'EAZEPAY' | 'VENDOR' | 'EXTERNAL' | 'LENDER' | 'SYSTEM';
@@ -275,7 +275,8 @@ export const FLOW: FlowPhase[] = [
         tables: [
           {
             name: 'revenue_events',
-            description: 'append-only · TimescaleDB hypertable · partitioned by month',
+            description:
+              'append-only · TimescaleDB hypertable · 30-day rolling chunks (chunk_time_interval = 30 days)',
           },
         ],
       },
@@ -415,10 +416,8 @@ export const FLOW: FlowPhase[] = [
         actor: 'EAZEPAY',
         title: 'WS gateway',
         description:
-          '/api/v1/ws/analytics?ticket=... accepts the ticket, parses orgId, attaches to per-connection ClientCtx. Redis subscriber loops shouldDeliverToClient(c, envelope) — platform-staff (orgId=null) see everything, tenant-scoped clients only see their orgId.',
-        endpoints: [
-          { method: 'GET', path: '/api/v1/ws/analytics', note: 'WebSocket · ticket-auth' },
-        ],
+          '/ws/analytics?ticket=... consumes the ticket, captures orgId on the per-connection ClientCtx, and the Redis subscriber filters each envelope inline: if c.orgId !== null && c.orgId !== envelope.orgId, skip. Platform-staff (orgId=null) see every tenant; tenant-scoped clients see only their orgId.',
+        endpoints: [{ method: 'GET', path: '/ws/analytics', note: 'WebSocket · ticket-auth' }],
       },
       {
         index: '7.4',
@@ -1218,7 +1217,7 @@ export const REFERENCE: ReferenceSection[] = [
         actor: 'SYSTEM',
         title: 'WS publisher + WS gateway',
         whatItDoes:
-          'publishWsEvent(orgId, event) wraps in tenant envelope. Gateway filters per-connection via shouldDeliverToClient(client, envelope). Investor-scope clients get scopeForInvestor(event) applied.',
+          'publishWsEvent(orgId, event) wraps the event in a WsEnvelope { orgId, event } before publishing to ws:analytics. The gateway message handler filters inline: c.orgId !== null && c.orgId !== envelope.orgId → skip. Investor-scope clients also get scopeForInvestor(event) applied before send.',
         whatItsFor: 'Real-time fan-out.',
         appearsIn: ['Flow 07 · Real-time'],
       },
@@ -1377,7 +1376,7 @@ export const REFERENCE: ReferenceSection[] = [
         actor: 'EAZEPAY',
         title: 'revenue_events · THE LEDGER',
         whatItDoes:
-          'Append-only ledger of every dollar movement. TimescaleDB hypertable, partitioned by effective_at. Stream enum: ORIGINATION, PROCESSING, COMMISSION, REPAYMENT, REVERSAL. eazepay_app role has REVOKE on UPDATE+DELETE — true immutability enforced at DB layer.',
+          'Append-only ledger of every dollar movement. TimescaleDB hypertable on effective_at with 30-day chunk_time_interval. Stream enum: BUZZPAY, PIXIE, MICAMP, EAZEPAY_APP, HIGHSALE, AUREAN_AI, AUREAN_RECRUITMENT. eazepay_app and eazepay_worker_long roles both have REVOKE on UPDATE+DELETE — true immutability enforced at DB layer.',
         whatItsFor: 'Source of truth for revenue.',
         appearsIn: ['Flow 04 · Drain', 'Flow 10 · Lifecycle'],
       },
@@ -1549,7 +1548,7 @@ export const REFERENCE: ReferenceSection[] = [
         actor: 'SYSTEM',
         title: 'WS per-tenant envelope filter',
         whatItDoes:
-          'publishWsEvent(orgId, event) envelope; shouldDeliverToClient(client, envelope) per-client filter.',
+          'publishWsEvent(orgId, event) wraps in WsEnvelope; gateway message handler filters inline (c.orgId !== null && c.orgId !== envelope.orgId → skip) before per-client send.',
         whatItsFor: 'Real-time tenant isolation.',
         appearsIn: ['Flow 07 · Real-time'],
       },

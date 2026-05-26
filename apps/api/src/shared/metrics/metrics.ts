@@ -304,3 +304,26 @@ export const correlationLinkerOutcomesTotal = new Counter(
   'eazepay_correlation_linker_outcomes_total',
   'Correlation linker outcomes (linked / ambiguous / unresolved).',
 );
+
+/**
+ * SF-003 (2026-05-24): incremented every time the access-token deny-list
+ * lookup times out and the request is allowed through. Label `key_type`
+ * is one of "jti" | "sid". Alert on rate() > 0 — sustained increments
+ * mean Redis is unhealthy and the deny-list isn't enforcing.
+ */
+export const authDenylistFailopenTotal = new Counter(
+  'auth_denylist_failopen_total',
+  'Auth deny-list lookups that timed out and were allowed (fail-open). By key_type=jti|sid.',
+);
+
+/**
+ * Council B2 / F-002 (2026-05-26): incremented every time the WS gateway
+ * drops a pub/sub envelope because it lacked a non-empty `orgId`. Previously
+ * such envelopes fanned out to every connected client (cross-tenant leak).
+ * Now they are DROPPED. Alert on rate() > 0 — any sustained increment means
+ * a publisher is bypassing `publishWsEvent` and needs to be fixed.
+ */
+export const wsEnvelopeMissingOrgIdTotal = new Counter(
+  'ws_envelope_missing_orgid_total',
+  'WS pub/sub envelopes dropped because orgId was missing or empty.',
+);
