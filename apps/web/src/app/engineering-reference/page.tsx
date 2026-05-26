@@ -27,6 +27,7 @@ import {
   EngineeringReferenceSidebar,
   type SidebarItem,
 } from '@/components/ui/EngineeringReferenceSidebar';
+import { ScrollProgress } from '@/components/ui/ScrollProgress';
 
 export const metadata: Metadata = {
   title: 'Eaze Intelligence · engineering reference + data flow',
@@ -382,6 +383,7 @@ export default function EngineeringReferencePage(): JSX.Element {
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900 antialiased">
+      <ScrollProgress />
       <div className="flex">
         <EngineeringReferenceSidebar
           flowItems={flowItems}
