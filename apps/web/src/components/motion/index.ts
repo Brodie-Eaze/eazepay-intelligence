@@ -14,4 +14,5 @@ export { PageTransition } from './PageTransition';
 export { StaggerList } from './StaggerList';
 export { RevealOnScroll } from './RevealOnScroll';
 export { MetricNumber } from './MetricNumber';
+export { useHoverLift } from './useHoverLift';
 export { usePrefersReducedMotion } from './usePrefersReducedMotion';
