@@ -8,14 +8,14 @@ import { errors } from '../errors/app-error.js';
  * `/auth/mfa/verify` + `/auth/mfa/disable` (bucket on userId so brute-force
  * on a 6-digit TOTP code can't ride the global per-user budget).
  *
- * P0 fix (SF-003): every Redis-level failure path now fails CLOSED.
- * Previously a Redis hiccup (MULTI rollback, pipe-level error, per-command
- * err) silently let the request through unthrottled — turning a brief
- * outage into an unbounded brute-force window on /auth/login. The
- * composite rate limit IS the brute-force gate; we'd rather a brief 503
- * than unbounded attempts.
+ * P0 fix (SF-003): fail-CLOSED by default; fail-OPEN ONLY when
+ * RATE_LIMIT_FAIL_OPEN=1 (incident bypass). Default posture is fail-closed
+ * because the composite rate limit IS the brute-force gate on /auth/login
+ * and /auth/mfa/verify — a brief 503 during a Redis outage beats an
+ * unbounded brute-force window. The env-gated bypass exists so on-call can
+ * unblock auth during a sustained Redis incident without a code deploy.
  *
- * Fail-closed paths:
+ * Fail-closed paths (default; flip to 200-allow when RATE_LIMIT_FAIL_OPEN=1):
  *   1. `pipe.exec()` throws (connection-level failure) → 503
  *   2. `pipe.exec()` returns null (MULTI rolled back) → 503
  *   3. A single command result missing from the array → 503
@@ -31,17 +31,13 @@ export function compositeRateLimit(args: {
   keys: (req: FastifyRequest) => string[];
 }): preHandlerHookHandler {
   return async (req) => {
-    // 2026-05-24 emergency: was fail-CLOSED on every Redis error, which
-    // returned 503 "Rate-limit infrastructure unavailable" to every login
-    // attempt while Railway's Redis was flapping. Flipped to fail-OPEN
-    // when RATE_LIMIT_FAIL_OPEN=1 (set on Railway during the incident,
-    // unset to restore fail-closed posture). Original throws preserved
-    // behind the env gate. Independent throttle still works via the
-    // global @fastify/rate-limit plugin.
-    // 2026-05-24 emergency: forced fail-open (was env-gated, but the env var
-    // wasn't taking effect on Railway). Login can't be blocked by an infra
-    // outage. Revert this to env-gated once Redis is stable.
-    const failOpen = true || process.env.RATE_LIMIT_FAIL_OPEN === '1';
+    // 2026-05-24 incident: default fail-CLOSED restored. RATE_LIMIT_FAIL_OPEN=1
+    // is the documented incident bypass — set on Railway only during a
+    // sustained Redis outage, otherwise leave unset so brute-force on
+    // /auth/login and /auth/mfa/verify remains gated. The global
+    // @fastify/rate-limit plugin is an independent throttle and is not
+    // affected by this flag.
+    const failOpen = process.env.RATE_LIMIT_FAIL_OPEN === '1';
     const redis = getRedis();
     const buckets = args.keys(req).map((k) => `rl:${args.prefix}:${k}`);
     const pipe = redis.multi();
