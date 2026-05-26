@@ -1,9 +1,14 @@
 'use client';
 
+/**
+ * Targeted breakpoints: < md collapses table → stacked cards.
+ */
+
 import Link from 'next/link';
 import { formatMoney, formatTime } from '@/lib/format';
 import { Monogram } from './Monogram';
 import { StatusPill } from './StatusPill';
+import { MobileCardList, MobileCardRow } from './MobileCardRow';
 
 export interface ActivityRow {
   eventTime: string;
@@ -35,42 +40,66 @@ export function RecentActivityTable({ rows }: { rows: ActivityRow[] }): JSX.Elem
     return <div className="text-sm text-muted px-5 py-6">No recent activity.</div>;
   }
   return (
-    <div className="overflow-x-auto">
-      <table className="tbl">
-        <thead>
-          <tr>
-            <th>When</th>
-            <th>Kind</th>
-            <th>Partner</th>
-            <th>Detail</th>
-            <th className="text-right">Amount</th>
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((r, i) => (
-            <tr key={`${r.eventTime}-${i}`}>
-              <td className="numeric text-muted whitespace-nowrap">{formatTime(r.eventTime)}</td>
-              <td>
-                <span className={`pill ${KIND_TONE[r.kind]}`}>{KIND_LABEL[r.kind]}</span>
-              </td>
-              <td>
-                <Link
-                  href={`/partners/${r.partnerId}`}
-                  className="inline-flex items-center gap-2 text-ink hover:text-accent"
-                >
-                  <Monogram label={r.partnerName} />
-                  <span>{r.partnerName}</span>
-                </Link>
-              </td>
-              <td className="text-ink2">{prettify(r.description)}</td>
-              <td className="numeric text-right text-ink">
-                {r.amount ? formatMoney(r.amount) : '—'}
-              </td>
+    <>
+      {/* Desktop / tablet ≥ md */}
+      <div className="hidden md:block overflow-x-auto">
+        <table className="tbl">
+          <thead>
+            <tr>
+              <th>When</th>
+              <th>Kind</th>
+              <th>Partner</th>
+              <th>Detail</th>
+              <th className="text-right">Amount</th>
             </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
+          </thead>
+          <tbody>
+            {rows.map((r, i) => (
+              <tr key={`${r.eventTime}-${i}`}>
+                <td className="numeric text-muted whitespace-nowrap">{formatTime(r.eventTime)}</td>
+                <td>
+                  <span className={`pill ${KIND_TONE[r.kind]}`}>{KIND_LABEL[r.kind]}</span>
+                </td>
+                <td>
+                  <Link
+                    href={`/partners/${r.partnerId}`}
+                    className="inline-flex items-center gap-2 text-ink hover:text-accent"
+                  >
+                    <Monogram label={r.partnerName} />
+                    <span>{r.partnerName}</span>
+                  </Link>
+                </td>
+                <td className="text-ink2">{prettify(r.description)}</td>
+                <td className="numeric text-right text-ink">
+                  {r.amount ? formatMoney(r.amount) : '—'}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {/* Mobile < md — stacked cards */}
+      <MobileCardList>
+        {rows.map((r, i) => (
+          <MobileCardRow
+            key={`m-${r.eventTime}-${i}`}
+            href={`/partners/${r.partnerId}`}
+            title={r.partnerName}
+            subtitle={r.description}
+            badge={<span className={`pill ${KIND_TONE[r.kind]}`}>{KIND_LABEL[r.kind]}</span>}
+            fields={[
+              { label: 'When', value: formatTime(r.eventTime) },
+              {
+                label: 'Amount',
+                value: r.amount ? formatMoney(r.amount) : '—',
+                align: 'right',
+              },
+            ]}
+          />
+        ))}
+      </MobileCardList>
+    </>
   );
 }
 

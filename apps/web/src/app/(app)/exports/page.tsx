@@ -8,6 +8,7 @@ import { PageHeader } from '@/components/PageHeader';
 import { SectionCard } from '@/components/SectionCard';
 import { StatusPill } from '@/components/StatusPill';
 import { KpiCard } from '@/components/KpiCard';
+import { MobileCardList, MobileCardRow } from '@/components/MobileCardRow';
 
 interface ExportRow {
   id: string;
@@ -61,7 +62,7 @@ export default function ExportsPage(): JSX.Element {
         subtitle="Async dump of any resource — CSV / JSON · 24-hour download window"
       />
 
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 md:gap-4">
         <KpiCard label="Total" value={rows.length.toString()} />
         <KpiCard label="Running" value={running.toString()} hint="pending or in flight" />
         <KpiCard label="Completed" value={completed.toString()} hint="downloadable" />
@@ -69,13 +70,13 @@ export default function ExportsPage(): JSX.Element {
       </div>
 
       <SectionCard title="New export">
-        <div className="flex flex-wrap items-end gap-3">
-          <label className="block">
+        <div className="flex flex-col sm:flex-row sm:flex-wrap sm:items-end gap-3">
+          <label className="block w-full sm:w-auto">
             <span className="h-section block mb-1.5">Type</span>
             <select
               value={type}
               onChange={(e) => setType(e.target.value as (typeof TYPES)[number])}
-              className="bg-surface border border-line rounded-md px-3 py-2 text-sm outline-none focus:border-accent"
+              className="w-full sm:w-auto bg-surface border border-line rounded-md px-3 py-2 text-sm outline-none focus:border-accent min-h-[44px]"
             >
               {TYPES.map((t) => (
                 <option key={t} value={t}>
@@ -84,12 +85,12 @@ export default function ExportsPage(): JSX.Element {
               ))}
             </select>
           </label>
-          <label className="block">
+          <label className="block w-full sm:w-auto">
             <span className="h-section block mb-1.5">Format</span>
             <select
               value={format}
               onChange={(e) => setFormat(e.target.value as (typeof FORMATS)[number])}
-              className="bg-surface border border-line rounded-md px-3 py-2 text-sm outline-none focus:border-accent"
+              className="w-full sm:w-auto bg-surface border border-line rounded-md px-3 py-2 text-sm outline-none focus:border-accent min-h-[44px]"
             >
               {FORMATS.map((f) => (
                 <option key={f} value={f}>
@@ -101,7 +102,7 @@ export default function ExportsPage(): JSX.Element {
           <button
             onClick={() => create.mutate()}
             disabled={create.isPending}
-            className="px-4 py-2 rounded-md bg-accent text-surface text-sm font-medium disabled:opacity-50 hover:bg-accent/90"
+            className="w-full sm:w-auto px-4 py-2 min-h-[44px] rounded-md bg-accent text-surface text-sm font-medium disabled:opacity-50 hover:bg-accent/90"
           >
             {create.isPending ? 'Queueing…' : 'Start export'}
           </button>
@@ -116,7 +117,48 @@ export default function ExportsPage(): JSX.Element {
         subtitle="auto-refreshes every 5s"
         bodyClassName="p-0"
       >
-        <div className="overflow-x-auto">
+        {/* Mobile < md — stacked cards */}
+        <MobileCardList>
+          {rows.length === 0 && (
+            <div className="text-muted text-sm py-6 text-center">No exports yet.</div>
+          )}
+          {rows.map((r) => (
+            <MobileCardRow
+              key={`m-${r.id}`}
+              title={r.type.replace(/_/g, ' ')}
+              subtitle={`${r.format} · ${formatDateTime(r.createdAt)}`}
+              badge={<StatusPill>{r.status}</StatusPill>}
+              fields={[
+                {
+                  label: 'Rows',
+                  value: r.rowCount != null ? formatNumber(r.rowCount) : '—',
+                },
+                {
+                  label: 'Size',
+                  value: r.fileBytes != null ? `${(r.fileBytes / 1024).toFixed(1)} KB` : '—',
+                  align: 'right',
+                },
+              ]}
+              footer={
+                r.status === 'COMPLETED' ? (
+                  <a
+                    href={`${process.env.NEXT_PUBLIC_API_URL ?? ''}/api/v1/exports/${r.id}/download`}
+                    className="inline-flex items-center min-h-[44px] py-2 text-accent hover:underline"
+                  >
+                    Download ↓
+                  </a>
+                ) : r.status === 'FAILED' && r.error ? (
+                  <span className="text-danger">{r.error}</span>
+                ) : r.expiresAt ? (
+                  `Expires ${formatDateTime(r.expiresAt)}`
+                ) : undefined
+              }
+            />
+          ))}
+        </MobileCardList>
+
+        {/* Desktop ≥ md */}
+        <div className="hidden md:block overflow-x-auto">
           <table className="tbl">
             <thead>
               <tr>

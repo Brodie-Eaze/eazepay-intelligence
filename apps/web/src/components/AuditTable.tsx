@@ -5,6 +5,7 @@ import { api } from '@/lib/api';
 import { formatDateTime } from '@/lib/format';
 import { SectionCard } from './SectionCard';
 import { StatusPill } from './StatusPill';
+import { MobileCardList, MobileCardRow } from './MobileCardRow';
 
 export interface AuditRow {
   id: string;
@@ -43,7 +44,25 @@ export function AuditTable({ filter, title, subtitle, queryKey }: Props): JSX.El
 
   return (
     <SectionCard title={title} subtitle={subtitle ?? `${rows.length} most-recent events`} bodyClassName="p-0">
-      <div className="overflow-x-auto">
+      {/* Mobile < md — stacked cards. Targeted breakpoints: 375 / 414 / 768. */}
+      <MobileCardList>
+        {rows.length === 0 && <div className="text-muted text-sm py-6 text-center">No audit entries.</div>}
+        {rows.map((r) => (
+          <MobileCardRow
+            key={`m-${r.id}`}
+            title={<code className="text-[12px]">{r.action}</code>}
+            subtitle={r.userEmail ?? 'system'}
+            fields={[
+              { label: 'When', value: formatDateTime(r.createdAt) },
+              { label: 'Resource', value: r.resourceType },
+            ]}
+            footer={r.ipAddress ? `IP ${r.ipAddress}` : undefined}
+          />
+        ))}
+      </MobileCardList>
+
+      {/* Desktop ≥ md — full table */}
+      <div className="hidden md:block overflow-x-auto">
         <table className="tbl">
           <thead>
             <tr>
