@@ -16,7 +16,7 @@
 #     BEFORE the new container starts taking traffic.
 # ───────────────────────────────────────────────────────────────────────────
 
-ARG NODE_VERSION=20.10.0
+ARG NODE_VERSION=20.18.1
 ARG PNPM_VERSION=9.12.0
 
 # ── deps ──────────────────────────────────────────────────────────────────
