@@ -141,6 +141,14 @@ function getOutbound(): OutboundWebhookService {
  * middleware resolves orgId from the WebhookCredential match).
  */
 export async function publishWsEvent(orgId: string, event: object, redis?: Redis): Promise<void> {
+  // F-007 (2026-05-26): protect the source. The WS gateway drops envelopes
+  // with missing/empty orgId (fail closed) — which is correct, but means an
+  // accidental empty-string here would silently lose every event for that
+  // call site. Throw loudly so the offending publisher is caught in CI /
+  // local dev instead of silently dropping events in prod.
+  if (typeof orgId !== 'string' || orgId.length === 0) {
+    throw new Error('publishWsEvent: orgId must be a non-empty string');
+  }
   const r = redis ?? getRedisPublisher();
   // Envelope carries orgId so the WS gateway can filter delivery per-tenant.
   // See WsEnvelope above; clients receive the inner event only.

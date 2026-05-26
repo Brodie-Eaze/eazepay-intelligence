@@ -196,7 +196,15 @@ export class AuthService {
     const raw = await this.redis.getdel(`ws:ticket:${payload.jti}`);
     if (!raw) return null;
     const parsed = JSON.parse(raw) as { userId: string; scope: AuthScope; orgId?: string | null };
-    return { userId: parsed.userId, scope: parsed.scope, orgId: parsed.orgId ?? null };
+    // F-007 (2026-05-26): collapse any non-string / empty-string orgId on
+    // the ticket to `null` rather than passing it through as `""`. The WS
+    // gateway's per-client filter treats `null` as platform staff (see-all)
+    // but `""` as no-tenant (drop) — without this normalisation, a ticket
+    // accidentally minted with `orgId: ""` would set `client.orgId = ""`
+    // and the client would silently never receive any events. Harden the
+    // source so the invariant holds end-to-end.
+    const orgId = typeof parsed.orgId === 'string' && parsed.orgId.length > 0 ? parsed.orgId : null;
+    return { userId: parsed.userId, scope: parsed.scope, orgId };
   }
 
   /**
