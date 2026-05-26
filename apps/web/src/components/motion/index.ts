@@ -11,4 +11,5 @@
  * `src/app/globals.css`) so the keyframes + utilities are available.
  */
 export { PageTransition } from './PageTransition';
+export { StaggerList } from './StaggerList';
 export { usePrefersReducedMotion } from './usePrefersReducedMotion';
