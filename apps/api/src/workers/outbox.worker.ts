@@ -30,7 +30,7 @@ import { getPrisma } from '../config/database.js';
 import { enqueueWebhook } from '../shared/queues/webhook.queue.js';
 import { enqueueWebhookDelivery } from '../shared/queues/webhook-delivery.queue.js';
 import { getRedisPublisher } from '../config/redis.js';
-import { WS_CHANNEL } from '../shared/utils/ws-publisher.js';
+import { WS_CHANNEL, type WsEnvelope, type WsEvent } from '../shared/utils/ws-publisher.js';
 import { outboxSweptTotal } from '../shared/metrics/metrics.js';
 
 // Outbox sweep cadence + batch size. Defaults are deliberately conservative —
@@ -46,6 +46,7 @@ const MAX_ATTEMPTS = Number(process.env.OUTBOX_MAX_ATTEMPTS ?? 10);
 
 interface OutboxRow {
   id: string;
+  org_id: string;
   kind: OutboxKind;
   payload: unknown;
   attempt_count: number;
@@ -76,7 +77,7 @@ async function processOnce(): Promise<number> {
     // MAX_ATTEMPTS were stamped dlqed_at and are out of the sweep set
     // until an operator clears the marker.
     const claimed = await tx.$queryRaw<OutboxRow[]>(Prisma.sql`
-      SELECT id, kind, payload, attempt_count
+      SELECT id, org_id, kind, payload, attempt_count
       FROM outbox_events
       WHERE published_at IS NULL
         AND dlqed_at IS NULL
@@ -144,9 +145,32 @@ async function dispatch(row: OutboxRow): Promise<void> {
     case 'OUTBOUND_DELIVERY':
       await enqueueWebhookDelivery(row.payload as never);
       return;
-    case 'WS_EVENT':
-      await getRedisPublisher().publish(WS_CHANNEL, JSON.stringify(row.payload));
+    case 'WS_EVENT': {
+      // F-001 (2026-05-26): the outbox previously published `row.payload`
+      // raw, bypassing the WS envelope and (after the gateway's fail-closed
+      // change) getting dropped on the floor. Wrap the bare event in a
+      // proper `WsEnvelope` using the row's tenant scope. Drop + log on
+      // malformed payload — the OutboxEvent row stays unpublished so an
+      // operator can inspect it.
+      const event = row.payload;
+      if (!event || typeof event !== 'object' || typeof (event as WsEvent).type !== 'string') {
+        getLogger().error(
+          { rowId: row.id, errorId: 'outbox.ws_event.malformed' },
+          'outbox WS_EVENT payload is not a valid event — dropped',
+        );
+        return;
+      }
+      if (typeof row.org_id !== 'string' || row.org_id.length === 0) {
+        getLogger().error(
+          { rowId: row.id, errorId: 'outbox.ws_event.missing_orgid' },
+          'outbox WS_EVENT row missing org_id — dropped',
+        );
+        return;
+      }
+      const envelope: WsEnvelope = { orgId: row.org_id, event: event as WsEvent };
+      await getRedisPublisher().publish(WS_CHANNEL, JSON.stringify(envelope));
       return;
+    }
   }
 }
 
