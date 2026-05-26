@@ -94,6 +94,15 @@ describe('analytics.gateway — shouldDeliverToClient (per-client filter)', () =
       clientOrgId: '',
       expected: false,
     },
+    {
+      // CR-8 (2026-05-26): whitespace-only orgId is not equal to any
+      // tenant orgId, so equality naturally drops it. Pin it so a
+      // future "trim before compare" refactor can't open a leak.
+      name: 'whitespace-only client orgId is no-tenant (drop)',
+      envelopeOrgId: 'org_a',
+      clientOrgId: '   ',
+      expected: false,
+    },
   ];
 
   for (const c of cases) {

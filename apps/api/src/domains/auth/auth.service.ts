@@ -5,6 +5,7 @@ import type { Redis } from 'ioredis';
 import type { User } from '@prisma/client';
 
 import { getEnv } from '../../config/env.js';
+import { getLogger } from '../../config/logger.js';
 import { getPrisma } from '../../config/database.js';
 import { errors } from '../../shared/errors/app-error.js';
 import { verifyPassword } from '../../shared/utils/password.js';
@@ -195,15 +196,25 @@ export class AuthService {
     }
     const raw = await this.redis.getdel(`ws:ticket:${payload.jti}`);
     if (!raw) return null;
-    const parsed = JSON.parse(raw) as { userId: string; scope: AuthScope; orgId?: string | null };
-    // F-007 (2026-05-26): collapse any non-string / empty-string orgId on
-    // the ticket to `null` rather than passing it through as `""`. The WS
-    // gateway's per-client filter treats `null` as platform staff (see-all)
-    // but `""` as no-tenant (drop) — without this normalisation, a ticket
-    // accidentally minted with `orgId: ""` would set `client.orgId = ""`
-    // and the client would silently never receive any events. Harden the
-    // source so the invariant holds end-to-end.
-    const orgId = typeof parsed.orgId === 'string' && parsed.orgId.length > 0 ? parsed.orgId : null;
+    const parsed = JSON.parse(raw) as { userId: string; scope: AuthScope; orgId?: unknown };
+    // CR-8 (2026-05-26): reject malformed orgId rather than coercing to
+    // `null` (platform-staff). The previous F-007 fix collapsed empty
+    // strings + non-string values to `null`, but the gateway treats
+    // `null` as see-all-orgs (STAFF/SUPER). A ticket accidentally minted
+    // with `orgId: ""` would therefore PROMOTE the session to
+    // platform-staff visibility — exactly backwards. Fail closed by
+    // returning `null` from this method, which the gateway treats as a
+    // 1008 ticket-invalid close (see analytics.gateway.ts:46).
+    //
+    // Valid shapes: explicit `null` (platform staff) OR non-empty string.
+    if (parsed.orgId !== null && (typeof parsed.orgId !== 'string' || parsed.orgId.length === 0)) {
+      getLogger().warn(
+        { errorId: 'ws_ticket_invalid_orgid', userId: parsed.userId },
+        'rejecting WS ticket with malformed orgId',
+      );
+      return null;
+    }
+    const orgId: string | null = parsed.orgId;
     return { userId: parsed.userId, scope: parsed.scope, orgId };
   }
 
