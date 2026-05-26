@@ -23,6 +23,8 @@ interface ClientCtx {
 const clients = new Set<ClientCtx>();
 let subscriberWired = false;
 let heartbeat: NodeJS.Timeout | undefined;
+let subscribeRetryTimer: NodeJS.Timeout | undefined;
+let subscribeRetryAttempt = 0;
 
 /**
  * `WS /ws/analytics?ticket=...`
@@ -43,6 +45,17 @@ export async function registerAnalyticsWebSocket(app: FastifyInstance): Promise<
     if (!consumed) {
       socket.close(1008, 'ticket invalid or already used');
       return;
+    }
+
+    // If the Redis subscriber failed to wire at boot and is still backing
+    // off, accept the upgrade so the client doesn't loop on reconnect, but
+    // log the degraded state. The client will receive only heartbeats and
+    // any events that arrive after the subscriber recovers.
+    if (!subscriberWired) {
+      app.log.warn(
+        { errorId: 'ws_subscriber_not_ready', userId: consumed.userId, orgId: consumed.orgId },
+        'ws.subscriber_not_ready — accepting connection in degraded state',
+      );
     }
 
     const ctx: ClientCtx = {
@@ -84,20 +97,49 @@ export async function registerAnalyticsWebSocket(app: FastifyInstance): Promise<
     });
   });
 
-  if (!subscriberWired) {
+  if (!subscriberWired && !subscribeRetryTimer) {
     const sub = getRedisSubscriber();
     // 2026-05-24 emergency: don't BLOCK plugin boot on Redis subscribe.
     // A cold-start ECONNRESET was timing out Fastify's plugin loader and
     // crashing the whole API on a transient network stutter. Now we
-    // schedule subscribe in the background; if it eventually succeeds
-    // the WS pubsub feed becomes live, if it fails we log loudly but
-    // the API itself stays up.
-    sub.subscribe(WS_CHANNEL).catch((err: unknown) => {
-      app.log.error(
-        { err },
-        'ws.redis_subscribe_failed_at_boot — WS feed will not deliver until manual restart',
-      );
-    });
+    // schedule subscribe in the background AND retry with exponential
+    // backoff (1s → 30s, with jitter) on failure. `subscriberWired` is
+    // ONLY set true inside `.then()` — previously it was set
+    // unconditionally below, so a subscribe rejection left us silently
+    // dead with no WS delivery until manual restart.
+    const trySubscribe = (): void => {
+      sub
+        .subscribe(WS_CHANNEL)
+        .then(() => {
+          subscriberWired = true;
+          subscribeRetryAttempt = 0;
+          if (subscribeRetryTimer) {
+            clearTimeout(subscribeRetryTimer);
+            subscribeRetryTimer = undefined;
+          }
+          app.log.info({ channel: WS_CHANNEL }, 'ws.redis_subscribe_ok');
+        })
+        .catch((err: unknown) => {
+          // Exponential backoff: 1s, 2s, 4s, … capped at 30s, with ±25%
+          // jitter so multiple replicas don't thunder against Redis on
+          // recovery.
+          subscribeRetryAttempt += 1;
+          const base = Math.min(30_000, 1_000 * 2 ** (subscribeRetryAttempt - 1));
+          const jitter = base * (Math.random() * 0.5 - 0.25);
+          const delayMs = Math.max(1_000, Math.round(base + jitter));
+          app.log.error(
+            {
+              err,
+              attempt: subscribeRetryAttempt,
+              delayMs,
+              errorId: 'ws.redis_subscribe_failed',
+            },
+            'ws.redis_subscribe_failed — retrying with backoff; WS feed degraded until recovered',
+          );
+          subscribeRetryTimer = setTimeout(trySubscribe, delayMs);
+        });
+    };
+    trySubscribe();
     sub.on('message', (channel, raw) => {
       if (channel !== WS_CHANNEL) return;
       try {
@@ -137,7 +179,6 @@ export async function registerAnalyticsWebSocket(app: FastifyInstance): Promise<
         );
       }
     });
-    subscriberWired = true;
 
     heartbeat = setInterval(() => {
       const evt: WsEvent = {
@@ -150,7 +191,14 @@ export async function registerAnalyticsWebSocket(app: FastifyInstance): Promise<
   }
 
   app.addHook('onClose', () => {
-    if (heartbeat) clearInterval(heartbeat);
+    if (heartbeat) {
+      clearInterval(heartbeat);
+      heartbeat = undefined;
+    }
+    if (subscribeRetryTimer) {
+      clearTimeout(subscribeRetryTimer);
+      subscribeRetryTimer = undefined;
+    }
   });
 }
 
