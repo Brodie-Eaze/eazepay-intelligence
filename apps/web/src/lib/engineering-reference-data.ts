@@ -1,8 +1,8 @@
 /**
  * Engineering reference data for Eaze Intelligence.
  *
- * Source of truth for the public `/engineering-reference` page. Mirrors
- * `docs/ENGINEERING_REFERENCE.md`. Edit both in lockstep.
+ * Source of truth for the authenticated `/engineering-reference` page.
+ * Mirrors `docs/ENGINEERING_REFERENCE.md`. Edit both in lockstep.
  */
 
 export type Actor = 'OPERATOR' | 'EAZEPAY' | 'VENDOR' | 'EXTERNAL' | 'LENDER' | 'SYSTEM';
