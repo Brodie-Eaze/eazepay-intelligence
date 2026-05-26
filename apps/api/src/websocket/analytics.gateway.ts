@@ -144,32 +144,25 @@ export async function registerAnalyticsWebSocket(app: FastifyInstance): Promise<
     sub.on('message', (channel, raw) => {
       if (channel !== WS_CHANNEL) return;
       try {
-        const envelope = JSON.parse(raw) as WsEnvelope;
-        // Council B2 / F-002 (2026-05-26): fail CLOSED on missing/empty orgId.
-        // Previous code broadcast bare-event envelopes to every connected
-        // client (cross-tenant leak). Publishers must envelope via
-        // `publishWsEvent`; anything that lands here without a usable orgId
-        // is dropped + counted so the offending publisher can be found.
-        const envelopeOrgId = envelope.orgId;
-        if (typeof envelopeOrgId !== 'string' || envelopeOrgId.length === 0) {
-          wsEnvelopeMissingOrgIdTotal.inc();
+        const parsed = JSON.parse(raw) as unknown;
+        // Council B2 / F-002 (2026-05-26): fail CLOSED on missing/empty orgId
+        // or malformed event. Previous code broadcast bare-event envelopes
+        // to every connected client (cross-tenant leak). Publishers must
+        // envelope via `publishWsEvent`.
+        const v = validateEnvelope(parsed);
+        if (!v.ok) {
+          if (v.errorId === 'ws.envelope_missing_orgid') wsEnvelopeMissingOrgIdTotal.inc();
           app.log.error(
-            { channel, errorId: 'ws.envelope_missing_orgid' },
-            'ws.envelope missing orgId — DROPPED (not broadcast)',
-          );
-          return;
-        }
-        const event = envelope.event;
-        if (!event || typeof event !== 'object' || typeof (event as WsEvent).type !== 'string') {
-          app.log.error(
-            { channel, errorId: 'ws.envelope_malformed' },
-            'ws.envelope malformed (missing/invalid event) — DROPPED',
+            { channel, errorId: v.errorId },
+            v.errorId === 'ws.envelope_missing_orgid'
+              ? 'ws.envelope missing orgId — DROPPED (not broadcast)'
+              : 'ws.envelope malformed — DROPPED',
           );
           return;
         }
         for (const c of clients) {
-          if (!shouldDeliverToClient(c, envelopeOrgId)) continue;
-          c.send(JSON.stringify(c.scope === 'investor' ? scopeForInvestor(event) : event));
+          if (!shouldDeliverToClient(c, v.orgId)) continue;
+          c.send(JSON.stringify(c.scope === 'investor' ? scopeForInvestor(v.event) : v.event));
         }
       } catch (err) {
         // SF-012: malformed pubsub messages used to disappear silently,
@@ -211,15 +204,34 @@ export async function registerAnalyticsWebSocket(app: FastifyInstance): Promise<
 }
 
 /**
+ * Validate a parsed WS envelope. Returns the well-formed envelope if usable,
+ * or a string `errorId` describing why it should be dropped. Exported only
+ * for unit tests (council B1).
+ */
+export function validateEnvelope(
+  raw: unknown,
+): { ok: true; orgId: string; event: WsEvent } | { ok: false; errorId: string } {
+  if (!raw || typeof raw !== 'object') return { ok: false, errorId: 'ws.envelope_malformed' };
+  const env = raw as Partial<WsEnvelope>;
+  if (typeof env.orgId !== 'string' || env.orgId.length === 0) {
+    return { ok: false, errorId: 'ws.envelope_missing_orgid' };
+  }
+  const event = env.event as unknown;
+  if (!event || typeof event !== 'object' || typeof (event as WsEvent).type !== 'string') {
+    return { ok: false, errorId: 'ws.envelope_malformed' };
+  }
+  return { ok: true, orgId: env.orgId, event: event as WsEvent };
+}
+
+/**
  * Per-client delivery decision for a validated envelope.
  *
- * Envelope-level validation (non-empty orgId, well-formed event) happens
- * upstream in the message handler; this function assumes a non-empty
- * `envelopeOrgId`. Truth table:
+ * `envelopeOrgId` MUST be a non-empty string (the message handler validates
+ * upstream via `validateEnvelope`). Truth table:
  *
- *   client.orgId === null            → deliver (platform staff)
+ *   client.orgId === null             → deliver (platform staff)
  *   client.orgId === '' or non-string → drop (treat as no-tenant)
- *   client.orgId === envelopeOrgId   → deliver
+ *   client.orgId === envelopeOrgId    → deliver
  *   else                              → drop
  *
  * Exported only for unit tests (council B1 truth-table pin).
