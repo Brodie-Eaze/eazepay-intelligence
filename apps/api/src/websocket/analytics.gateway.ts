@@ -7,6 +7,7 @@ import { AuthService } from '../domains/auth/auth.service.js';
 import { writeAuditLog } from '../shared/middleware/audit-log.middleware.js';
 import { partnerLabel } from '../domains/partners/partner.types.js';
 import { WS_CHANNEL, type WsEnvelope, type WsEvent } from '../shared/utils/ws-publisher.js';
+import { wsEnvelopeMissingOrgIdTotal } from '../shared/metrics/metrics.js';
 
 interface ClientCtx {
   userId: string;
@@ -144,23 +145,30 @@ export async function registerAnalyticsWebSocket(app: FastifyInstance): Promise<
       if (channel !== WS_CHANNEL) return;
       try {
         const envelope = JSON.parse(raw) as WsEnvelope;
-        // Back-compat: if a publisher accidentally pushed a bare event without
-        // the envelope wrapper, broadcast to every client (pre-envelope
-        // behaviour) but log loudly so the offending publisher can be found.
-        // publishWsEvent always envelopes, so in steady state this branch
-        // never fires.
-        const event: WsEvent = (envelope.event ?? (envelope as unknown as WsEvent)) as WsEvent;
-        const envelopeOrgId: string | undefined = envelope.orgId;
-        if (!envelopeOrgId) {
-          app.log.warn(
+        // Council B2 / F-002 (2026-05-26): fail CLOSED on missing/empty orgId.
+        // Previous code broadcast bare-event envelopes to every connected
+        // client (cross-tenant leak). Publishers must envelope via
+        // `publishWsEvent`; anything that lands here without a usable orgId
+        // is dropped + counted so the offending publisher can be found.
+        const envelopeOrgId = envelope.orgId;
+        if (typeof envelopeOrgId !== 'string' || envelopeOrgId.length === 0) {
+          wsEnvelopeMissingOrgIdTotal.inc();
+          app.log.error(
             { channel, errorId: 'ws.envelope_missing_orgid' },
-            'ws.envelope_missing_orgid — broadcasting to all clients',
+            'ws.envelope missing orgId — DROPPED (not broadcast)',
           );
+          return;
+        }
+        const event = envelope.event;
+        if (!event || typeof event !== 'object' || typeof (event as WsEvent).type !== 'string') {
+          app.log.error(
+            { channel, errorId: 'ws.envelope_malformed' },
+            'ws.envelope malformed (missing/invalid event) — DROPPED',
+          );
+          return;
         }
         for (const c of clients) {
-          // Per-tenant filter. Platform staff (orgId === null) bypass the
-          // filter and see every tenant's events.
-          if (c.orgId !== null && envelopeOrgId && c.orgId !== envelopeOrgId) continue;
+          if (!shouldDeliverToClient(c, envelopeOrgId)) continue;
           c.send(JSON.stringify(c.scope === 'investor' ? scopeForInvestor(event) : event));
         }
       } catch (err) {
@@ -200,6 +208,29 @@ export async function registerAnalyticsWebSocket(app: FastifyInstance): Promise<
       subscribeRetryTimer = undefined;
     }
   });
+}
+
+/**
+ * Per-client delivery decision for a validated envelope.
+ *
+ * Envelope-level validation (non-empty orgId, well-formed event) happens
+ * upstream in the message handler; this function assumes a non-empty
+ * `envelopeOrgId`. Truth table:
+ *
+ *   client.orgId === null            → deliver (platform staff)
+ *   client.orgId === '' or non-string → drop (treat as no-tenant)
+ *   client.orgId === envelopeOrgId   → deliver
+ *   else                              → drop
+ *
+ * Exported only for unit tests (council B1 truth-table pin).
+ */
+export function shouldDeliverToClient(
+  client: Pick<ClientCtx, 'orgId'>,
+  envelopeOrgId: string,
+): boolean {
+  if (client.orgId === null) return true;
+  if (typeof client.orgId !== 'string' || client.orgId.length === 0) return false;
+  return client.orgId === envelopeOrgId;
 }
 
 /** Investor scope: replace partner names/labels with anonymized codes. */
