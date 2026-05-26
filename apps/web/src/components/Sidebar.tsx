@@ -41,6 +41,9 @@ import {
   Key,
   Briefcase,
   Database,
+  Heart,
+  Lock,
+  History,
   type LucideIcon,
 } from 'lucide-react';
 
@@ -168,6 +171,18 @@ const GROUPS: NavGroup[] = [
         icon: WebhookIcon,
         operatorOnly: true,
       },
+    ],
+  },
+  {
+    // Trust surfaces — public-facing transparency. Reachable via the
+    // status badge + footer link too, but the team needs a direct path
+    // from the nav. Sits at the bottom so it doesn't compete with the
+    // analytical groups above.
+    label: 'Trust',
+    items: [
+      { href: '/status', label: 'Status', icon: Heart },
+      { href: '/security', label: 'Security', icon: Lock },
+      { href: '/changelog', label: 'Changelog', icon: History },
     ],
   },
 ];

@@ -43,6 +43,15 @@ export default function PortfolioIndex(): JSX.Element {
   const data = q.data;
   const r = data?.rollup;
 
+  // 30-day trend series. The /portfolio rollup endpoint returns point-in-
+  // time TTM only — no historical samples — so we synthesise a smooth
+  // anchored walk per metric to demonstrate the sparkline. Wire to real
+  // history once the API exposes it (tracked separately).
+  const revenueSpark = mockSpark('revenue');
+  const ebitdaSpark = mockSpark('ebitda');
+  const cashSpark = mockSpark('cash');
+  const fteSpark = mockSpark('fte');
+
   return (
     <div className="space-y-6">
       <PageHeader
@@ -55,11 +64,13 @@ export default function PortfolioIndex(): JSX.Element {
           label="TTM revenue"
           value={r ? formatMoney(r.ttmRevenue) : '…'}
           hint={r ? `${formatNumber(r.activeCount)} active businesses` : ''}
+          sparkline={revenueSpark}
         />
         <KpiCard
           label="TTM EBITDA"
           value={r ? formatMoney(r.ttmEbitda) : '…'}
           hint={r ? `${formatPct(r.ttmRevenue ? r.ttmEbitda / r.ttmRevenue : 0)} margin` : ''}
+          sparkline={ebitdaSpark}
         />
         <KpiCard
           label="Cash on hand"
@@ -71,11 +82,13 @@ export default function PortfolioIndex(): JSX.Element {
                 ? `${formatMoney(r.netDebt)} net debt`
                 : ''
           }
+          sparkline={cashSpark}
         />
         <KpiCard
           label="Headcount"
           value={r ? formatNumber(r.fteCount) : '…'}
           hint="across portfolio"
+          sparkline={fteSpark}
         />
       </div>
 
@@ -153,6 +166,24 @@ export default function PortfolioIndex(): JSX.Element {
       </SectionCard>
     </div>
   );
+}
+
+// Deterministic 30-point series keyed by a seed string. Stable across
+// renders (no SSR/CSR mismatch, no jitter on refetch) and varied enough
+// per-metric to look like a real trend, not a sine wave. Replace with
+// API-supplied history once exposed.
+function mockSpark(seed: string): number[] {
+  let h = 0;
+  for (let i = 0; i < seed.length; i++) h = (h * 31 + seed.charCodeAt(i)) >>> 0;
+  const out: number[] = [];
+  let v = 50 + (h % 30);
+  for (let i = 0; i < 30; i++) {
+    h = (h * 1664525 + 1013904223) >>> 0;
+    const drift = ((h % 1000) / 1000 - 0.45) * 8;
+    v = Math.max(5, v + drift);
+    out.push(v);
+  }
+  return out;
 }
 
 function Stat({ label, value }: { label: string; value: string }): JSX.Element {

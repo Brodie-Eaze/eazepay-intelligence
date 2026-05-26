@@ -7,6 +7,7 @@ import { useAnalyticsWebSocket } from '@/lib/ws';
 import { Sidebar } from './Sidebar';
 import { TopBar } from './TopBar';
 import { LiveTickerContext } from './LiveTickerContext';
+import { PageTransition } from './motion';
 
 export function AppShell({ children }: { children: React.ReactNode }): JSX.Element {
   const user = useUser();
@@ -45,7 +46,12 @@ export function AppShell({ children }: { children: React.ReactNode }): JSX.Eleme
         <div className="flex-1 flex flex-col min-w-0">
           <TopBar wsConnected={connected} />
           <main ref={mainRef} className="flex-1 p-6 lg:p-8 overflow-y-auto bg-paper">
-            {children}
+            {/*
+             * PageTransition self-keys on usePathname() so each route gets a
+             * fresh mount + fade-in. Reduced-motion collapses to instant
+             * via motion.css.
+             */}
+            <PageTransition>{children}</PageTransition>
           </main>
         </div>
       </div>
