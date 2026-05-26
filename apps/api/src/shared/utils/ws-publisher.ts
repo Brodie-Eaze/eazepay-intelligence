@@ -30,6 +30,18 @@ import { OutboundWebhookService } from '../../domains/outbound-webhooks/outbound
 export const WS_CHANNEL = 'ws:analytics';
 
 /**
+ * Envelope shape on the Redis pub/sub channel. The gateway uses `orgId` to
+ * filter delivery per-tenant BEFORE sending to a connected client; without
+ * this, every event leaked to every client (cross-tenant data exposure).
+ * `orgId` is NEVER forwarded to the WS client — the gateway strips it and
+ * sends only the inner `event`.
+ */
+export interface WsEnvelope {
+  orgId: string;
+  event: WsEvent;
+}
+
+/**
  * Discriminated union for every event the dashboard reacts to. Keep in sync
  * with `apps/web/src/lib/types.ts` `WsEvent` (codegen would be ideal — manually
  * mirrored for now; OpenAPI-driven codegen is in ROADMAP P2).
@@ -130,7 +142,10 @@ function getOutbound(): OutboundWebhookService {
  */
 export async function publishWsEvent(orgId: string, event: object, redis?: Redis): Promise<void> {
   const r = redis ?? getRedisPublisher();
-  await r.publish(WS_CHANNEL, JSON.stringify(event));
+  // Envelope carries orgId so the WS gateway can filter delivery per-tenant.
+  // See WsEnvelope above; clients receive the inner event only.
+  const envelope: WsEnvelope = { orgId, event: event as WsEvent };
+  await r.publish(WS_CHANNEL, JSON.stringify(envelope));
 
   // Outbound webhook fanout. Errors here are LOGGED and RETHROWN — the calling
   // webhook worker is responsible for retry semantics (BullMQ exponential

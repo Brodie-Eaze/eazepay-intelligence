@@ -164,6 +164,7 @@ export class AuthService {
   async issueWsTicket(
     userId: string,
     scope: AuthScope,
+    orgId: string | null,
   ): Promise<{ ticket: string; expiresInSeconds: number }> {
     const ttlSeconds = 30;
     const ticketId = uuidv7();
@@ -172,11 +173,20 @@ export class AuthService {
       ttlSeconds,
     );
     // Store with single-use guarantee — worker checks GETDEL on consume.
-    await this.redis.setex(`ws:ticket:${ticketId}`, ttlSeconds, JSON.stringify({ userId, scope }));
+    // `orgId` is captured here (from the issuing request's auth context) so
+    // the WS gateway can filter pub/sub events per-tenant. Platform staff
+    // tickets carry `orgId: null` and receive all events.
+    await this.redis.setex(
+      `ws:ticket:${ticketId}`,
+      ttlSeconds,
+      JSON.stringify({ userId, scope, orgId }),
+    );
     return { ticket: token, expiresInSeconds: ttlSeconds };
   }
 
-  async consumeWsTicket(token: string): Promise<{ userId: string; scope: AuthScope } | null> {
+  async consumeWsTicket(
+    token: string,
+  ): Promise<{ userId: string; scope: AuthScope; orgId: string | null } | null> {
     let payload: ReturnType<typeof verifyJwt>;
     try {
       payload = verifyJwt(token, 'ws_ticket');
@@ -185,8 +195,8 @@ export class AuthService {
     }
     const raw = await this.redis.getdel(`ws:ticket:${payload.jti}`);
     if (!raw) return null;
-    const parsed = JSON.parse(raw) as { userId: string; scope: AuthScope };
-    return parsed;
+    const parsed = JSON.parse(raw) as { userId: string; scope: AuthScope; orgId?: string | null };
+    return { userId: parsed.userId, scope: parsed.scope, orgId: parsed.orgId ?? null };
   }
 
   /**

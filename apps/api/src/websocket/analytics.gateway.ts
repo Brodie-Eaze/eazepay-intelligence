@@ -6,11 +6,17 @@ import { AuthRepository } from '../domains/auth/auth.repository.js';
 import { AuthService } from '../domains/auth/auth.service.js';
 import { writeAuditLog } from '../shared/middleware/audit-log.middleware.js';
 import { partnerLabel } from '../domains/partners/partner.types.js';
-import { WS_CHANNEL, type WsEvent } from '../shared/utils/ws-publisher.js';
+import { WS_CHANNEL, type WsEnvelope, type WsEvent } from '../shared/utils/ws-publisher.js';
 
 interface ClientCtx {
   userId: string;
   scope: 'standard' | 'investor';
+  /**
+   * Tenant of the connected client. `null` means platform staff (STAFF/SUPER)
+   * and receives every envelope. Non-null clients receive only envelopes
+   * whose `orgId` matches.
+   */
+  orgId: string | null;
   send: (msg: string) => void;
 }
 
@@ -42,6 +48,7 @@ export async function registerAnalyticsWebSocket(app: FastifyInstance): Promise<
     const ctx: ClientCtx = {
       userId: consumed.userId,
       scope: consumed.scope,
+      orgId: consumed.orgId,
       send: (msg) => {
         try {
           socket.send(msg);
@@ -94,8 +101,24 @@ export async function registerAnalyticsWebSocket(app: FastifyInstance): Promise<
     sub.on('message', (channel, raw) => {
       if (channel !== WS_CHANNEL) return;
       try {
-        const event = JSON.parse(raw) as WsEvent;
+        const envelope = JSON.parse(raw) as WsEnvelope;
+        // Back-compat: if a publisher accidentally pushed a bare event without
+        // the envelope wrapper, broadcast to every client (pre-envelope
+        // behaviour) but log loudly so the offending publisher can be found.
+        // publishWsEvent always envelopes, so in steady state this branch
+        // never fires.
+        const event: WsEvent = (envelope.event ?? (envelope as unknown as WsEvent)) as WsEvent;
+        const envelopeOrgId: string | undefined = envelope.orgId;
+        if (!envelopeOrgId) {
+          app.log.warn(
+            { channel, errorId: 'ws.envelope_missing_orgid' },
+            'ws.envelope_missing_orgid — broadcasting to all clients',
+          );
+        }
         for (const c of clients) {
+          // Per-tenant filter. Platform staff (orgId === null) bypass the
+          // filter and see every tenant's events.
+          if (c.orgId !== null && envelopeOrgId && c.orgId !== envelopeOrgId) continue;
           c.send(JSON.stringify(c.scope === 'investor' ? scopeForInvestor(event) : event));
         }
       } catch (err) {

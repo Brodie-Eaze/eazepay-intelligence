@@ -362,7 +362,12 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
   // ─── WS Ticket ────────────────────────────────────────────────────────────
   app.post('/auth/ws/ticket', { preHandler: [requireAuth, csrfGuard] }, async (req) => {
     const auth = req.auth!;
-    const issued = await service.issueWsTicket(auth.userId, auth.scope);
+    // Platform staff (STAFF/SUPER) get a null orgId — they see all tenants
+    // in the WS feed. Standard users get their resolved org's id; the WS
+    // gateway uses this to filter events per-tenant.
+    const isPlatformStaff = auth.platformRole === 'STAFF' || auth.platformRole === 'SUPER';
+    const ticketOrgId = isPlatformStaff ? null : (auth.orgId ?? null);
+    const issued = await service.issueWsTicket(auth.userId, auth.scope, ticketOrgId);
     await writeAuditLog({
       req,
       userId: auth.userId,
