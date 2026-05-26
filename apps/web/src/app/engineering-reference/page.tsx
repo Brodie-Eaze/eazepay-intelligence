@@ -23,6 +23,10 @@ import type {
   TableRef,
 } from '@/lib/engineering-reference-data';
 import { FLOW, REFERENCE } from '@/lib/engineering-reference-data';
+import {
+  EngineeringReferenceSidebar,
+  type SidebarItem,
+} from '@/components/ui/EngineeringReferenceSidebar';
 
 export const metadata: Metadata = {
   title: 'Eaze Intelligence · engineering reference + data flow',
@@ -325,62 +329,6 @@ function ReferenceSectionBlock({ section }: { section: ReferenceSection }): JSX.
   );
 }
 
-// ─── sidebar nav ────────────────────────────────────────────────────────────
-
-function Sidebar(): JSX.Element {
-  return (
-    <aside className="w-72 shrink-0 sticky top-0 self-start h-screen overflow-y-auto py-8 px-6 border-r border-slate-200 bg-white">
-      <div className="mb-8">
-        <h1 className="text-base font-bold text-slate-900 tracking-tight">Eaze Intelligence</h1>
-        <p className="text-[10px] uppercase tracking-wider text-slate-500 mt-1">
-          Flow + reference · v1
-        </p>
-      </div>
-
-      <div className="space-y-6">
-        <div>
-          <div className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold mb-3">
-            A · Data Flow
-          </div>
-          <nav className="space-y-1">
-            {FLOW.map((phase) => (
-              <div key={phase.index}>
-                <a
-                  href={`#flow-${phase.index}-${slugify(phase.title)}`}
-                  className="flex items-start gap-2 text-xs text-slate-700 hover:text-slate-900 py-1"
-                >
-                  <span className="text-slate-400 font-mono">
-                    {String(phase.index).padStart(2, '0')}
-                  </span>
-                  <span className="font-medium">{phase.title}</span>
-                </a>
-              </div>
-            ))}
-          </nav>
-        </div>
-
-        <div>
-          <div className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold mb-3">
-            B · Reference
-          </div>
-          <nav className="space-y-1">
-            {REFERENCE.map((section) => (
-              <a
-                key={section.index}
-                href={`#ref-${section.index.toLowerCase()}-${slugify(section.title)}`}
-                className="flex items-start gap-2 text-xs text-slate-700 hover:text-slate-900 py-1"
-              >
-                <span className="text-slate-400 font-mono">{section.index}</span>
-                <span className="font-medium">{section.title}</span>
-              </a>
-            ))}
-          </nav>
-        </div>
-      </div>
-    </aside>
-  );
-}
-
 // ─── stats ──────────────────────────────────────────────────────────────────
 
 function StatsRow(): JSX.Element {
@@ -421,10 +369,25 @@ function StatsRow(): JSX.Element {
 // ─── page ───────────────────────────────────────────────────────────────────
 
 export default function EngineeringReferencePage(): JSX.Element {
+  const flowItems: SidebarItem[] = FLOW.map((phase) => ({
+    id: `flow-${phase.index}-${slugify(phase.title)}`,
+    label: phase.title,
+    numeral: String(phase.index).padStart(2, '0'),
+  }));
+  const referenceItems: SidebarItem[] = REFERENCE.map((section) => ({
+    id: `ref-${section.index.toLowerCase()}-${slugify(section.title)}`,
+    label: section.title,
+    numeral: section.index,
+  }));
+
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900 antialiased">
       <div className="flex">
-        <Sidebar />
+        <EngineeringReferenceSidebar
+          flowItems={flowItems}
+          referenceItems={referenceItems}
+          buildSha="v1"
+        />
 
         <main className="flex-1 max-w-4xl mx-auto px-10 py-12">
           {/* Header */}
