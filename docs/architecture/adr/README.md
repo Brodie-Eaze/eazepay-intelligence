@@ -59,6 +59,7 @@ What did we look at and reject? Why?
 | 000 | This process                                     | ACCEPTED | 2026-05-08 | —     |
 | 001 | Multi-tenancy model (Organization + Membership)  | PROPOSED | 2026-05-08 | 1     |
 | 002 | Per-tenant envelope encryption (KMS-wrapped DEK) | PROPOSED | 2026-05-08 | 1     |
-| 003 | CDC + warehouse architecture                     | DRAFT    | —          | 2     |
+| 003 | Outbox sweeper RLS carve-out (SOC2 PI-019)       | ACCEPTED | 2026-05-31 | 1.6   |
+| 004 | CDC + warehouse architecture                     | DRAFT    | —          | 2     |
 
 (More to follow as decisions land.)

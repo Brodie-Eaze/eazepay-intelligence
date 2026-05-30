@@ -71,6 +71,7 @@ async function processOnce(): Promise<number> {
     // RLS migration explicitly carves this out for the sweeper alone.
     // Without this, post-role-deploy every sweep returns zero rows and
     // webhooks accumulate forever.
+    // Design + compensating controls: docs/architecture/adr/ADR-003-outbox-sweeper-rls-carveout.md (SOC2-PI-019).
     await tx.$executeRaw`SELECT set_config('app.outbox_sweeper', 'true', true)`;
     // Phase 7 (SF-006): exclude DLQ'd rows. Poison-pill rows that crossed
     // MAX_ATTEMPTS were stamped dlqed_at and are out of the sweep set
