@@ -23,7 +23,7 @@
  */
 import { createHash, randomBytes } from 'node:crypto';
 import { v7 as uuidv7 } from 'uuid';
-import type { PrismaClient } from '@prisma/client';
+import type { Prisma, PrismaClient } from '@prisma/client';
 import type { OrgRole } from '@prisma/client';
 import { errors } from '../../shared/errors/app-error.js';
 import { hashPassword } from '../../shared/utils/password.js';
@@ -124,9 +124,17 @@ export class InvitationService {
   async accept(args: {
     rawToken: string;
     password: string;
+    /**
+     * SOC2 CC6-021: caller-supplied audit hook that runs INSIDE the same
+     * transaction as the user-create / membership-create / invitation-
+     * consume. The audit row commits with the mutation or not at all —
+     * no orphan "user accepted" rows referencing a rolled-back user.
+     */
+    audit?: (tx: Prisma.TransactionClient, ctx: { userId: string; orgId: string }) => Promise<void>;
   }): Promise<{ userId: string; orgId: string }> {
     const invite = await this.findUsable(args.rawToken);
     const passwordHash = await hashPassword(args.password);
+    const auditHook = args.audit;
 
     return this.prisma.$transaction(async (tx) => {
       // The user might already exist (invited into a second org). In that
@@ -183,6 +191,9 @@ export class InvitationService {
         where: { id: invite.id },
         data: { acceptedAt: new Date(), acceptedById: userId },
       });
+      if (auditHook) {
+        await auditHook(tx, { userId, orgId: invite.orgId });
+      }
       return { userId, orgId: invite.orgId };
     });
   }
@@ -203,13 +214,24 @@ export class InvitationService {
     }));
   }
 
-  async revoke(id: string): Promise<void> {
+  async revoke(
+    id: string,
+    opts?: {
+      /**
+       * SOC2 CC6-021: audit row commits inside the same tx as the revoke.
+       */
+      audit?: (tx: Prisma.TransactionClient) => Promise<void>;
+    },
+  ): Promise<void> {
     const found = await this.prisma.userInvitation.findUnique({ where: { id } });
     if (!found) throw errors.notFound('Invitation not found');
     if (found.acceptedAt) throw errors.badRequest('Invitation already accepted');
-    await this.prisma.userInvitation.update({
-      where: { id },
-      data: { revokedAt: new Date() },
+    await this.prisma.$transaction(async (tx) => {
+      await tx.userInvitation.update({
+        where: { id },
+        data: { revokedAt: new Date() },
+      });
+      if (opts?.audit) await opts.audit(tx);
     });
   }
 

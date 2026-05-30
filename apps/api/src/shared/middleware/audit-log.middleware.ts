@@ -4,17 +4,48 @@ import type { Prisma, PrismaClient } from '@prisma/client';
 import { getPrisma } from '../../config/database.js';
 
 /**
- * Append-only audit writer. Always wraps in the same DB connection — callers
- * should pass a Prisma transaction client when in a tx, otherwise the global one.
+ * Append-only audit writer.
  *
- * The role-level REVOKE on `audit_logs` is the second line of defence; this is the
- * first. Callers MUST NOT update or delete rows.
+ * ─────────────────────────────────────────────────────────────────────────────
+ * ADR: audit-log atomicity (SOC2 CC6-021 / CC7.3, GDPR Art. 30, PCI 10.2/10.3)
+ * ─────────────────────────────────────────────────────────────────────────────
  *
- * Phase 7 (SF-009): optional `tx` argument lets callers run the audit write
- * inside the same transaction as the mutation it describes. Without this,
- * a mutation could commit while the audit insert silently fails (network
- * blip, RLS denial, etc.) — leaving an unaudited write in production. With
- * tx, either both rows commit or neither does.
+ * Audit writes are **atomic with the mutation they describe** when the helper
+ * is called inside a `prisma.$transaction(async (tx) => …)` and the tx client
+ * is passed via the `tx` argument:
+ *
+ *     await prisma.$transaction(async (tx) => {
+ *       await tx.user.update({ where: { id }, data: { role: 'ADMIN' } });
+ *       await writeAuditLog({ req, tx, action: 'USER_UPDATED', … });
+ *     });
+ *
+ * Either both rows commit or neither does. Orphan writes — a mutation that
+ * lands without its audit row, or an audit row referencing a mutation that
+ * rolled back — are **impossible** by construction. This is the first line
+ * of defence behind the role-level REVOKE on `audit_logs` (UPDATE / DELETE
+ * are revoked at the DB role; the writer role can only INSERT).
+ *
+ * Auditor-readable claim: every state change on regulated data that is
+ * routed through this helper produces exactly one corresponding `audit_logs`
+ * row, or no mutation occurred at all. Drift between business state and the
+ * audit trail cannot happen without a violation of the transaction itself.
+ *
+ * Without `tx`, the helper falls back to the global Prisma client. That mode
+ * is reserved for:
+ *   - Best-effort failure recording (e.g. RTBF_FAILED, fired after the
+ *     business tx has already rolled back — we still want a record).
+ *   - System / lifecycle events with no enclosing mutation tx (cron jobs,
+ *     scheduled FX ingestion, worker lifecycle).
+ *   - Auth audit rows (USER_LOGIN, USER_LOGIN_FAILED) where the "mutation"
+ *     is a session-issuance side effect we want recorded even if the cookie
+ *     write later fails.
+ *
+ * Callers MUST NOT call `update` or `delete` on `audit_logs`. The schema
+ * comment + DB role both enforce this; the type only exposes `auditLog`.
+ *
+ * Phase 7 (SF-009) introduced the `tx` argument. SOC2 CC6-021 (May 2026)
+ * required the highest-risk mutations to actually pass it; this docstring
+ * is the design record for that effort.
  */
 type AuditTxClient = Pick<PrismaClient, 'auditLog'> | Prisma.TransactionClient;
 
