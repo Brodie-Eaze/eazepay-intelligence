@@ -17,6 +17,7 @@
     "db:migrate": "prisma migrate deploy",
     "db:migrate:dev": "prisma migrate dev",
     "db:generate": "prisma generate",
+    "redact:generate": "tsx scripts/generate-redact-paths.ts",
     "db:seed": "tsx prisma/seed.ts",
     "db:seed:portfolio": "tsx prisma/seed-portfolio.ts",
     "db:seed:bootstrap-org": "tsx prisma/seed-bootstrap-org.ts",

@@ -73,5 +73,18 @@ Full deploy runbook: [`docs/runbooks/railway-deployment.md`](../../docs/runbooks
 - All routes are Zod-validated at the boundary (`schemas.ts` per domain).
 - All mutations write an `audit_logs` row in the same transaction.
 - All PII is AES-256-GCM at rest (see `src/shared/utils/encryption.ts`).
+- PII is redacted from logs via a model-driven Pino redact list (SOC2-CC7-016).
+  Mark new PII columns in `prisma/schema.prisma` with a `/// @pii` triple-slash
+  comment immediately above the field, then run:
+
+  ```bash
+  pnpm --filter api redact:generate
+  ```
+
+  This rewrites `src/config/pii-redact-paths.generated.ts`. Commit the diff
+  alongside the schema change — CI compares the committed file to a fresh run
+  and fails on drift. The generated list is unioned with the hand-curated
+  `MANUAL_PII_REDACT_PATHS` in `src/config/logger.ts` for defense in depth.
+
 - All webhook handlers HMAC-verify before persisting (see `src/shared/middleware/webhook-signature.middleware.ts`).
 - Rate-limit failures are fail-closed on Redis outage (correct for SOC 2 — see `src/server.ts:rateLimit` config).
