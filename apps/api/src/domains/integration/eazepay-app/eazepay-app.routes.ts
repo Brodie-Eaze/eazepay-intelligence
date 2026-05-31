@@ -37,6 +37,14 @@ import { resolveBrandToOrgSlug } from './brand-org-mapping.js';
 const SIG_HEADERS = ['x-eazepay-signature', 'x-eazepay-signature-placeholder'] as const;
 const TS_HEADER = 'x-eazepay-timestamp';
 const KEY_HEADER = 'idempotency-key';
+
+/**
+ * SEC-016: idempotency-key shape gate. Without this a signed sender could
+ * SETNX multi-MB keys into Redis and balloon memory (and pollute the DB
+ * unique-index too). Same regex the generic webhook middleware uses for
+ * MiCamp / Pixie / etc. CWE-799 Improper Control of Interaction Frequency.
+ */
+const IDEMPOTENCY_KEY_RE = /^[A-Za-z0-9_-]{16,128}$/;
 const EVENT_ID_HEADER = 'x-eazepay-event-id';
 const EVENT_TYPE_HEADER = 'x-eazepay-event-type';
 const TOLERANCE_SECONDS = 300;
@@ -99,6 +107,12 @@ export async function registerEazepayAppIntegrationRoutes(app: FastifyInstance):
       }
       if (!sig || !ts || !idempotencyKey || !eventIdHeader || !eventTypeHeader) {
         throw errors.invalidSignature();
+      }
+
+      // SEC-016: reject malformed idempotency keys BEFORE any Redis/DB
+      // touch. Length-capped + charset-restricted.
+      if (!IDEMPOTENCY_KEY_RE.test(idempotencyKey)) {
+        throw errors.badRequest('Malformed idempotency-key (16–128 chars, [A-Za-z0-9_-])');
       }
 
       // ─── Timestamp tolerance ───────────────────────────────────────────

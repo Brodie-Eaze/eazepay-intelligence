@@ -35,25 +35,33 @@ import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import type { FastifyRequest, FastifyReply, preHandlerHookHandler } from 'fastify';
 import { errors } from '../errors/app-error.js';
 import { getEnv } from '../../config/env.js';
+import { getRedis } from '../../config/redis.js';
 import { readCookie } from '../utils/cookies.js';
 
 const STEP_UP_COOKIE = '__Host-mfa_stepup';
 const STEP_UP_TTL_SECONDS = 300; // 5 minutes
-// In-process replay-detection store — same single-use guarantee as ws_ticket.
-// Process-local is acceptable here because step-up tokens are short-lived
-// and a balanced load-balancer routes the same user to the same pod most
-// of the time. A determined attacker re-using a token across pods within
-// 5 minutes is theoretically possible but caught by the cookie's bound
-// `sub` claim — the attacker needs to be the same user.
-//
-// Phase H reviewer fix (arch-critic #3): the previous implementation
-// `consumedJtis.clear()` on bloat would have opened a small replay window
-// — a token consumed at t=0 with `iat=t` could be replayed at t=29s if
-// the set was cleared at t=30s, because the 300s freshness check still
-// passed. Now we store {jti → exp} and prune only entries that have
-// already expired (the iat freshness check would reject them anyway), so
-// shrinking the store can never re-enable a still-valid jti.
-const consumedJtis = new Map<string, number /* exp unix seconds */>();
+
+/**
+ * SEC-007 (CWE-384 Session Fixation / Token Replay): jti dedup moved to
+ * Redis SET NX so the single-use guarantee survives multi-pod deployments.
+ *
+ * Prior to 2026-05-17 we kept consumed JTIs in a process-local Map. A
+ * step-up token consumed against pod A could be replayed against pods
+ * B, C, … within the 5-minute window because each pod had its own
+ * dedup state. The previous comment rationalised this with
+ * "balanced load-balancer routes the same user to the same pod most
+ * of the time" — but "most of the time" is not a security guarantee.
+ *
+ * Now: every consume does `SET jti EX <ttl> NX`. The first pod wins
+ * atomically and gets `OK`; subsequent pods get `null` and reject.
+ * Same primitive the WS ticket already uses (consumeWsTicket).
+ *
+ * The in-process Map is retained as a TEST shim only — Redis isn't
+ * mocked in some unit tests, so they fall back to the local Map. The
+ * Map is unused when Redis is reachable.
+ */
+const REDIS_JTI_PREFIX = 'mfa:stepup:jti:';
+const consumedJtisFallback = new Map<string, number /* exp unix seconds */>();
 const PRUNE_THRESHOLD = 10_000;
 
 function stepUpSecret(): string {
@@ -128,19 +136,42 @@ export const requireMfaStepUp: preHandlerHookHandler = async (
   if (ageSeconds < 0 || ageSeconds > STEP_UP_TTL_SECONDS) {
     throw errors.mfaStepUpRequired('Step-up token expired');
   }
-  if (consumedJtis.has(payload.jti)) {
-    throw errors.mfaStepUpRequired('Step-up token already used');
+  // SEC-007: atomic single-use enforcement via Redis SET NX. The first
+  // pod to consume the jti gets `OK`; every other pod (same window, any
+  // pod) gets `null` and rejects. TTL = remaining lifetime of the token
+  // so the Redis key is auto-reaped once the token would have expired
+  // anyway.
+  const nowSec = Math.floor(Date.now() / 1000);
+  const remainingTtl = Math.max(1, STEP_UP_TTL_SECONDS - ageSeconds);
+  let redisOk = false;
+  try {
+    const redis = getRedis();
+    const acquired = await redis.set(
+      `${REDIS_JTI_PREFIX}${payload.jti}`,
+      '1',
+      'EX',
+      remainingTtl,
+      'NX',
+    );
+    if (acquired !== 'OK') throw errors.mfaStepUpRequired('Step-up token already used');
+    redisOk = true;
+  } catch (err) {
+    // Differentiate "already used" (intentional throw) from "Redis down".
+    // The former bubbles. The latter falls back to the in-process Map
+    // so the gate still functions in degraded mode — better than failing
+    // open OR locking out every SUPER action during a Redis outage.
+    if (err && typeof err === 'object' && 'errorCode' in err) throw err;
   }
-  // Consume on success — single-use until the token's natural exp.
-  const exp = payload.iat + STEP_UP_TTL_SECONDS;
-  consumedJtis.set(payload.jti, exp);
-  // Prune lazily once we hit the threshold. Only drop entries past their
-  // exp — the freshness check would already reject re-use of those, so
-  // shrinking the store can never re-enable a still-valid jti.
-  if (consumedJtis.size > PRUNE_THRESHOLD) {
-    const nowSec = Math.floor(Date.now() / 1000);
-    for (const [jti, jtiExp] of consumedJtis) {
-      if (jtiExp <= nowSec) consumedJtis.delete(jti);
+  if (!redisOk) {
+    if (consumedJtisFallback.has(payload.jti)) {
+      throw errors.mfaStepUpRequired('Step-up token already used');
+    }
+    const exp = payload.iat + STEP_UP_TTL_SECONDS;
+    consumedJtisFallback.set(payload.jti, exp);
+    if (consumedJtisFallback.size > PRUNE_THRESHOLD) {
+      for (const [jti, jtiExp] of consumedJtisFallback) {
+        if (jtiExp <= nowSec) consumedJtisFallback.delete(jti);
+      }
     }
   }
 };
@@ -149,9 +180,9 @@ export const STEP_UP_COOKIE_NAME = STEP_UP_COOKIE;
 export const STEP_UP_TTL = STEP_UP_TTL_SECONDS;
 
 export function __resetStepUpStateForTests(): void {
-  consumedJtis.clear();
+  consumedJtisFallback.clear();
 }
 
 export function __consumedJtiCountForTests(): number {
-  return consumedJtis.size;
+  return consumedJtisFallback.size;
 }

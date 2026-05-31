@@ -44,6 +44,7 @@ import { getRedis } from '../../config/redis.js';
 import { getLogger } from '../../config/logger.js';
 import { errors } from '../../shared/errors/app-error.js';
 import { writeAuditLog } from '../../shared/middleware/audit-log.middleware.js';
+import { hashPII } from '../../shared/utils/encryption.js';
 import { COOKIE, setCookie } from '../../shared/utils/cookies.js';
 import { AuthRepository } from './auth.repository.js';
 import { AuthService } from './auth.service.js';
@@ -237,13 +238,23 @@ export async function registerOAuthRoutes(app: FastifyInstance): Promise<void> {
     });
     setCookie(reply, COOKIE.CSRF, issued.csrf, { maxAgeSeconds: accessTtl, httpOnly: false });
 
+    // SEC-011: audit metadata is PII-free by contract. Storing the OAuth
+    // claims.email + claims.name here landed plaintext consumer-adjacent
+    // PII inside the immutable audit table — out of the encryption
+    // boundary, queryable by every platform-staff user with audit access.
+    // Replace with a deterministic hash and the already-stored user.id
+    // (which the row also carries as `userId`). CWE-532 / OWASP A09:2021.
     await writeAuditLog({
       req,
       userId: user.id,
       action: 'USER_LOGIN_OAUTH',
       resourceType: 'user',
       resourceId: user.id,
-      metadata: { provider: 'google', email: claims.email, name: claims.name ?? null },
+      metadata: {
+        provider: 'google',
+        emailHashHex: hashPII(claims.email).toString('hex'),
+        sub: claims.sub,
+      },
     });
 
     return reply.redirect(`${env.APP_URL}/`, 302);
