@@ -8,6 +8,7 @@ import { PageHeader } from '@/components/PageHeader';
 import { SectionCard } from '@/components/SectionCard';
 import { StatusPill } from '@/components/StatusPill';
 import { KpiCard } from '@/components/KpiCard';
+import { EmptyState } from '@/components/EmptyState';
 
 interface TokenRow {
   id: string;
@@ -239,8 +240,17 @@ export default function TokensPage(): JSX.Element {
               ))}
               {rows.length === 0 && (
                 <tr>
-                  <td colSpan={7} className="text-muted py-8 text-center">
-                    No tokens yet. Issue one to get started.
+                  <td colSpan={7} className="p-0">
+                    <EmptyState
+                      variant="firstRun"
+                      title="No API tokens yet"
+                      description="Programmatic access starts here. Issue a scoped token for a BI tool, a service-to-service integration, or a one-off script. The secret is shown once — store it in your vault."
+                      primaryAction={{
+                        label: '+ Issue first token',
+                        onClick: () => setShowForm(true),
+                      }}
+                      inline
+                    />
                   </td>
                 </tr>
               )}

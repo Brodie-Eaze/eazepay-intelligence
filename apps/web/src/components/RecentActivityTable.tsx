@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { formatMoney, formatTime } from '@/lib/format';
 import { Monogram } from './Monogram';
 import { StatusPill } from './StatusPill';
+import { EmptyState } from './EmptyState';
 
 export interface ActivityRow {
   eventTime: string;
@@ -32,7 +33,27 @@ const KIND_TONE: Record<ActivityRow['kind'], string> = {
 
 export function RecentActivityTable({ rows }: { rows: ActivityRow[] }): JSX.Element {
   if (rows.length === 0) {
-    return <div className="text-sm text-muted px-5 py-6">No recent activity.</div>;
+    return (
+      <EmptyState
+        variant="firstRun"
+        title="All clear"
+        description="No applications, decisions or fundings in the last window. Events stream in here as they happen."
+        icon={
+          <svg
+            width={22}
+            height={22}
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth={1.75}
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            <path d="M20 6 9 17l-5-5" />
+          </svg>
+        }
+      />
+    );
   }
   return (
     <div className="overflow-x-auto">

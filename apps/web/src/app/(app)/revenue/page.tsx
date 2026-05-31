@@ -9,6 +9,7 @@ import { RevenueAreaChart } from '@/components/RevenueAreaChart';
 import { SectionCard } from '@/components/SectionCard';
 import { KpiCard } from '@/components/KpiCard';
 import { PageHeader } from '@/components/PageHeader';
+import { EmptyState } from '@/components/EmptyState';
 
 const RANGES: Array<{ label: string; days: number; bucket: 'day' | 'week' | 'month' }> = [
   { label: '7d', days: 7, bucket: 'day' },
@@ -77,10 +78,17 @@ export default function RevenuePage(): JSX.Element {
         subtitle={`bucket: ${range.bucket}`}
         bodyClassName="p-3"
       >
-        {q.data ? (
-          <RevenueAreaChart data={q.data} height={360} />
-        ) : (
+        {!q.data ? (
           <div className="text-muted p-6">Loading…</div>
+        ) : q.data.length === 0 ? (
+          <EmptyState
+            variant="filterEmpty"
+            title="No revenue booked in this window"
+            description="The commission ledger is append-only — nothing was posted between the bounds you've selected. Try a wider range."
+            primaryAction={{ label: 'Switch to All', onClick: () => setRange(RANGES[4]!) }}
+          />
+        ) : (
+          <RevenueAreaChart data={q.data} height={360} />
         )}
       </SectionCard>
     </div>
