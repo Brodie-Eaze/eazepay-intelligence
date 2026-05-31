@@ -207,18 +207,25 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
         });
         throw errors.unauthorized('Invalid code');
       }
-      await prisma.user.update({
-        where: { id: auth.userId },
-        data: { mfaEnabled: true, mfaSecret: secret },
+      // SOC2 CC6-021: enable + audit must be atomic. If the audit insert
+      // fails after the user row commits, we'd have an MFA-enabled account
+      // with no corresponding audit row — auditor would flag drift between
+      // user.mfaEnabled history and audit_logs.
+      await prisma.$transaction(async (tx) => {
+        await tx.user.update({
+          where: { id: auth.userId },
+          data: { mfaEnabled: true, mfaSecret: secret },
+        });
+        await writeAuditLog({
+          req,
+          tx,
+          userId: auth.userId,
+          action: 'USER_MFA_ENABLED',
+          resourceType: 'user',
+          resourceId: auth.userId,
+        });
       });
       await redis.del(`mfa:setup:${auth.userId}`);
-      await writeAuditLog({
-        req,
-        userId: auth.userId,
-        action: 'USER_MFA_ENABLED',
-        resourceType: 'user',
-        resourceId: auth.userId,
-      });
       return { ok: true };
     },
   );
@@ -242,16 +249,22 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
         });
         throw errors.unauthorized('Invalid code');
       }
-      await prisma.user.update({
-        where: { id: auth.userId },
-        data: { mfaEnabled: false, mfaSecret: null },
-      });
-      await writeAuditLog({
-        req,
-        userId: auth.userId,
-        action: 'USER_MFA_DISABLED',
-        resourceType: 'user',
-        resourceId: auth.userId,
+      // SOC2 CC6-021: disable + audit must be atomic. MFA-off without a
+      // matching audit row would let an attacker who briefly disabled MFA
+      // hide the event by causing the audit-insert to fail.
+      await prisma.$transaction(async (tx) => {
+        await tx.user.update({
+          where: { id: auth.userId },
+          data: { mfaEnabled: false, mfaSecret: null },
+        });
+        await writeAuditLog({
+          req,
+          tx,
+          userId: auth.userId,
+          action: 'USER_MFA_DISABLED',
+          resourceType: 'user',
+          resourceId: auth.userId,
+        });
       });
       return { ok: true };
     },
@@ -288,7 +301,26 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
     async (req, reply) => {
       const auth = req.auth!;
       const params = z.object({ sessionId: z.string().uuid() }).parse(req.params);
-      const count = await service.revokeSession(auth.userId, params.sessionId);
+      // SOC2 CC6-021: session revocation produces a paired audit row.
+      // service.revokeSession is a single updateMany on refresh_tokens,
+      // so we re-issue it inside a tx to bind it to the audit insert.
+      const count = await prisma.$transaction(async (tx) => {
+        const updated = await tx.refreshToken.updateMany({
+          where: { userId: auth.userId, sessionId: params.sessionId, revokedAt: null },
+          data: { revokedAt: new Date() },
+        });
+        if (updated.count === 0) return 0;
+        await writeAuditLog({
+          req,
+          tx,
+          userId: auth.userId,
+          action: 'USER_SESSION_REVOKED',
+          resourceType: 'session',
+          resourceId: params.sessionId,
+          metadata: { rowsRevoked: updated.count },
+        });
+        return updated.count;
+      });
       if (count === 0) {
         // Either the sessionId belongs to a different user (don't leak),
         // or it was already revoked / expired. Same response either way.
@@ -296,15 +328,9 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
       }
       // Deny the sessionId for the maximum access-token lifetime so any
       // outstanding access tokens in this session are rejected immediately.
+      // Runs after the tx commits — Redis deny is idempotent and bounded
+      // by TTL, so a late failure here doesn't compromise the audit trail.
       await denySession(params.sessionId, env.JWT_ACCESS_TTL_SECONDS);
-      await writeAuditLog({
-        req,
-        userId: auth.userId,
-        action: 'USER_SESSION_REVOKED',
-        resourceType: 'session',
-        resourceId: params.sessionId,
-        metadata: { rowsRevoked: count },
-      });
       reply.status(204).send();
     },
   );

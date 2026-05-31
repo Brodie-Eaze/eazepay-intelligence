@@ -108,12 +108,17 @@ export async function registerInvitationRoutes(app: FastifyInstance): Promise<vo
     { preHandler: [requireAuth, csrfGuard, requireRole('ADMIN')] },
     async (req, reply) => {
       const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
-      await invites.revoke(id);
-      await writeAuditLog({
-        req,
-        action: 'USER_INVITATION_REVOKED',
-        resourceType: 'user_invitation',
-        resourceId: id,
+      // SOC2 CC6-021: revoke + audit row atomic.
+      await invites.revoke(id, {
+        audit: async (tx) => {
+          await writeAuditLog({
+            req,
+            tx,
+            action: 'USER_INVITATION_REVOKED',
+            resourceType: 'user_invitation',
+            resourceId: id,
+          });
+        },
       });
       reply.status(204).send();
     },
@@ -134,7 +139,23 @@ export async function registerInvitationRoutes(app: FastifyInstance): Promise<vo
   app.post('/auth/invitations/:token/accept', async (req, reply) => {
     const { token } = z.object({ token: z.string().min(16).max(256) }).parse(req.params);
     const body = AcceptSchema.parse(req.body);
-    const { userId } = await invites.accept({ rawToken: token, password: body.password });
+    // SOC2 CC6-021: the USER_INVITATION_ACCEPTED audit row must commit
+    // with the user-create / membership-create / invitation-consume so we
+    // never have an accepted-but-unaudited account.
+    const { userId } = await invites.accept({
+      rawToken: token,
+      password: body.password,
+      audit: async (tx, ctx) => {
+        await writeAuditLog({
+          req,
+          tx,
+          userId: ctx.userId,
+          action: 'USER_INVITATION_ACCEPTED',
+          resourceType: 'user',
+          resourceId: ctx.userId,
+        });
+      },
+    });
     const user = await prisma.user.findUniqueOrThrow({ where: { id: userId } });
     const issued = await authService.issueSessionForUser(user, 'standard');
 
@@ -151,14 +172,7 @@ export async function registerInvitationRoutes(app: FastifyInstance): Promise<vo
     });
     setCookie(reply, COOKIE.CSRF, issued.csrf, { maxAgeSeconds: accessTtl, httpOnly: false });
 
-    await writeAuditLog({
-      req,
-      userId,
-      action: 'USER_INVITATION_ACCEPTED',
-      resourceType: 'user',
-      resourceId: userId,
-      metadata: { email: user.email, role: user.role },
-    });
+    // (audit row was written inside invites.accept's transaction above.)
 
     return {
       user: UserResponseSchema.parse({

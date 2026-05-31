@@ -63,28 +63,35 @@ export async function registerApiTokenRoutes(app: FastifyInstance): Promise<void
       if (!fallback) throw new Error('Issuer has no organisation membership');
       orgId = fallback.orgId;
     }
-    const created = await prisma.apiToken.create({
-      data: {
-        id: uuidv7(),
-        userId: auth.userId,
-        orgId,
-        name: input.name,
-        prefix,
-        hashedSecret,
-        scopes: input.scopes,
-        expiresAt,
-      },
-    });
-    await writeAuditLog({
-      req,
-      action: 'USER_UPDATED',
-      resourceType: 'api_token',
-      resourceId: created.id,
-      metadata: {
-        name: input.name,
-        scopes: input.scopes,
-        expiresInDays: input.expiresInDays ?? null,
-      },
+    // SOC2 CC6-021: machine-credential issuance and the audit row commit
+    // together. An API token row that exists without an audit event would
+    // bypass the access-review pipeline.
+    const created = await prisma.$transaction(async (tx) => {
+      const row = await tx.apiToken.create({
+        data: {
+          id: uuidv7(),
+          userId: auth.userId,
+          orgId,
+          name: input.name,
+          prefix,
+          hashedSecret,
+          scopes: input.scopes,
+          expiresAt,
+        },
+      });
+      await writeAuditLog({
+        req,
+        tx,
+        action: 'USER_UPDATED',
+        resourceType: 'api_token',
+        resourceId: row.id,
+        metadata: {
+          name: input.name,
+          scopes: input.scopes,
+          expiresInDays: input.expiresInDays ?? null,
+        },
+      });
+      return row;
     });
     reply.status(201);
     return {
@@ -105,13 +112,18 @@ export async function registerApiTokenRoutes(app: FastifyInstance): Promise<void
     const row = await prisma.apiToken.findUnique({ where: { id } });
     if (!row || row.userId !== auth.userId) throw errors.notFound('ApiToken', id);
     if (row.revokedAt) throw errors.badRequest('Already revoked');
-    await prisma.apiToken.update({ where: { id }, data: { revokedAt: new Date() } });
-    await writeAuditLog({
-      req,
-      action: 'USER_UPDATED',
-      resourceType: 'api_token',
-      resourceId: id,
-      metadata: { revoked: true },
+    // SOC2 CC6-021: revoke + audit atomic so a credential cannot appear
+    // revoked while the audit history still shows it active (or vice versa).
+    await prisma.$transaction(async (tx) => {
+      await tx.apiToken.update({ where: { id }, data: { revokedAt: new Date() } });
+      await writeAuditLog({
+        req,
+        tx,
+        action: 'USER_UPDATED',
+        resourceType: 'api_token',
+        resourceId: id,
+        metadata: { revoked: true },
+      });
     });
     reply.status(204).send();
   });
