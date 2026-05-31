@@ -66,7 +66,7 @@ export default function ApplicationsPage(): JSX.Element {
                   <td className="numeric text-muted">{a.consumerPhoneMasked}</td>
                   <td className="numeric text-right text-ink2">{a.creditScore ?? '—'}</td>
                   <td>
-                    <StatusPill>{a.status}</StatusPill>
+                    <StatusPill domain="application">{a.status}</StatusPill>
                   </td>
                 </tr>
               ))}

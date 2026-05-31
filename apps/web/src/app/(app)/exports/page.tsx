@@ -1,13 +1,16 @@
 'use client';
 
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useSearchParams } from 'next/navigation';
 import { api } from '@/lib/api';
 import { formatDateTime, formatNumber } from '@/lib/format';
 import { PageHeader } from '@/components/PageHeader';
 import { SectionCard } from '@/components/SectionCard';
 import { StatusPill } from '@/components/StatusPill';
 import { KpiCard } from '@/components/KpiCard';
+import { FilterBar, type FilterDef } from '@/components/ui/FilterBar';
+import { getLabel, listOptions } from '@/lib/taxonomy';
 
 interface ExportRow {
   id: string;
@@ -32,8 +35,32 @@ const TYPES = [
 ] as const;
 const FORMATS = ['CSV', 'JSON', 'XLSX'] as const;
 
+const FILTERS: FilterDef[] = [
+  {
+    key: 'status',
+    label: 'Status',
+    type: 'select',
+    options: listOptions('export'),
+  },
+  {
+    key: 'type',
+    label: 'Type',
+    type: 'select',
+    options: TYPES.map((t) => ({ value: t, label: t.replace(/_/g, ' ') })),
+  },
+  {
+    key: 'format',
+    label: 'Format',
+    type: 'select',
+    options: FORMATS.map((f) => ({ value: f, label: f })),
+  },
+  { key: 'created', label: 'Created', type: 'date-range' },
+];
+
 export default function ExportsPage(): JSX.Element {
   const qc = useQueryClient();
+  const params = useSearchParams();
+
   const q = useQuery({
     queryKey: ['exports'],
     queryFn: () => api<ExportRow[]>('/exports'),
@@ -49,7 +76,27 @@ export default function ExportsPage(): JSX.Element {
     onSuccess: () => qc.invalidateQueries({ queryKey: ['exports'] }),
   });
 
-  const rows = q.data ?? [];
+  const filterStatus = params.get('status') ?? '';
+  const filterType = params.get('type') ?? '';
+  const filterFormat = params.get('format') ?? '';
+  const createdFrom = params.get('created-from') ?? '';
+  const createdTo = params.get('created-to') ?? '';
+
+  const allRows = q.data ?? [];
+  const rows = useMemo(
+    () =>
+      allRows.filter((r) => {
+        if (filterStatus && r.status !== filterStatus) return false;
+        if (filterType && r.type !== filterType) return false;
+        if (filterFormat && r.format !== filterFormat) return false;
+        if (createdFrom && r.createdAt < createdFrom) return false;
+        // Inclusive end-of-day for `to` — compare against ISO date prefix.
+        if (createdTo && r.createdAt.slice(0, 10) > createdTo) return false;
+        return true;
+      }),
+    [allRows, filterStatus, filterType, filterFormat, createdFrom, createdTo],
+  );
+
   const running = rows.filter((r) => r.status === 'RUNNING' || r.status === 'PENDING').length;
   const completed = rows.filter((r) => r.status === 'COMPLETED').length;
   const failed = rows.filter((r) => r.status === 'FAILED').length;
@@ -61,10 +108,12 @@ export default function ExportsPage(): JSX.Element {
         subtitle="Async dump of any resource — CSV / JSON · 24-hour download window"
       />
 
+      <FilterBar filters={FILTERS} />
+
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
         <KpiCard label="Total" value={rows.length.toString()} />
-        <KpiCard label="Running" value={running.toString()} hint="pending or in flight" />
-        <KpiCard label="Completed" value={completed.toString()} hint="downloadable" />
+        <KpiCard label="Processing" value={running.toString()} hint="queued or in flight" />
+        <KpiCard label="Ready" value={completed.toString()} hint="downloadable" />
         <KpiCard label="Failed" value={failed.toString()} />
       </div>
 
@@ -139,7 +188,7 @@ export default function ExportsPage(): JSX.Element {
                     <span className="tag">{r.format}</span>
                   </td>
                   <td>
-                    <StatusPill>{r.status}</StatusPill>
+                    <StatusPill domain="export">{r.status}</StatusPill>
                   </td>
                   <td className="numeric text-right text-ink2">
                     {r.rowCount != null ? formatNumber(r.rowCount) : '—'}
@@ -161,7 +210,7 @@ export default function ExportsPage(): JSX.Element {
                     )}
                     {r.status === 'FAILED' && r.error && (
                       <span className="text-[11px] text-danger" title={r.error}>
-                        error
+                        {getLabel('export', r.status).toLowerCase()}
                       </span>
                     )}
                   </td>
@@ -170,7 +219,7 @@ export default function ExportsPage(): JSX.Element {
               {rows.length === 0 && (
                 <tr>
                   <td colSpan={8} className="text-muted py-8 text-center">
-                    No exports yet.
+                    No exports match the filters.
                   </td>
                 </tr>
               )}

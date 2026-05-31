@@ -118,18 +118,16 @@ export default function AlertsPage(): JSX.Element {
                     {r.description && <div className="text-xs text-muted">{r.description}</div>}
                   </td>
                   <td>
-                    <StatusPill>{r.severity}</StatusPill>
+                    <StatusPill domain="alertSeverity">{r.severity}</StatusPill>
                   </td>
                   <td className="numeric text-ink2 text-xs">{r.windowMinutes} min</td>
                   <td className="text-xs text-ink2">
                     {r.channel ? `${r.channel.name} (${r.channel.kind})` : '—'}
                   </td>
                   <td>
-                    {r.isActive ? (
-                      <StatusPill>ACTIVE</StatusPill>
-                    ) : (
-                      <StatusPill>INACTIVE</StatusPill>
-                    )}
+                    <StatusPill domain="genericActive">
+                      {r.isActive ? 'ACTIVE' : 'INACTIVE'}
+                    </StatusPill>
                   </td>
                 </tr>
               ))}
@@ -167,10 +165,10 @@ export default function AlertsPage(): JSX.Element {
                   </td>
                   <td className="text-ink font-medium">{a.rule.name}</td>
                   <td>
-                    <StatusPill>{a.severity}</StatusPill>
+                    <StatusPill domain="alertSeverity">{a.severity}</StatusPill>
                   </td>
                   <td>
-                    <StatusPill>{a.state}</StatusPill>
+                    <StatusPill domain="alertState">{a.state}</StatusPill>
                   </td>
                   <td className="text-[11px] text-muted truncate max-w-[260px]">
                     <code>{JSON.stringify(a.payload)}</code>
