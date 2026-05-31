@@ -1,22 +1,64 @@
 'use client';
 
+/**
+ * /login — primary sign-in surface.
+ *
+ * The first thing a lender sees during demo. Tone target: calm,
+ * deliberate, regulated-grade. Layout: brand hero on the left (≥ lg)
+ * + form card on the right. On narrow viewports the hero hides and
+ * the form card centers on the paper background.
+ *
+ * Shared primitives:
+ *   - `BrandMark`        — wordmark above the form (+ inline variant in hero)
+ *   - `AuthField`        — labelled input wrapper
+ *   - `MfaCodeInput`     — segmented 6-digit code field
+ *   - `AuthError`        — calm, role=alert error banner
+ *   - `TrustLine`        — SOC 2 / AES-256 / TLS 1.3 marker below form
+ *   - `motion-page-in`   — gentle 200ms fade + 4px translate on mount
+ *
+ * Voice (Sprint D): sentence case, no exclamation, no "please".
+ *   - Heading       : "Sign in"
+ *   - Sub-copy      : "Continue to EazePay Intelligence."
+ *   - CTA           : "Sign in" → "Signing in…"
+ *   - Generic error : "Couldn't verify those credentials. Try again."
+ *
+ * The form deliberately uses raw `useState` (not React Hook Form) to
+ * keep the bundle small on this entry surface; the schema is trivial
+ * (email + password + optional 6 digits) and the server is
+ * authoritative. Submit is disabled while in-flight to prevent
+ * double-submit.
+ */
 import { useEffect, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { ArrowRight, Eye, EyeOff, ShieldCheck } from 'lucide-react';
 import { api, ApiError } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import type { SessionResponse } from '@/lib/types';
+import {
+  AUTH_INPUT_CLASS,
+  AUTH_PRIMARY_BUTTON_CLASS,
+  AuthError,
+  AuthField,
+  BrandMark,
+  MfaCodeInput,
+  TrustLine,
+} from '@/components/auth';
 
 interface OAuthProviders {
   google: boolean;
 }
 
+// Map server-side OAuth failure codes to calm, specific user-facing
+// messages. Generic codes default to a "try again" line — never a stack
+// trace, never blame on the user.
 const OAUTH_ERRORS: Record<string, string> = {
   'no-account':
-    'No EazePay account is linked to that Google address. Ask an admin to invite you first.',
+    "No EazePay account is linked to that Google address. Ask an admin to invite you first.",
   'domain-not-allowed': "That Google account is outside your organisation's allowed domains.",
   cancelled: 'Sign-in was cancelled.',
 };
+
+const GENERIC_LOGIN_ERROR = "Couldn't verify those credentials. Try again.";
 
 interface DemoAccount {
   email: string;
@@ -79,7 +121,14 @@ export default function LoginPage(): JSX.Element {
       setSession(session);
       router.replace('/overview');
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'Login failed');
+      // Server message is authoritative when present (e.g. MFA-required
+      // prompts come back with a specific message); otherwise show the
+      // calm generic line.
+      if (err instanceof ApiError && err.message) {
+        setError(err.message);
+      } else {
+        setError(GENERIC_LOGIN_ERROR);
+      }
     } finally {
       setBusy(false);
     }
@@ -93,7 +142,7 @@ export default function LoginPage(): JSX.Element {
 
   return (
     <div className="min-h-screen bg-paper flex">
-      {/* ─── Left: brand hero ───────────────────────────────────────────── */}
+      {/* ─── Left: brand hero (≥ lg) ────────────────────────────────────── */}
       <aside className="hidden lg:flex flex-col justify-between w-[44%] p-12 bg-hero text-surface relative overflow-hidden">
         <div
           className="absolute inset-0 pointer-events-none"
@@ -104,12 +153,7 @@ export default function LoginPage(): JSX.Element {
           }}
         />
         <div className="relative z-10">
-          <div className="flex items-baseline gap-2">
-            <span className="font-semibold tracking-tight text-2xl">EazePay</span>
-            <span className="text-accent text-[11px] font-semibold tracking-[0.18em]">
-              INTELLIGENCE
-            </span>
-          </div>
+          <BrandMark variant="inline" />
         </div>
 
         <div className="relative z-10 max-w-md">
@@ -130,186 +174,169 @@ export default function LoginPage(): JSX.Element {
         </div>
       </aside>
 
-      {/* ─── Right: form ───────────────────────────────────────────────── */}
+      {/* ─── Right: form card ──────────────────────────────────────────── */}
       <main className="flex-1 flex items-center justify-center px-6 py-10">
-        <div className="w-full max-w-[400px]">
-          <div className="lg:hidden mb-8 text-center">
-            <div className="font-semibold tracking-tight text-ink text-2xl">EazePay</div>
-            <div className="text-accent text-[11px] font-semibold tracking-[0.18em] mt-1">
-              INTELLIGENCE
-            </div>
+        <div className="w-full max-w-[400px] motion-page-in">
+          <div className="lg:hidden mb-8">
+            <BrandMark variant="stacked" />
           </div>
 
-          <h2 className="text-ink text-[28px] font-semibold tracking-tight">Welcome back</h2>
-          <p className="text-muted text-sm mt-1.5">Sign in to continue to the dashboard.</p>
+          <div className="bg-surface border border-line rounded-2xl shadow-[0_1px_2px_rgba(15,23,42,0.04),0_8px_24px_-12px_rgba(15,23,42,0.08)] px-7 py-8 sm:px-8 sm:py-9">
+            <h2 className="text-ink text-[26px] font-semibold tracking-tight">Sign in</h2>
+            <p className="text-muted text-sm mt-1.5">Continue to EazePay Intelligence.</p>
 
-          <form onSubmit={submit} className="mt-8 space-y-5">
-            <Field label="Email">
-              <input
-                type="email"
-                required
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                placeholder="you@eazepay.local"
-                className="w-full bg-surface border border-line rounded-lg px-4 h-11 text-[15px] text-ink outline-none focus:border-accent focus:ring-4 focus:ring-accentSoft transition"
-              />
-            </Field>
-
-            <Field
-              label="Password"
-              right={
-                <button
-                  type="button"
-                  className="text-[11px] text-muted hover:text-accent transition"
-                >
-                  Forgot?
-                </button>
-              }
-            >
-              <div className="relative">
+            <form onSubmit={submit} className="mt-7 space-y-5" noValidate>
+              <AuthField label="Email">
                 <input
-                  type={showPassword ? 'text' : 'password'}
+                  type="email"
                   required
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  placeholder="••••••••"
-                  className="w-full bg-surface border border-line rounded-lg pl-4 pr-11 h-11 text-[15px] text-ink outline-none focus:border-accent focus:ring-4 focus:ring-accentSoft transition"
+                  autoComplete="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  placeholder="you@eazepay.local"
+                  className={AUTH_INPUT_CLASS}
                 />
+              </AuthField>
+
+              <AuthField
+                label="Password"
+                right={
+                  <button
+                    type="button"
+                    className="text-[11px] text-muted hover:text-accent transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-surface rounded"
+                    aria-label="Recover your password"
+                  >
+                    Forgot?
+                  </button>
+                }
+              >
+                <div className="relative">
+                  <input
+                    type={showPassword ? 'text' : 'password'}
+                    required
+                    autoComplete="current-password"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    placeholder="••••••••"
+                    className={`${AUTH_INPUT_CLASS} pr-11`}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword((v) => !v)}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-soft hover:text-ink2 transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-surface rounded"
+                    tabIndex={-1}
+                    aria-label={showPassword ? 'Hide password' : 'Show password'}
+                  >
+                    {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                  </button>
+                </div>
+              </AuthField>
+
+              {showMfa ? (
+                <div>
+                  <div className="flex items-baseline justify-between mb-1.5">
+                    <span className="text-[12px] font-medium text-ink2 tracking-tight">
+                      Verification code
+                    </span>
+                    <span className="text-[11px] text-soft">6 digits</span>
+                  </div>
+                  <MfaCodeInput
+                    value={mfa}
+                    onChange={setMfa}
+                    autoFocus
+                    ariaLabel="Verification code, six digits"
+                  />
+                </div>
+              ) : (
                 <button
                   type="button"
-                  onClick={() => setShowPassword((v) => !v)}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 text-soft hover:text-ink2 transition"
-                  tabIndex={-1}
-                  aria-label={showPassword ? 'Hide password' : 'Show password'}
+                  onClick={() => setShowMfa(true)}
+                  className="inline-flex items-center gap-1.5 text-[12px] text-muted hover:text-accent transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-surface rounded"
                 >
-                  {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                  <ShieldCheck size={13} aria-hidden="true" /> I have a verification code
                 </button>
-              </div>
-            </Field>
-
-            {showMfa ? (
-              <Field label="MFA code">
-                <input
-                  type="text"
-                  inputMode="numeric"
-                  maxLength={6}
-                  value={mfa}
-                  onChange={(e) => setMfa(e.target.value.replace(/\D/g, ''))}
-                  placeholder="123 456"
-                  className="w-full bg-surface border border-line rounded-lg px-4 h-11 text-[15px] text-ink tracking-[0.4em] text-center outline-none focus:border-accent focus:ring-4 focus:ring-accentSoft transition"
-                  autoFocus
-                />
-              </Field>
-            ) : (
-              <button
-                type="button"
-                onClick={() => setShowMfa(true)}
-                className="inline-flex items-center gap-1.5 text-[12px] text-muted hover:text-accent transition"
-              >
-                <ShieldCheck size={13} /> I have an MFA code
-              </button>
-            )}
-
-            {error && (
-              <div className="text-[13px] text-danger bg-dangerSoft px-3 py-2 rounded-lg">
-                {error}
-              </div>
-            )}
-
-            <button
-              type="submit"
-              disabled={busy}
-              className="w-full h-11 rounded-lg bg-ink text-surface font-medium tracking-tight text-[15px] hover:bg-ink2 disabled:opacity-50 disabled:cursor-not-allowed transition flex items-center justify-center gap-2 group"
-            >
-              {busy ? (
-                'Signing in…'
-              ) : (
-                <>
-                  Sign in{' '}
-                  <ArrowRight
-                    size={16}
-                    className="opacity-70 group-hover:translate-x-0.5 transition-transform"
-                  />
-                </>
               )}
-            </button>
-          </form>
 
-          {providers.google && (
-            <>
-              <div className="mt-6 flex items-center gap-3 text-[11px] text-soft">
-                <span className="flex-1 h-px bg-line" />
-                <span>OR</span>
-                <span className="flex-1 h-px bg-line" />
+              {error && <AuthError message={error} />}
+
+              <button type="submit" disabled={busy} className={AUTH_PRIMARY_BUTTON_CLASS}>
+                {busy ? (
+                  'Signing in…'
+                ) : (
+                  <>
+                    Sign in{' '}
+                    <ArrowRight
+                      size={16}
+                      aria-hidden="true"
+                      className="opacity-70 group-hover:translate-x-0.5 transition-transform"
+                    />
+                  </>
+                )}
+              </button>
+            </form>
+
+            {providers.google && (
+              <>
+                <div className="mt-6 flex items-center gap-3 text-[11px] text-soft">
+                  <span className="flex-1 h-px bg-line" aria-hidden="true" />
+                  <span>or</span>
+                  <span className="flex-1 h-px bg-line" aria-hidden="true" />
+                </div>
+                <a
+                  href={`${apiBase}/api/v1/auth/oauth/google/start`}
+                  className="mt-4 w-full h-11 rounded-lg border border-line bg-surface text-ink hover:border-ink2 hover:bg-paper transition flex items-center justify-center gap-3 font-medium text-[14px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-surface"
+                >
+                  <GoogleMark />
+                  Continue with Google
+                </a>
+              </>
+            )}
+
+            {/* Demo account quick-select — internal-only; safe to keep
+                visible because this build ships to the demo environment. */}
+            <div className="mt-9 pt-6 border-t border-line2">
+              <div className="flex items-baseline justify-between">
+                <span className="text-[11px] uppercase tracking-[0.14em] text-soft font-medium">
+                  Quick switch · demo
+                </span>
+                <span className="text-[11px] text-soft">password preserved</span>
               </div>
-              <a
-                href={`${apiBase}/api/v1/auth/oauth/google/start`}
-                className="mt-4 w-full h-11 rounded-lg border border-line bg-surface text-ink hover:border-ink2 hover:bg-paper transition flex items-center justify-center gap-3 font-medium text-[14px]"
-              >
-                <GoogleMark />
-                Sign in with Google
-              </a>
-            </>
-          )}
-
-          {/* Demo account quick-select */}
-          <div className="mt-10 pt-6 border-t border-line2">
-            <div className="flex items-baseline justify-between">
-              <span className="h-section">Quick switch · demo</span>
-              <span className="text-[11px] text-soft">password preserved</span>
-            </div>
-            <div className="mt-3 grid grid-cols-2 gap-2">
-              {DEMO_ACCOUNTS.map((acct) => {
-                const active = email === acct.email;
-                return (
-                  <button
-                    key={acct.email}
-                    type="button"
-                    onClick={() => fillDemo(acct)}
-                    className={`text-left rounded-lg border px-3 py-2.5 transition ${
-                      active
-                        ? 'border-ink bg-ink text-surface'
-                        : 'border-line hover:border-ink2 hover:bg-paper text-ink2'
-                    }`}
-                  >
-                    <div
-                      className={`text-[13px] font-medium tracking-tight ${active ? 'text-surface' : 'text-ink'}`}
+              <div className="mt-3 grid grid-cols-2 gap-2">
+                {DEMO_ACCOUNTS.map((acct) => {
+                  const active = email === acct.email;
+                  return (
+                    <button
+                      key={acct.email}
+                      type="button"
+                      onClick={() => fillDemo(acct)}
+                      aria-pressed={active}
+                      className={`text-left rounded-lg border px-3 py-2.5 transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-surface ${
+                        active
+                          ? 'border-ink bg-ink text-surface'
+                          : 'border-line hover:border-ink2 hover:bg-paper text-ink2'
+                      }`}
                     >
-                      {acct.role}
-                    </div>
-                    <div
-                      className={`text-[11px] mt-0.5 truncate ${active ? 'text-surface/60' : 'text-muted'}`}
-                    >
-                      {acct.description}
-                    </div>
-                  </button>
-                );
-              })}
+                      <div
+                        className={`text-[13px] font-medium tracking-tight ${active ? 'text-surface' : 'text-ink'}`}
+                      >
+                        {acct.role}
+                      </div>
+                      <div
+                        className={`text-[11px] mt-0.5 truncate ${active ? 'text-surface/60' : 'text-muted'}`}
+                      >
+                        {acct.description}
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
             </div>
           </div>
+
+          <TrustLine className="mt-6" />
         </div>
       </main>
     </div>
-  );
-}
-
-function Field({
-  label,
-  right,
-  children,
-}: {
-  label: string;
-  right?: React.ReactNode;
-  children: React.ReactNode;
-}): JSX.Element {
-  return (
-    <label className="block">
-      <div className="flex items-baseline justify-between mb-1.5">
-        <span className="text-[12px] font-medium text-ink2 tracking-tight">{label}</span>
-        {right}
-      </div>
-      {children}
-    </label>
   );
 }
 
