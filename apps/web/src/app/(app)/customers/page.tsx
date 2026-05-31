@@ -12,6 +12,7 @@ import { RiskBand } from '@/components/RiskBand';
 import { Monogram } from '@/components/Monogram';
 import { KpiCard } from '@/components/KpiCard';
 import { StaggerList } from '@/components/motion';
+import { MobileCardList, MobileCardRow } from '@/components/MobileCardRow';
 
 interface CustomerRow {
   emailHash: string;
@@ -79,7 +80,7 @@ export default function CustomerBook(): JSX.Element {
         }
       />
 
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 md:gap-4">
         <KpiCard label="Customers" value={formatNumber(rows.length)} hint="distinct individuals" />
         <KpiCard
           label="Funded"
@@ -99,7 +100,33 @@ export default function CustomerBook(): JSX.Element {
         subtitle="latest application first · click a row for the full financial profile"
         bodyClassName="p-0"
       >
-        <div className="overflow-x-auto">
+        {/* Mobile < md — stacked card variant. Targeted breakpoints: 375 / 414 / 768. */}
+        <MobileCardList>
+          {rows.length === 0 && (
+            <div className="text-muted text-sm py-6 text-center">No customers match the filters.</div>
+          )}
+          {rows.map((c) => (
+            <MobileCardRow
+              key={`m-${c.emailHash}`}
+              href={`/customers/${c.emailHash}`}
+              title={`Customer ${c.emailHash.slice(0, 8)}`}
+              subtitle={`${c.applications} app${c.applications === 1 ? '' : 's'} · ${c.partnerCount} partner${c.partnerCount === 1 ? '' : 's'}`}
+              badge={<RiskBand band={c.riskBand} />}
+              fields={[
+                { label: 'Credit', value: c.latestCreditScore ?? '—' },
+                {
+                  label: 'Funded',
+                  value: Number(c.totalFunded) > 0 ? formatMoney(c.totalFunded) : '—',
+                  align: 'right',
+                },
+              ]}
+              footer={formatDateTime(c.latestApplicationAt)}
+            />
+          ))}
+        </MobileCardList>
+
+        {/* Desktop ≥ md — full table */}
+        <div className="hidden md:block overflow-x-auto">
           <table className="tbl">
             <thead>
               <tr>
@@ -189,7 +216,7 @@ function Select({
       <select
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        className="bg-surface border border-line rounded-md px-2.5 py-1.5 text-ink2 outline-none focus:border-accent text-xs"
+        className="bg-surface border border-line rounded-md px-2.5 py-2 md:py-1.5 min-h-[44px] md:min-h-0 text-ink2 outline-none focus:border-accent text-xs"
       >
         {options.map((o) => (
           <option key={o} value={o}>

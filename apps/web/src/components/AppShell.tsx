@@ -6,6 +6,7 @@ import { useUser } from '@/lib/auth';
 import { useAnalyticsWebSocket } from '@/lib/ws';
 import { Sidebar } from './Sidebar';
 import { TopBar } from './TopBar';
+import { MobileNav } from './MobileNav';
 import { LiveTickerContext } from './LiveTickerContext';
 
 export function AppShell({ children }: { children: React.ReactNode }): JSX.Element {
@@ -40,11 +41,27 @@ export function AppShell({ children }: { children: React.ReactNode }): JSX.Eleme
        * height past viewport, and every route change resets window
        * scroll — which yanks the sidebar back to the top.
        */}
-      <div className="flex h-screen overflow-hidden">
-        <Sidebar />
+      {/*
+       * Mobile (< md): single column. MobileNav renders its own top bar
+       *   + drawer trigger; the desktop Sidebar is hidden via `hidden md:flex`.
+       * Desktop (≥ md): two columns — Sidebar rail + content. Mobile top
+       *   bar is hidden via `md:hidden` on MobileNav.
+       *
+       * Targeted breakpoints: 375 / 414 / 768 / 1024 / 1280.
+       */}
+      <div className="flex flex-col md:flex-row h-screen overflow-hidden">
+        <div className="hidden md:flex h-full">
+          <Sidebar />
+        </div>
         <div className="flex-1 flex flex-col min-w-0">
-          <TopBar wsConnected={connected} />
-          <main ref={mainRef} className="flex-1 p-6 lg:p-8 overflow-y-auto bg-paper">
+          <MobileNav />
+          <div className="hidden md:block">
+            <TopBar wsConnected={connected} />
+          </div>
+          <main
+            ref={mainRef}
+            className="flex-1 px-4 py-4 md:p-6 lg:p-8 overflow-y-auto bg-paper"
+          >
             {children}
           </main>
         </div>
