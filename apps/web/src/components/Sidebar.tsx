@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useUser } from '@/lib/auth';
 import { StaggerList } from '@/components/motion';
+import { StatusBadge } from '@/components/ui/StatusBadge';
 import {
   LayoutDashboard,
   Radio,
@@ -256,7 +257,10 @@ export function Sidebar(): JSX.Element {
         </div>
       ))}
 
-      <div className="mt-auto px-3 pt-4 border-t border-line2 text-[10px] text-soft space-y-0.5">
+      <div className="mt-auto px-3 pt-4 border-t border-line2 text-[10px] text-soft space-y-1.5">
+        <div className="-ml-1">
+          <StatusBadge variant="operational" />
+        </div>
         <div>v0.1.0 · {process.env.NEXT_PUBLIC_ENV ?? 'local'}</div>
         <div className="truncate">{user?.email}</div>
       </div>

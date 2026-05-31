@@ -2,6 +2,7 @@
 
 import { useEffect, useRef } from 'react';
 import { useRouter, usePathname } from 'next/navigation';
+import Link from 'next/link';
 import { useUser } from '@/lib/auth';
 import { useAnalyticsWebSocket } from '@/lib/ws';
 import { Sidebar } from './Sidebar';
@@ -44,8 +45,20 @@ export function AppShell({ children }: { children: React.ReactNode }): JSX.Eleme
         <Sidebar />
         <div className="flex-1 flex flex-col min-w-0">
           <TopBar wsConnected={connected} />
-          <main ref={mainRef} className="flex-1 p-6 lg:p-8 overflow-y-auto bg-paper">
-            {children}
+          <main ref={mainRef} className="flex-1 overflow-y-auto bg-paper flex flex-col">
+            <div className="flex-1 p-6 lg:p-8">{children}</div>
+            <footer className="border-t border-line2 bg-surface px-6 lg:px-8 py-3 text-[11px] text-muted flex items-center justify-between gap-4 flex-wrap">
+              <span className="truncate">
+                SOC 2 Type II in progress · AES-256 encryption at rest · TLS 1.3 in transit · AU +
+                US data residency
+              </span>
+              <Link
+                href="/security"
+                className="text-ink2 hover:text-ink transition whitespace-nowrap"
+              >
+                Security details →
+              </Link>
+            </footer>
           </main>
         </div>
       </div>
