@@ -56,7 +56,7 @@ export default function ReconciliationPage(): JSX.Element {
         {q.isLoading ? (
           <p className="text-sm text-zinc-500">Loading…</p>
         ) : q.isError ? (
-          <p className="text-sm text-red-600">Failed to load reconciliation snapshot.</p>
+          <p className="text-sm text-red-600">Couldn’t load reconciliation. Retry.</p>
         ) : (q.data?.rows ?? []).length === 0 ? (
           <p className="text-sm text-zinc-500">No orgs.</p>
         ) : (

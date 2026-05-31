@@ -70,7 +70,7 @@ export default function ScheduledReportsPage(): JSX.Element {
     <div className="space-y-6">
       <PageHeader
         title="Scheduled reports"
-        subtitle="Recurring exports → Slack / email / webhook · cron-driven"
+        subtitle="Recurring exports to Slack, email, or webhook. Cron-driven."
         action={
           <button
             onClick={() => setShowForm(!showForm)}
@@ -92,7 +92,7 @@ export default function ScheduledReportsPage(): JSX.Element {
       </div>
 
       {showForm && (
-        <SectionCard title="New schedule" subtitle="cron format · five fields · UTC">
+        <SectionCard title="New schedule" subtitle="Cron format. 5 fields. UTC.">
           <div className="grid grid-cols-1 md:grid-cols-3 gap-3 items-end">
             <label className="block">
               <span className="h-section block mb-1.5">Name</span>
@@ -179,7 +179,8 @@ export default function ScheduledReportsPage(): JSX.Element {
                   </button>
                   <button
                     onClick={() => {
-                      if (confirm(`Delete "${r.name}"?`)) remove.mutate(r.id);
+                      if (confirm(`Delete schedule "${r.name}". This cannot be undone.`))
+                        remove.mutate(r.id);
                     }}
                     className="text-[11px] text-danger hover:underline"
                   >

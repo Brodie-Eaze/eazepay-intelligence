@@ -129,7 +129,7 @@ export function ExportButton({
           <div className="px-4 py-3 border-b border-line2">
             <div className="text-[12px] font-semibold text-ink tracking-tight">Export data</div>
             <div className="text-[11px] text-muted mt-0.5">
-              Respects the current filters. Every export is audited.
+              Honours the current filters. Every export is audited.
             </div>
           </div>
 

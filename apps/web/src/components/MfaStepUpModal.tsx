@@ -55,7 +55,7 @@ export function MfaStepUpModal({ open, onSuccess, onClose }: Props): JSX.Element
       setCode('');
       onSuccess();
     } catch (err) {
-      const msg = err instanceof ApiError ? err.message : 'Failed to verify MFA. Try again.';
+      const msg = err instanceof ApiError ? err.message : 'Couldn’t verify the code. Try again.';
       setError(msg);
     } finally {
       setBusy(false);
@@ -76,11 +76,10 @@ export function MfaStepUpModal({ open, onSuccess, onClose }: Props): JSX.Element
         onClick={(e) => e.stopPropagation()}
       >
         <h3 id="mfa-stepup-title" className="text-base font-semibold text-zinc-900">
-          MFA step-up required
+          MFA required
         </h3>
         <p className="mt-2 text-sm text-zinc-600">
-          This action requires a fresh MFA proof. Enter the 6-digit code from your authenticator
-          app.
+          This action needs a fresh MFA proof. Enter the 6-digit code from your authenticator app.
         </p>
         <input
           type="text"
@@ -118,8 +117,7 @@ export function MfaStepUpModal({ open, onSuccess, onClose }: Props): JSX.Element
           </button>
         </div>
         <p className="mt-4 text-xs text-zinc-500">
-          The verification is valid for 5 minutes and single-use; the action will retry
-          automatically.
+          Valid for 5 minutes, single-use. The action retries automatically.
         </p>
       </div>
     </div>

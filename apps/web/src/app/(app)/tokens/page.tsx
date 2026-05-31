@@ -93,8 +93,8 @@ export default function TokensPage(): JSX.Element {
 
       {reveal && (
         <SectionCard
-          title="Token issued — copy now"
-          subtitle="This is the only time we'll show the secret. Store it in your vault."
+          title="Token issued. Copy it now."
+          subtitle="This is the only time the secret is shown. Store it in your vault."
         >
           <div className="bg-paper border border-line rounded-md p-3 font-mono text-sm break-all">
             {reveal.token}
@@ -116,8 +116,8 @@ export default function TokensPage(): JSX.Element {
 
       {showForm && (
         <SectionCard
-          title="Issue a new token"
-          subtitle="Choose scopes carefully — write tokens can mutate data on your behalf"
+          title="New token"
+          subtitle="Choose scopes carefully. Write tokens can mutate data on your behalf."
         >
           <div className="grid grid-cols-1 md:grid-cols-4 gap-3 items-end">
             <label className="block">
@@ -225,7 +225,7 @@ export default function TokensPage(): JSX.Element {
                         onClick={() => {
                           if (
                             confirm(
-                              `Revoke token "${t.name}"? Calls using it will start failing immediately.`,
+                              `Revoke token "${t.name}". Calls using it start failing immediately.`,
                             )
                           )
                             revoke.mutate(t.id);

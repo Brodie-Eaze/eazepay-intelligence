@@ -71,7 +71,7 @@ export default function AlertsPage(): JSX.Element {
     <div className="space-y-6">
       <PageHeader
         title="Alerts"
-        subtitle="Operator-facing signals · acknowledge · snooze · resolve"
+        subtitle="Operator-facing signals. Acknowledge, snooze, or resolve."
         action={
           <div className="flex gap-1">
             {(['open', 'all', 'rules'] as const).map((t) => (
@@ -97,7 +97,7 @@ export default function AlertsPage(): JSX.Element {
       {tab === 'rules' ? (
         <SectionCard
           title="Alert rules"
-          subtitle="rules evaluated by the alerts worker (not yet running on a schedule — see ROADMAP)"
+          subtitle="Rules evaluated by the alerts worker. Schedule not yet wired — see ROADMAP."
           bodyClassName="p-0"
         >
           <table className="tbl">

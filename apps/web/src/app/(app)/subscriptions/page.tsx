@@ -98,7 +98,7 @@ export default function OutboundWebhooksPage(): JSX.Element {
     <div className="space-y-6">
       <PageHeader
         title="Outbound webhooks"
-        subtitle="Push platform events to your systems · HMAC-signed · auto-retry with exp backoff"
+        subtitle="Push platform events to your systems. HMAC-signed. Auto-retry with exponential backoff."
         action={
           <button
             onClick={() => {
@@ -133,8 +133,8 @@ export default function OutboundWebhooksPage(): JSX.Element {
 
       {reveal && (
         <SectionCard
-          title="Signing secret — copy now"
-          subtitle="This is the only time we'll show the secret. You'll use it to verify HMAC signatures on inbound deliveries."
+          title="Signing secret. Copy it now."
+          subtitle="This is the only time the secret is shown. Use it to verify HMAC signatures on inbound deliveries."
         >
           <div className="bg-paper border border-line rounded-md p-3 font-mono text-sm break-all">
             {reveal.signingSecret}
@@ -238,7 +238,7 @@ export default function OutboundWebhooksPage(): JSX.Element {
                     </button>
                     <button
                       onClick={() => {
-                        if (confirm('Delete subscription? In-flight retries continue.'))
+                        if (confirm('Delete subscription. In-flight retries continue.'))
                           remove.mutate(s.id);
                       }}
                       className="text-[11px] text-danger hover:underline"
@@ -260,7 +260,7 @@ export default function OutboundWebhooksPage(): JSX.Element {
         </div>
       </SectionCard>
 
-      <SectionCard title="Recent deliveries" subtitle="last 50" bodyClassName="p-0">
+      <SectionCard title="Recent deliveries" subtitle="Last 50." bodyClassName="p-0">
         <div className="overflow-x-auto">
           <table className="tbl">
             <thead>

@@ -88,7 +88,7 @@ export default function PlatformOrgDetailPage(props: {
         {q.isLoading ? (
           <p className="text-sm text-zinc-500">Loading…</p>
         ) : q.isError ? (
-          <p className="text-sm text-red-600">Failed to load org.</p>
+          <p className="text-sm text-red-600">Couldn’t load this organisation. Retry.</p>
         ) : (
           <dl className="grid grid-cols-2 gap-3 text-sm">
             <dt className="text-zinc-500">Org id</dt>
@@ -129,7 +129,7 @@ export default function PlatformOrgDetailPage(props: {
             <p className="text-sm text-red-600">
               {issueImpersonate.error instanceof ApiError
                 ? issueImpersonate.error.message
-                : 'Failed to issue token.'}
+                : 'Couldn’t issue the token. Try again.'}
             </p>
           )}
           {issuedToken && (
@@ -196,7 +196,7 @@ export default function PlatformOrgDetailPage(props: {
           />
           {offboard.isError && (
             <p className="text-sm text-red-600">
-              {offboard.error instanceof ApiError ? offboard.error.message : 'Failed to offboard.'}
+              {offboard.error instanceof ApiError ? offboard.error.message : 'Couldn’t offboard. Try again.'}
             </p>
           )}
           {offboard.isSuccess && (

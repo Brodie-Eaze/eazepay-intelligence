@@ -51,7 +51,7 @@ export default function TagsPage(): JSX.Element {
     <div className="space-y-6">
       <PageHeader
         title="Tags"
-        subtitle="Cross-resource organisation · attach to customers / partners / applications / cases"
+        subtitle="Cross-resource organisation. Attach to customers, partners, applications, or cases."
       />
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -60,7 +60,7 @@ export default function TagsPage(): JSX.Element {
         <KpiCard label="Colors available" value={COLORS.length.toString()} />
       </div>
 
-      <SectionCard title="New tag" subtitle="lowercase, digits, dashes only">
+      <SectionCard title="New tag" subtitle="Lowercase, digits, dashes only.">
         <div className="grid grid-cols-1 md:grid-cols-4 gap-3 items-end">
           <label className="block">
             <span className="h-section block mb-1.5">Name</span>
@@ -127,7 +127,7 @@ export default function TagsPage(): JSX.Element {
                 <td className="text-right">
                   <button
                     onClick={() => {
-                      if (confirm(`Delete "${t.name}"? Removes all assignments.`))
+                      if (confirm(`Delete "${t.name}". Removes all assignments.`))
                         remove.mutate(t.id);
                     }}
                     className="text-[11px] text-danger hover:underline"

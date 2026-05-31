@@ -73,7 +73,7 @@ export default function AcceptInvitationPage(): JSX.Element {
       setSession(session);
       router.replace('/overview');
     } catch (err) {
-      setSubmitError(err instanceof ApiError ? err.message : 'Failed to accept invitation');
+      setSubmitError(err instanceof ApiError ? err.message : 'Couldn’t accept the invitation. Try again.');
       setBusy(false);
     }
   };
