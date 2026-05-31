@@ -30,10 +30,20 @@ const startedAt = Date.now();
 export function registerHealthRoute(app: FastifyInstance): void {
   app.get('/health', async (_req, reply) => {
     const [database, redis] = await Promise.all([checkDatabase(), checkRedis()]);
+    // 2026-05-30 hotfix: Redis on Railway shared infra flaps intermittently.
+    // Previously, redis.status === 'down' propagated to overall 'down' → 503,
+    // which tripped the Railway platform healthcheck + Cloudflare and took
+    // the whole API offline (dashboard couldn't even load /auth/me, which
+    // doesn't touch Redis on the hot path). Postgres is the only true
+    // hard dependency: deny-list, rate-limit, and session lookups already
+    // fail open when Redis is unreachable, so a Redis outage is operationally
+    // a degraded — not down — state. Only Postgres-down returns 503.
     const overall: HealthResponse['status'] =
-      database.status === 'down' || redis.status === 'down'
+      database.status === 'down'
         ? 'down'
-        : database.status === 'degraded' || redis.status === 'degraded'
+        : database.status === 'degraded' ||
+            redis.status === 'down' ||
+            redis.status === 'degraded'
           ? 'degraded'
           : 'ok';
 
